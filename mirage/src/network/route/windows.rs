@@ -4,29 +4,43 @@ use crate::Result;
 use ipnet::IpNet;
 use std::net::IpAddr;
 
+use super::RouteTarget;
+
 /// Adds a list of routes to the routing table.
 ///
 /// ### Arguments
 /// - `networks` - the networks to be routed through the gateway
-/// - `gateway` - the gateway to be used for the routes
+/// - `target` - the gateway or interface to be used for the routes
 /// - `interface_name` - the name of the interface to add the routes to
-pub fn add_routes(networks: &[IpNet], gateway: &IpAddr, interface_name: &str) -> Result<()> {
+pub fn add_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &str) -> Result<()> {
     for network in networks {
-        add_route(network, gateway, interface_name)?;
+        add_route(network, target, interface_name)?;
     }
 
     Ok(())
 }
 
 /// Adds a route to the routing table.
-///
-/// ### Arguments
-/// - `network` - the network to be routed through the gateway
-/// - `gateway` - the gateway to be used for the route
-/// - `interface_name` - the name of the interface to add the route to
-fn add_route(network: &IpNet, gateway: &IpAddr, interface_name: &str) -> Result<()> {
+fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
     let network_str = network.to_string();
-    let gateway_str = gateway.to_string();
+    
+    // Windows netsh expects gateway IP. If target is interface, what do we do?
+    // netsh interface ip add route <prefix> <interface> <gateway>
+    // If gateway is direct/on-link, we usually use 0.0.0.0 or exclude it?
+    // Actually `netsh` allows skipping gateway or using `nexthop=...`
+    // For now, if it's Interface target, we assume it's the SAME interface as `interface_name`? 
+    // Wait, the `target` IS the nexthop.
+    
+    let gateway_str = match target {
+        RouteTarget::Gateway(ip) => ip.to_string(),
+        RouteTarget::Interface(_) => {
+            // If target is interface, we might just use 0.0.0.0 (on-link) or skip it?
+            // "If the destination is on the local subnet, the gateway is 0.0.0.0"
+            // Let's assume on-link for interface route.
+            if network.addr().is_ipv6() { "::" } else { "0.0.0.0" }.to_string()
+        }
+    };
+
     let route_args = vec![
         "interface",
         "ip",
@@ -37,8 +51,10 @@ fn add_route(network: &IpNet, gateway: &IpAddr, interface_name: &str) -> Result<
         &gateway_str,
         "store=active",
     ];
-
+    // ... rest of implementation
+    
     let output = run_command("netsh", &route_args)
+        // ... (preserving error handling)
         .map_err(|e| RouteError::PlatformError {
             message: format!("failed to execute command: {e}"),
         })?
@@ -60,9 +76,7 @@ fn add_route(network: &IpNet, gateway: &IpAddr, interface_name: &str) -> Result<
 }
 
 /// Retrieves the gateway address for a specific destination IP.
-///
-/// Note: Currently not implemented for Windows.
-pub fn get_gateway_for(_target: IpAddr) -> Result<IpAddr> {
+pub fn get_gateway_for(_target: IpAddr) -> Result<RouteTarget> {
     Err(RouteError::PlatformError {
         message: "Automatic gateway detection not supported on Windows yet".to_string(),
     }

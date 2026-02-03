@@ -6,6 +6,8 @@
 pub mod address_pool;
 mod connection;
 mod dispatcher;
+mod nat;
+
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,6 +36,7 @@ use tracing::{debug, info, warn};
 
 use self::address_pool::AddressPool;
 use self::dispatcher::{proxy_connection, DispatchResult, TlsDispatcher};
+use self::nat::NatManager;
 
 type ConnectionQueues = Arc<DashMap<IpAddr, Sender<Bytes>>>;
 
@@ -69,6 +72,18 @@ impl MirageServer {
             None,
         )?;
         let interface = Arc::new(interface);
+
+        // Configure NAT if requested
+        // Variable is named _nat_manager to keep it alive until the end of the function (RAII cleanup)
+        // We mute unused warning because we only need it for Drop
+        #[allow(unused_variables)]
+        let mut _nat_manager = NatManager::new(
+            self.config.nat.clone(),
+            interface.name().unwrap_or_else(|| "unknown".to_string()),
+            self.config.tunnel_network.to_string(),
+            self.config.tunnel_network_v6.map(|n| n.to_string()),
+        );
+        _nat_manager.setup();
 
         let authenticator = Box::new(UsersFileServerAuthenticator::new(
             &self.config.authentication,

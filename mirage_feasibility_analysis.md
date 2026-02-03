@@ -1,4 +1,4 @@
-# Mirage 可行性分析
+# Mirage 理论分析
 
 > 基于 Rust 的 TCP/TLS VPN + Reality 伪装协议
 
@@ -329,6 +329,7 @@ quincy (QUIC)  →  mirage (TCP/TLS over BoringSSL)
   }
   ```
 - [x] 实现 SNI Proxy：透明转发到真实网站
+- [x] NAT 自动配置: 服务端自动设置 iptables 转发规则
 - [x] 测试：用浏览器直接访问服务器，应显示真实网站 (伪装生效)
 
 **产出**：服务端抗主动探测，伪装为真实网站

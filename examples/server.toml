@@ -5,14 +5,14 @@ certificate_file = "examples/cert/server_cert.pem"
 # TLS 使用的私钥路径
 certificate_key_file = "examples/cert/server_key.pem"
 # 隧道绑定的地址
-bind_address = "0.0.0.0"
-# IPv6: bind_address = "::0"
+bind_address = "::0"
+# IPv4: bind_address = "0.0.0.0"
 # 隧道绑定的端口
 bind_port = 443
 # 隧道端点地址和分配给客户端的地址池基准地址
 tunnel_network = "10.11.12.1/24"
 # IPv6 隧道网络 (可选，启用双栈)
-# tunnel_network_v6 = "fd00::1/64"
+tunnel_network_v6 = "fd00::1/64"
 # 申请的 TUN 设备名称（可选）
 # interface_name = "tun0"
 # 是否隔离客户端（客户端之间无法互相访问）
@@ -36,6 +36,15 @@ short_ids = [
     "abcd1234deadbeef", 
     "0011223344556677"
 ]
+
+[nat]
+# IPv4 出站网口 (例如 eth0)，设置后自动启用 Masquerade 和转发
+# 如果留空或注释，则不进行任何自动网络配置（需手动配置 iptables）
+# ipv4_interface = "eth0"
+
+# IPv6 出站网口 (例如 eth0)，设置后自动启用 Masquerade 和转发
+# 如果留空或注释，则不进行任何自动网络配置
+# ipv6_interface = "eth0"
 
 [log]
 # 日志级别 (trace, debug, info, warn, error)

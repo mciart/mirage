@@ -54,6 +54,9 @@ pub struct ServerConfig {
     pub reality: RealityConfig,
     /// Logging configuration
     pub log: LogConfig,
+    /// NAT configuration
+    #[serde(default)]
+    pub nat: NatConfig,
 }
 
 /// Mirage server-side authentication configuration
@@ -165,6 +168,15 @@ pub struct LogConfig {
     /// The log level to use (default = info)
     #[serde(default = "default_log_level")]
     pub level: String,
+}
+
+/// NAT configuration for server
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct NatConfig {
+    /// Outbound interface for IPv4 (e.g. "eth0")
+    pub ipv4_interface: Option<String>,
+    /// Outbound interface for IPv6 (e.g. "eth0")
+    pub ipv6_interface: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]

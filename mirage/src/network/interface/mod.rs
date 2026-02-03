@@ -134,6 +134,10 @@ impl<I: InterfaceIO> Interface<I> {
         self.inner.mtu()
     }
 
+    pub fn name(&self) -> Option<String> {
+        self.inner.name()
+    }
+
     #[inline]
     pub async fn read_packet(&self) -> Result<Packet> {
         self.inner.read_packet().await

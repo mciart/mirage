@@ -1,14 +1,13 @@
 # Mirage (原本的 Quincy)
 
 [![Crates.io](https://img.shields.io/crates/v/mirage.svg)](https://crates.io/crates/mirage)
-[![Docker](https://img.shields.io/docker/v/m0dex/mirage?logo=docker&label=docker&color=blue)](https://hub.docker.com/r/m0dex/mirage)
 [![Documentation](https://docs.rs/mirage/badge.svg)](https://docs.rs/mirage/)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENCE)
 
 > [!WARNING]
 > **🚧 项目开发中 (Work in Progress) 🚧**
 >
-> Mirage 目前处于 **Phase 1 (TCP/TLS 基础隧道)** 开发阶段。虽然代码可以通过编译 (`cargo build --release`)，但可能仍不稳定。
+> Mirage 目前处于 **Phase 2 (Reality 服务端)** 开发阶段。虽然代码可以通过编译 (`cargo build --release`)，但可能仍不稳定。
 > 详情请查阅 [Mirage 可行性分析](./mirage_feasibility_analysis.md)。
 
 > **Mirage** 是一款基于 Rust 开发的下一代 VPN 客户端和服务端，旨在提供极致的隐蔽性和性能。
@@ -20,12 +19,12 @@
 
 ## 核心特性 (Features)
 
-基于最新的[可行性分析](./mirage_feasibility_analysis.md)，Mirage 具备以下独有优势：
+基于最新的[理论分析](./mirage_feasibility_analysis.md)，Mirage 具备以下独有优势：
 
 ### 1. 完美的 TLS 指纹伪装 🎭
 Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chrome 同源的 **BoringSSL** 库。
-- ✅ **原生 Chrome 指纹**：支持 X25519Kyber768 (后量子加密)、GREASE 扩展、TLS 扩展随机排列。
-- ✅ **抗主动探测**：服务端无法通过 TLS 握手特征识别，完美伪装成正常的 HTTPS 流量。
+- **原生 Chrome 指纹**：支持 X25519Kyber768 (后量子加密)、GREASE 扩展、TLS 扩展随机排列。
+- **抗主动探测**：服务端无法通过 TLS 握手特征识别，完美伪装成正常的 HTTPS 流量。
 
 ### 2. Reality 协议集成 🌐
 服务端不再仅仅是一个 VPN 端点，而是一个智能的 SNI 反向代理：
@@ -87,7 +86,7 @@ cargo install --path mirage-server
 cargo install --path mirage-gui
 ```
 
-### 使用 Docker 运行
+### 使用 Docker 运行（未测试）
 
 ```bash
 # 服务端运行示例
@@ -158,24 +157,48 @@ reuse_socket = true
 
 为了让客户端能够通过 VPN 访问互联网，您**必须**在服务端进行网络配置 (Enable Forwarding & NAT)。
 
-### 1. 开启内核转发 (Kernel Forwarding)
-临时生效 (Linux):
+### 4. 自动化 NAT 配置 (可选)
+
+Mirage 服务端可以自动配置系统的 NAT (Masquerade) 和转发规则，省去手动配置 `iptables` 的麻烦。
+
+在 `server.toml` 中添加 `[nat]` 部分：
+
+```toml
+[nat]
+# IPv4 出站网口 (例如 eth0)
+# 如果配置了此项，Mirage 启动时会自动执行:
+# sysctl -w net.ipv4.ip_forward=1
+# iptables -t nat -A POSTROUTING -s 10.11.12.0/24 -o eth0 -j MASQUERADE
+ipv4_interface = "eth0"
+
+# IPv6 出站网口 (例如 eth0)
+# 如果配置了此项，会自动配置 ip6tables 转发和 MASQUERADE
+ipv6_interface = "eth0"
+```
+
+> **注意**: 
+> 1. 启用此功能需要服务端以 `root` 权限运行。
+> 2. **如果留空或不配置**：Mirage 不会修改任何 iptables 规则。您需要手动参照下文进行配置。
+> 3. 服务端停止时，这些规则会自动清理 (Best Effort)。
+
+### 5. 手动网络配置 (Linux)
+
+如果您不想使用自动配置，或者环境比较复杂，可以手动配置。
+
+#### 开启 IP 转发 (必须)
 ```bash
 sysctl -w net.ipv4.ip_forward=1
 sysctl -w net.ipv6.conf.all.forwarding=1
 ```
-永久生效，请编辑 `/etc/sysctl.conf`。
 
-### 2. 配置 NAT (IPTables)
-假设您的外网网卡接口名称为 `eth0` (请使用 `ip addr` 确认)。
+#### 配置 NAT (Masquerade)
+如果您的服务端在 NAT 后面 (例如 AWS EC2)，或者您希望客户端通过服务器 IP 上网：
 
-**IPv4 NAT**:
 ```bash
+# IPv4 (假设网卡是 eth0)
 iptables -t nat -A POSTROUTING -s 10.11.12.0/24 -o eth0 -j MASQUERADE
-```
 
-**IPv6 NAT**:
-```bash
+# IPv6 (假设网卡是 eth0)
 ip6tables -t nat -A POSTROUTING -s fd00::/64 -o eth0 -j MASQUERADE
 ```
 
@@ -218,7 +241,7 @@ mirage-users --delete users
 ```toml
 [authentication]
 type = "file"
-users_file = "users.db"
+users_file = "users"
 ```
 ---
 

@@ -1,3 +1,11 @@
+use std::net::IpAddr;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RouteTarget {
+    Gateway(IpAddr),
+    Interface(String),
+}
+
 #[cfg(unix)]
 mod posix;
 #[cfg(unix)]

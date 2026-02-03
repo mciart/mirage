@@ -3,7 +3,7 @@ use crate::error::InterfaceError;
 use crate::network::dns::{add_dns_servers, delete_dns_servers};
 use crate::network::interface::InterfaceIO;
 use crate::network::packet::Packet;
-use crate::network::route::add_routes;
+use crate::network::route::{add_routes, RouteTarget};
 use crate::Result;
 use bytes::BytesMut;
 use ipnet::IpNet;
@@ -118,7 +118,7 @@ impl InterfaceIO for TunRsInterface {
             if let Some(gateway) = gateway {
                 add_routes(
                     &[*route],
-                    &gateway,
+                    &RouteTarget::Gateway(gateway),
                     self.name().as_deref().unwrap_or("utun"),
                 )?;
             } else {
