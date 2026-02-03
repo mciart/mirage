@@ -38,7 +38,9 @@ impl TlsDispatcher {
         loop {
             // Check if we hit size limit to prevent DoS
             if buf.len() > 16384 {
-                return Ok(DispatchResult::Fallback(Box::new(PrefixedStream::new(buf, stream))));
+                return Ok(DispatchResult::Fallback(Box::new(PrefixedStream::new(
+                    buf, stream,
+                ))));
             }
 
             let n = stream.read(&mut temp_buf).await?;
@@ -46,27 +48,29 @@ impl TlsDispatcher {
                 // EOF
                 if buf.is_empty() {
                     // Empty stream, just return generic Fallback (will likely close)
-                     return Ok(DispatchResult::Fallback(Box::new(stream)));
+                    return Ok(DispatchResult::Fallback(Box::new(stream)));
                 } else {
-                     return Ok(DispatchResult::Fallback(Box::new(PrefixedStream::new(buf, stream))));
+                    return Ok(DispatchResult::Fallback(Box::new(PrefixedStream::new(
+                        buf, stream,
+                    ))));
                 }
             }
-            
+
             buf.extend_from_slice(&temp_buf[..n]);
 
             match parse_client_hello(&buf) {
                 Ok(Some(info)) => {
                     let prefixed_stream = Box::new(PrefixedStream::new(buf, stream));
-                    return self.decide(prefixed_stream, info)
-                },
+                    return self.decide(prefixed_stream, info);
+                }
                 Ok(None) => {
                     // Incomplete, continue reading
-                    continue; 
+                    continue;
                 }
                 Err(_) => {
                     // Not a valid ClientHello or protocol mismatch -> Fallback
                     let prefixed_stream = Box::new(PrefixedStream::new(buf, stream));
-                    return Ok(DispatchResult::Fallback(prefixed_stream))
+                    return Ok(DispatchResult::Fallback(prefixed_stream));
                 }
             }
         }
@@ -76,7 +80,7 @@ impl TlsDispatcher {
         if let Some(sni) = &info.sni {
             if sni == &self.target_sni {
                 // SNI matches the disguised domain!
-                
+
                 if let Some(alpns) = &info.alpn {
                     // Check if any ALPN string is in our valid_tokens list
                     for proto in alpns {
@@ -132,13 +136,13 @@ impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for PrefixedStream<S>
             let b = self.prefix.get_ref();
             let pos = self.prefix.position() as usize;
             let available = &b[pos..];
-            
+
             let to_read = std::cmp::min(available.len(), buf.remaining());
             buf.put_slice(&available[..to_read]);
             self.prefix.set_position((pos + to_read) as u64);
             return std::task::Poll::Ready(Ok(()));
         }
-        
+
         // If prefix exhausted, read from stream
         std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
     }
@@ -153,11 +157,17 @@ impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for PrefixedStream<
         std::pin::Pin::new(&mut self.stream).poll_write(cx, buf)
     }
 
-    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
         std::pin::Pin::new(&mut self.stream).poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
         std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }
@@ -178,7 +188,7 @@ pub async fn proxy_connection(source: Box<dyn AsyncIo>, target_host: &str) -> Re
 
     // Enable TCP_NODELAY on both sides for responsiveness
     // Note: source is boxed trait object, we can't easily set nodelay unless we downcast
-    // or assume it was already set. For `TcpStream` it was set. 
+    // or assume it was already set. For `TcpStream` it was set.
     // For `PrefixedStream`, we should set it on inner `TcpStream` *before* boxing.
     // We'll skip setting it on source here for now.
     let _ = target.set_nodelay(true);
