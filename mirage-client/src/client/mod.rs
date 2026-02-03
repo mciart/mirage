@@ -1,26 +1,31 @@
+//! Mirage VPN Client implementation.
+//!
+//! This module provides the main MirageClient that establishes TCP/TLS connections
+//! to the server and relays packets between the TUN interface and the tunnel.
+
 mod relayer;
 
 use crate::auth::AuthClient;
 use crate::users_file_auth::UsersFileClientAuthenticator;
 
+use boring::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use mirage::config::ClientConfig;
-use mirage::constants::QUINN_RUNTIME;
-use mirage::network::socket::bind_socket;
+use mirage::constants::TLS_ALPN_PROTOCOLS;
+use mirage::network::interface::{Interface, InterfaceIO};
 use mirage::{MirageError, Result};
-use quinn::{Connection, Endpoint};
+use tokio::net::TcpStream;
+use tokio_boring::SslStream;
 
 use ipnet::IpNet;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use std::net::ToSocketAddrs;
 use std::time::Duration;
 
 use crate::client::relayer::ClientRelayer;
-use mirage::network::interface::{Interface, InterfaceIO};
 use tracing::{debug, info};
 
 /// Represents a Mirage client that connects to a server and relays packets between the server and a TUN interface.
 pub struct MirageClient {
     config: ClientConfig,
-    relayer: Option<ClientRelayer>,
     client_address: Option<IpNet>,
     server_address: Option<IpNet>,
 }
@@ -33,7 +38,6 @@ impl MirageClient {
     pub fn new(config: ClientConfig) -> Self {
         Self {
             config,
-            relayer: None,
             client_address: None,
             server_address: None,
         }
@@ -41,11 +45,13 @@ impl MirageClient {
 
     /// Connects to the Mirage server and starts the workers for this instance of the Mirage client.
     pub async fn start<I: InterfaceIO>(&mut self) -> Result<()> {
-        if self.relayer.is_some() {
-            return Err(MirageError::system("Client is already started"));
-        }
-
-        let connection = self.connect_to_server().await?;
+        // Connect to server via TCP/TLS
+        let tls_stream = self.connect_to_server().await?;
+        
+        // Split stream for auth - we need to get addresses first
+        let (read_half, write_half) = tokio::io::split(tls_stream);
+        
+        // Create authenticator
         let authenticator = Box::new(UsersFileClientAuthenticator::new(
             &self.config.authentication,
         ));
@@ -54,7 +60,8 @@ impl MirageClient {
             Duration::from_secs(self.config.connection.connection_timeout_s),
         );
 
-        let (client_address, server_address) = auth_client.authenticate(&connection).await?;
+        // Authenticate
+        let (client_address, server_address) = auth_client.authenticate(read_half, write_half).await?;
 
         info!("Successfully authenticated");
         info!("Received client address: {client_address}");
@@ -63,6 +70,9 @@ impl MirageClient {
         // Store the addresses for later access
         self.client_address = Some(client_address);
         self.server_address = Some(server_address);
+
+        // Reconnect for data transfer (auth consumed the stream)
+        let data_stream = self.connect_to_server().await?;
 
         let interface: Interface<I> = Interface::create(
             client_address,
@@ -73,42 +83,13 @@ impl MirageClient {
             Some(self.config.network.dns_servers.clone()),
         )?;
 
-        let relayer = ClientRelayer::start(interface, connection)?;
-        self.relayer.replace(relayer);
+        // Start relayer with the new connection
+        let relayer = ClientRelayer::start(interface, data_stream)?;
+        
+        // Wait for relayer to finish
+        relayer.wait_for_shutdown().await?;
 
         Ok(())
-    }
-
-    /// Returns whether the client is currently running.
-    pub fn is_running(&self) -> bool {
-        // TODO: this will return false if something else called `wait_for_shutdown`
-        self.relayer.is_some()
-    }
-
-    /// Attempts to stop the client (if running).
-    pub async fn stop(&mut self) -> Result<()> {
-        if let Some(relayer) = self.relayer.as_mut() {
-            relayer.stop().await?;
-        }
-
-        // Clear stored addresses when stopping
-        self.client_address = None;
-        self.server_address = None;
-
-        Ok(())
-    }
-
-    /// Waits for the client to stop relaying packets and finishes the shutdown process.
-    pub async fn wait_for_shutdown(&mut self) -> Result<()> {
-        if let Some(relayer) = self.relayer.take() {
-            relayer.wait_for_shutdown().await?;
-        }
-
-        Ok(())
-    }
-
-    pub fn relayer(&self) -> Option<&ClientRelayer> {
-        self.relayer.as_ref()
     }
 
     /// Returns the client IP address assigned during authentication.
@@ -121,13 +102,8 @@ impl MirageClient {
         self.server_address
     }
 
-    /// Connects to the Mirage server.
-    ///
-    /// ### Returns
-    /// - `Connection` - a Quinn connection representing the connection to the Mirage server
-    async fn connect_to_server(&self) -> Result<Connection> {
-        let quinn_config = self.config.quinn_client_config()?;
-
+    /// Connects to the Mirage server via TCP/TLS.
+    async fn connect_to_server(&self) -> Result<SslStream<TcpStream>> {
         let server_hostname = self
             .config
             .connection_string
@@ -154,43 +130,49 @@ impl MirageClient {
 
         info!("Connecting: {}", self.config.connection_string);
 
-        let endpoint = self.create_quinn_endpoint(server_addr)?;
-        let connection = endpoint
-            .connect_with(quinn_config, server_addr, server_hostname)?
-            .await?;
+        // Create TCP connection
+        let tcp_stream = TcpStream::connect(server_addr).await?;
+        
+        // Configure TCP socket
+        tcp_stream.set_nodelay(self.config.connection.tcp_nodelay)?;
+        debug!("TCP connection established to {}", server_addr);
 
-        info!("Connection established: {}", self.config.connection_string);
+        // Configure TLS using BoringSSL
+        let mut connector_builder = SslConnector::builder(SslMethod::tls_client())
+            .map_err(|e| MirageError::system(format!("Failed to create SSL connector: {e}")))?;
 
-        Ok(connection)
-    }
+        // Set SNI for Reality camouflage
+        let sni = &self.config.reality.target_sni;
+        debug!("Using SNI: {}", sni);
 
-    /// Creates a Quinn endpoint.
-    ///
-    /// ### Arguments
-    /// - `remote_address` - the remote address to connect to
-    ///
-    /// ### Returns
-    /// - `Endpoint` - the Quinn endpoint
-    fn create_quinn_endpoint(&self, remote_address: SocketAddr) -> Result<Endpoint> {
-        let bind_addr: SocketAddr = SocketAddr::new(
-            match remote_address.ip() {
-                IpAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
-                IpAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
-            },
-            0,
-        );
-        debug!("QUIC socket local address: {:?}", bind_addr);
+        // Configure ALPN protocols (Chrome order)
+        let alpn_protocols: Vec<u8> = TLS_ALPN_PROTOCOLS
+            .iter()
+            .flat_map(|p| {
+                let mut v = vec![p.len() as u8];
+                v.extend_from_slice(p);
+                v
+            })
+            .collect();
+        connector_builder.set_alpn_protos(&alpn_protocols)
+            .map_err(|e| MirageError::system(format!("Failed to set ALPN: {e}")))?;
 
-        let socket = bind_socket(
-            bind_addr,
-            self.config.connection.send_buffer_size as usize,
-            self.config.connection.recv_buffer_size as usize,
-            false,
-        )?;
+        // For now, skip certificate verification (self-signed certs)
+        // TODO: Implement proper Reality validation
+        connector_builder.set_verify(SslVerifyMode::NONE);
 
-        let endpoint_config = self.config.connection.as_endpoint_config()?;
-        let endpoint = Endpoint::new(endpoint_config, None, socket, QUINN_RUNTIME.clone())?;
+        let connector = connector_builder.build();
+        let ssl_config = connector
+            .configure()
+            .map_err(|e| MirageError::system(format!("Failed to configure SSL: {e}")))?;
 
-        Ok(endpoint)
+        // Connect with TLS
+        let tls_stream = tokio_boring::connect(ssl_config, sni, tcp_stream)
+            .await
+            .map_err(|e| MirageError::connection_failed(format!("TLS handshake failed: {e}")))?;
+
+        info!("TLS connection established: {}", self.config.connection_string);
+
+        Ok(tls_stream)
     }
 }

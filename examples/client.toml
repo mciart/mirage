@@ -1,5 +1,5 @@
 # The address and port the Mirage server is available at
-connection_string = "mirage:55555"
+connection_string = "mirage:443"
 
 [authentication]
 # The username used for authentication
@@ -7,15 +7,16 @@ username = "test"
 # The password used for authentication
 password = "test"
 # A list of trusted certificate file paths the server can use or have its certificate signed by
-trusted_certificate_paths = ["examples/cert/server_cert.pem"]
-# A list of trusted certificates as PEM strings
-# trusted_certificates = [
-#   "-----BEGIN CERTIFICATE-----\nMIIBkjCB...\n-----END CERTIFICATE-----"
-# ]
+# trusted_certificate_paths = ["examples/cert/server_cert.pem"]
 
 [connection]
-# The MTU used by the QUIC tunnel and the spawned TUN interface
+# The MTU used by the tunnel and the spawned TUN interface
+# TCP overhead is automatically handled
 mtu = 1400
+# Connection timeout in seconds
+connection_timeout_s = 30
+# Keep-alive interval in seconds
+keep_alive_interval_s = 25
 
 [network]
 routes = [
@@ -23,8 +24,14 @@ routes = [
     "10.11.12.0/24"
 ]
 dns_servers = [
-    "10.0.0.1"
+    "1.1.1.1"
 ]
+
+[reality]
+# SNI camouflage target (must match server's configuration)
+target_sni = "www.microsoft.com"
+# Short ID for Reality authentication (optional)
+# short_id = "abc1234"
 
 [log]
 # The log level

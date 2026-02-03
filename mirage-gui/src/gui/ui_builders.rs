@@ -419,8 +419,8 @@ impl MirageGui {
                     config.authentication.username.clone()
                 ),
                 self.build_owned_config_field(
-                    "Encryption Type".to_string(),
-                    format!("{:?}", config.crypto.key_exchange)
+                    "Reality SNI".to_string(),
+                    config.reality.target_sni.clone()
                 ),
                 self.build_owned_config_field("Routes".to_string(), routes_display),
                 self.build_owned_config_field("DNS Servers".to_string(), dns_servers_display),

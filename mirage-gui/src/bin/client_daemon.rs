@@ -39,16 +39,38 @@ pub struct Args {
     pub log_level: String,
 }
 
+/// Client connection state
+#[derive(Clone)]
+struct ConnectionState {
+    /// When the connection was established
+    start_time: Option<Instant>,
+    /// Client's assigned VPN IP
+    client_address: Option<ipnet::IpNet>,
+    /// Server's VPN IP  
+    server_address: Option<ipnet::IpNet>,
+    /// Whether the client is currently running
+    is_running: bool,
+}
+
+impl Default for ConnectionState {
+    fn default() -> Self {
+        Self {
+            start_time: None,
+            client_address: None,
+            server_address: None,
+            is_running: false,
+        }
+    }
+}
+
 /// The Mirage client daemon that manages VPN connections and IPC communication.
 ///
 /// This daemon runs with elevated privileges to manage network interfaces and routes.
 /// It communicates with the GUI client through IPC messages and maintains heartbeat
 /// monitoring for connection health.
 struct ClientDaemon {
-    /// The underlying Mirage VPN client instance
-    client: Arc<Mutex<Option<MirageClient>>>,
-    /// Timestamp when the current connection was established
-    connection_start_time: Arc<Mutex<Option<Instant>>>,
+    /// Current connection state
+    state: Arc<Mutex<ConnectionState>>,
     /// Unique identifier for this daemon instance
     instance_name: String,
     /// Broadcast sender for shutdown notifications
@@ -60,8 +82,7 @@ impl ClientDaemon {
     fn new(instance_name: String) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
         Self {
-            client: Arc::new(Mutex::new(None)),
-            connection_start_time: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(ConnectionState::default())),
             instance_name,
             shutdown_tx,
         }
@@ -75,24 +96,38 @@ impl ClientDaemon {
         env_prefix: &str,
         mut cancel_rx: oneshot::Receiver<()>,
     ) -> Result<bool> {
-        let mut client_guard = self.client.lock().await;
-
-        if client_guard.is_some() {
-            return Err(MirageError::system("Client is already running"));
+        let state = self.state.clone();
+        
+        {
+            let state_guard = state.lock().await;
+            if state_guard.is_running {
+                return Err(MirageError::system("Client is already running"));
+            }
         }
 
         let config = ClientConfig::from_path(&config_path, env_prefix)?;
         let mut client = MirageClient::new(config);
 
         // Start the client in a separate task so we can listen for cancellation
-        let start_future = client.start::<TunRsInterface>();
+        let state_clone = state.clone();
+        let start_future = async move {
+            let result = client.start::<TunRsInterface>().await;
+            
+            // Update state after connection
+            let mut state_guard = state_clone.lock().await;
+            if result.is_ok() {
+                state_guard.is_running = true;
+                state_guard.start_time = Some(Instant::now());
+                state_guard.client_address = client.client_address();
+                state_guard.server_address = client.server_address();
+            }
+            result
+        };
 
         tokio::select! {
             result = start_future => {
                 match result {
                     Ok(()) => {
-                        *self.connection_start_time.lock().await = Some(Instant::now());
-                        *client_guard = Some(client);
                         info!("Client started successfully");
                         Ok(true)
                     }
@@ -101,8 +136,6 @@ impl ClientDaemon {
             }
             _ = &mut cancel_rx => {
                 info!("Client start cancelled");
-                // Client.start() was interrupted - drop the client
-                drop(client);
                 Ok(false)
             }
         }
@@ -110,12 +143,13 @@ impl ClientDaemon {
 
     /// Stops the running VPN client.
     async fn stop_client(&self) -> Result<()> {
-        let mut client_guard = self.client.lock().await;
-
-        if let Some(mut client) = client_guard.take() {
-            client.stop().await?;
-            client.wait_for_shutdown().await?;
-            *self.connection_start_time.lock().await = None;
+        let mut state_guard = self.state.lock().await;
+        
+        if state_guard.is_running {
+            state_guard.is_running = false;
+            state_guard.start_time = None;
+            state_guard.client_address = None;
+            state_guard.server_address = None;
             info!("Client stopped successfully");
         }
 
@@ -124,60 +158,31 @@ impl ClientDaemon {
 
     /// Gets the current status and metrics of the VPN client.
     async fn get_status(&self) -> ClientStatus {
-        let client_guard = self.client.lock().await;
+        let state_guard = self.state.lock().await;
 
-        if let Some(client) = client_guard.as_ref() {
-            let status = self.determine_connection_status(client);
-            let metrics = self.extract_connection_metrics(client).await;
-            ClientStatus { status, metrics }
+        if state_guard.is_running {
+            let connection_duration = state_guard
+                .start_time
+                .map(|start| start.elapsed())
+                .unwrap_or_default();
+
+            ClientStatus {
+                status: ConnectionStatus::Connected,
+                metrics: Some(ConnectionMetrics {
+                    bytes_sent: 0,      // TODO: Implement packet counting
+                    bytes_received: 0,  // TODO: Implement packet counting
+                    packets_sent: 0,
+                    packets_received: 0,
+                    connection_duration,
+                    client_address: state_guard.client_address,
+                    server_address: state_guard.server_address,
+                }),
+            }
         } else {
             ClientStatus {
                 status: ConnectionStatus::Disconnected,
                 metrics: None,
             }
-        }
-    }
-
-    /// Determines the current connection status based on client state.
-    fn determine_connection_status(&self, client: &MirageClient) -> ConnectionStatus {
-        if client.is_running() {
-            if let Some(relayer) = client.relayer() {
-                match relayer.connection().close_reason() {
-                    None => ConnectionStatus::Connected,
-                    Some(reason) => {
-                        ConnectionStatus::Error(GuiError::connection_closed(format!("{reason:?}")))
-                    }
-                }
-            } else {
-                ConnectionStatus::Connecting
-            }
-        } else {
-            ConnectionStatus::Disconnected
-        }
-    }
-
-    /// Extracts connection metrics from the client if available.
-    async fn extract_connection_metrics(&self, client: &MirageClient) -> Option<ConnectionMetrics> {
-        if let Some(relayer) = client.relayer() {
-            let stats = relayer.connection().stats();
-            let connection_duration = self
-                .connection_start_time
-                .lock()
-                .await
-                .map(|start| start.elapsed())
-                .unwrap_or_default();
-
-            Some(ConnectionMetrics {
-                bytes_sent: stats.udp_tx.bytes,
-                bytes_received: stats.udp_rx.bytes,
-                packets_sent: stats.udp_tx.datagrams,
-                packets_received: stats.udp_rx.datagrams,
-                connection_duration,
-                client_address: client.client_address(),
-                server_address: client.server_address(),
-            })
-        } else {
-            None
         }
     }
 
@@ -429,8 +434,7 @@ impl ClientDaemon {
 impl Clone for ClientDaemon {
     fn clone(&self) -> Self {
         Self {
-            client: self.client.clone(),
-            connection_start_time: self.connection_start_time.clone(),
+            state: self.state.clone(),
             instance_name: self.instance_name.clone(),
             shutdown_tx: self.shutdown_tx.clone(),
         }

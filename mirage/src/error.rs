@@ -435,13 +435,13 @@ pub enum SocketError {
 
 // BoringSSL error conversion
 impl From<boring::ssl::Error> for MirageError {
-    fn from(err: boring::ssl::Error) -> Self {
+    fn from(_err: boring::ssl::Error) -> Self {
         MirageError::Certificate(CertificateError::ValidationFailed)
     }
 }
 
-impl From<boring::ssl::ErrorStack> for MirageError {
-    fn from(err: boring::ssl::ErrorStack) -> Self {
+impl From<boring::error::ErrorStack> for MirageError {
+    fn from(_err: boring::error::ErrorStack) -> Self {
         MirageError::Certificate(CertificateError::ValidationFailed)
     }
 }

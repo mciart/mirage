@@ -1,11 +1,15 @@
+//! Server-side authentication handling for the Mirage VPN.
+//!
+//! This module provides the AuthServer which handles the authentication
+//! handshake with clients over TLS streams.
+
 use ipnet::IpNet;
-use quinn::Connection;
 use std::time::Duration;
-use tokio::time::timeout;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use mirage::{
     auth::{
-        stream::{AuthMessage, AuthStreamBuilder, AuthStreamMode},
+        stream::{AuthMessage, AuthStream},
         ServerAuthenticator,
     },
     error::AuthError,
@@ -33,29 +37,31 @@ impl AuthServer {
         }
     }
 
-    /// Handles authentication for a client.
+    /// Handles authentication for a client over a TLS stream.
     ///
     /// # Arguments
-    /// * `connection` - The connection to the client
+    /// * `reader` - The read half of the TLS stream
+    /// * `writer` - The write half of the TLS stream
     ///
     /// # Returns
     /// A tuple containing the authenticated username and assigned client IP address
     ///
     /// # Errors
-    /// Returns `AuthError` variants for authentication failures:
-    /// - `InvalidCredentials` - When provided credentials are invalid
-    /// - `Timeout` - When authentication times out
-    /// - `StreamError` - When communication fails
-    /// - `InvalidPayload` - When authentication data is malformed
-    pub async fn handle_authentication(&self, connection: &Connection) -> Result<(String, IpNet)> {
-        let auth_stream_builder = AuthStreamBuilder::new(AuthStreamMode::Server);
-        let mut auth_stream = auth_stream_builder
-            .connect(connection, self.auth_timeout)
-            .await?;
+    /// Returns `AuthError` variants for authentication failures
+    pub async fn handle_authentication<R, W>(
+        &self,
+        reader: R,
+        writer: W,
+    ) -> Result<(String, IpNet)>
+    where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        let mut auth_stream = AuthStream::new(reader, writer);
 
-        let message = timeout(self.auth_timeout, auth_stream.recv_message())
-            .await
-            .map_err(|_| AuthError::Timeout)??;
+        let message = auth_stream
+            .recv_message_timeout(self.auth_timeout)
+            .await?;
 
         let auth_result = match message {
             AuthMessage::Authenticate { payload } => {
@@ -63,10 +69,13 @@ impl AuthServer {
                     self.authenticator.authenticate_user(payload).await?;
 
                 auth_stream
-                    .send_message(AuthMessage::Authenticated {
-                        client_address,
-                        server_address: self.server_address,
-                    })
+                    .send_message_timeout(
+                        AuthMessage::Authenticated {
+                            client_address,
+                            server_address: self.server_address,
+                        },
+                        self.auth_timeout,
+                    )
                     .await?;
 
                 (username, client_address)
@@ -77,8 +86,6 @@ impl AuthServer {
                 return Err(AuthError::InvalidPayload.into());
             }
         };
-
-        auth_stream.close()?;
 
         Ok(auth_result)
     }

@@ -1,28 +1,20 @@
-use crate::certificates::{
-    load_certificates_from_file, load_certificates_from_pem, load_private_key_from_file,
-};
-use crate::constants::{
-    QUIC_MTU_OVERHEAD, TLS_ALPN_PROTOCOLS, TLS_INITIAL_CIPHER_SUITE, TLS_PROTOCOL_VERSIONS,
-};
+//! Configuration types for the Mirage VPN system.
+//!
+//! This module provides configuration structures for both client and server
+//! components, using Figment for flexible configuration loading from files
+//! and environment variables.
+
+use crate::constants::TLS_MTU_OVERHEAD;
 use crate::error::{ConfigError, Result};
 use figment::{
     providers::{Env, Format, Toml},
     Figment,
 };
 use ipnet::IpNet;
-use quinn::{
-    crypto::rustls::{QuicClientConfig, QuicServerConfig},
-    EndpointConfig, TransportConfig,
-};
-use rustls::crypto::aws_lc_rs::kx_group::{MLKEM768, X25519MLKEM768};
-use rustls::crypto::{aws_lc_rs, CryptoProvider};
-use rustls::{CipherSuite, RootCertStore};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
 
 /// Mirage server configuration
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -38,14 +30,10 @@ pub struct ServerConfig {
     /// The address to bind the tunnel to (default = 0.0.0.0)
     #[serde(default = "default_bind_address")]
     pub bind_address: IpAddr,
-    /// The port to bind the tunnel to (default = 55555)
+    /// The port to bind the tunnel to (default = 443)
     #[serde(default = "default_bind_port")]
     pub bind_port: u16,
     /// Whether to reuse the socket (default = false)
-    ///
-    /// This is useful when running multiple Mirage instances on the same port for load balancing.
-    ///
-    /// Unsupported on Windows.
     #[serde(default = "default_false_fn")]
     pub reuse_socket: bool,
     /// The network address of this tunnel (address + mask)
@@ -58,9 +46,9 @@ pub struct ServerConfig {
     /// Miscellaneous connection configuration
     #[serde(default)]
     pub connection: ConnectionConfig,
-    /// Cryptography configuration
+    /// Reality configuration (SNI camouflage)
     #[serde(default)]
-    pub crypto: CryptoConfig,
+    pub reality: RealityConfig,
     /// Logging configuration
     pub log: LogConfig,
 }
@@ -78,19 +66,19 @@ pub struct ServerAuthenticationConfig {
 /// Mirage client configuration
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ClientConfig {
-    /// Connection string to be used to connect to a Mirage server
+    /// Connection string to be used to connect to a Mirage server (host:port)
     pub connection_string: String,
     /// Authentication configuration
     pub authentication: ClientAuthenticationConfig,
-    /// QUIC connection configuration
+    /// TCP/TLS connection configuration
     #[serde(default)]
     pub connection: ConnectionConfig,
     /// Network configuration
     #[serde(default)]
     pub network: NetworkConfig,
-    /// Cryptography configuration
+    /// Reality configuration (SNI camouflage)
     #[serde(default)]
-    pub crypto: CryptoConfig,
+    pub reality: RealityConfig,
     /// Logging configuration
     pub log: LogConfig,
 }
@@ -113,58 +101,53 @@ pub struct ClientAuthenticationConfig {
     pub trusted_certificates: Vec<String>,
 }
 
-/// QUIC connection configuration
+/// TCP/TLS connection configuration
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ConnectionConfig {
     /// The MTU to use for connections and the TUN interface (default = 1400)
     #[serde(default = "default_mtu")]
     pub mtu: u16,
-    /// The congestion control algorithm to use (default = Cubic)
-    #[serde(default = "default_congestion_controller")]
-    pub congestion_controller: CongestionController,
     /// The time after which a connection is considered timed out in seconds (default = 30)
     #[serde(default = "default_timeout_s")]
     pub connection_timeout_s: u64,
     /// Keep alive interval for connections in seconds (default = 25)
     #[serde(default = "default_keep_alive_interval_s")]
     pub keep_alive_interval_s: u64,
-    /// The size of the send buffer of the socket and Quinn endpoint (default = 2097152)
+    /// The size of the send buffer of the socket (default = 2097152)
     #[serde(default = "default_buffer_size")]
     pub send_buffer_size: u64,
-    /// The size of the receive buffer of the socket and Quinn endpoint (default = 2097152)
+    /// The size of the receive buffer of the socket (default = 2097152)
     #[serde(default = "default_buffer_size")]
     pub recv_buffer_size: u64,
+    /// Enable TCP_NODELAY for lower latency (default = true)
+    #[serde(default = "default_true_fn")]
+    pub tcp_nodelay: bool,
 }
 
+/// Reality protocol configuration for SNI camouflage
 #[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct CryptoConfig {
-    /// The key exchange algorithm to use (default = Hybrid)
-    #[serde(default = "default_key_exchange")]
-    pub key_exchange: KeyExchange,
+pub struct RealityConfig {
+    /// Target SNI to impersonate (e.g., "www.microsoft.com")
+    #[serde(default = "default_reality_sni")]
+    pub target_sni: String,
+    /// Server's x25519 public key (base64 encoded) - client only
+    #[serde(default)]
+    pub public_key: Option<String>,
+    /// Server's x25519 private key (base64 encoded) - server only
+    #[serde(default)]
+    pub private_key: Option<String>,
+    /// Short ID for client identification (hex string)
+    #[serde(default)]
+    pub short_id: Option<String>,
 }
 
 /// Network configuration
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct NetworkConfig {
     /// Routes/networks to be routed through the tunnel
-    ///
-    /// In the format of `address/mask`, e.g.:
-    /// ```toml
-    /// routes = [
-    ///     "10.0.1.0/24",
-    ///     "10.11.12.0/24"
-    /// ]
-    /// ```
     #[serde(default = "default_routes")]
     pub routes: Vec<IpNet>,
     /// DNS servers to use for the tunnel
-    ///
-    /// In the format of `address`, e.g.:
-    /// ```toml
-    /// dns_servers = [
-    ///     "10.0.1.1",
-    /// ]
-    /// ```
     #[serde(default = "default_dns_servers")]
     pub dns_servers: Vec<IpAddr>,
     /// Optional interface name to request for the tunnel device
@@ -186,38 +169,8 @@ pub enum AuthType {
     UsersFile,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-pub enum KeyExchange {
-    /// ECDH
-    #[serde(alias = "standard")]
-    Standard,
-    /// X25519 + MLKEM
-    #[serde(alias = "hybrid")]
-    Hybrid,
-    /// MLKEM
-    #[serde(alias = "post_quantum")]
-    PostQuantum,
-}
-
-/// Congestion control algorithm to use for QUIC connections
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-pub enum CongestionController {
-    /// CUBIC congestion control (RFC 8312) - widely deployed, loss-based
-    #[serde(alias = "cubic")]
-    Cubic,
-    /// BBR congestion control - latency-based, experimental in Quinn
-    #[serde(alias = "bbr", alias = "BBR")]
-    Bbr,
-    /// New Reno congestion control - simple, traditional TCP-style
-    #[serde(alias = "new_reno")]
-    NewReno,
-}
-
 pub trait ConfigInit<T: DeserializeOwned> {
     /// Initializes the configuration object from the given Figment
-    ///
-    /// ### Arguments
-    /// - `figment` - the Figment to use for initialization
     fn init(figment: Figment, _env_prefix: &str) -> Result<T> {
         Ok(figment.extract()?)
     }
@@ -225,10 +178,6 @@ pub trait ConfigInit<T: DeserializeOwned> {
 
 pub trait FromPath<T: DeserializeOwned + ConfigInit<T>> {
     /// Creates a configuration object from the given path and ENV prefix
-    ///
-    /// ### Arguments
-    /// - `path` - a path to the configuration file
-    /// - `env_prefix` - the ENV prefix to use for overrides
     fn from_path(path: &Path, env_prefix: &str) -> Result<T> {
         if !path.exists() {
             return Err(ConfigError::FileNotFound {
@@ -255,11 +204,11 @@ impl Default for ConnectionConfig {
     fn default() -> Self {
         Self {
             mtu: default_mtu(),
-            congestion_controller: default_congestion_controller(),
             connection_timeout_s: default_timeout_s(),
             keep_alive_interval_s: default_keep_alive_interval_s(),
             send_buffer_size: default_buffer_size(),
             recv_buffer_size: default_buffer_size(),
+            tcp_nodelay: default_true_fn(),
         }
     }
 }
@@ -274,10 +223,13 @@ impl Default for NetworkConfig {
     }
 }
 
-impl Default for CryptoConfig {
+impl Default for RealityConfig {
     fn default() -> Self {
         Self {
-            key_exchange: default_key_exchange(),
+            target_sni: default_reality_sni(),
+            public_key: None,
+            private_key: None,
+            short_id: None,
         }
     }
 }
@@ -291,7 +243,7 @@ fn default_bind_address() -> IpAddr {
 }
 
 fn default_bind_port() -> u16 {
-    55555
+    443 // Standard HTTPS port for stealth
 }
 
 fn default_buffer_size() -> u64 {
@@ -300,10 +252,6 @@ fn default_buffer_size() -> u64 {
 
 fn default_mtu() -> u16 {
     1400
-}
-
-fn default_congestion_controller() -> CongestionController {
-    CongestionController::Cubic
 }
 
 fn default_timeout_s() -> u64 {
@@ -342,190 +290,14 @@ fn default_trusted_certificates() -> Vec<String> {
     Vec::new()
 }
 
-fn default_key_exchange() -> KeyExchange {
-    KeyExchange::Hybrid
-}
-
-impl ClientConfig {
-    /// Creates Quinn client configuration from this Mirage client configuration.
-    ///
-    /// ### Returns
-    /// - `quinn::ClientConfig` - the Quinn client configuration
-    pub fn quinn_client_config(&self) -> Result<quinn::ClientConfig> {
-        let mut cert_store = RootCertStore::empty();
-
-        // Load certificates from file paths
-        for cert_path in &self.authentication.trusted_certificate_paths {
-            let certs = load_certificates_from_file(cert_path)?;
-            cert_store.add_parsable_certificates(certs);
-        }
-
-        // Load certificates from PEM strings
-        for pem_data in &self.authentication.trusted_certificates {
-            let certs = load_certificates_from_pem(pem_data)?;
-            cert_store.add_parsable_certificates(certs);
-        }
-
-        let crypto_provider = Arc::from(self.crypto.crypto_provider());
-
-        let mut rustls_config = rustls::ClientConfig::builder_with_provider(crypto_provider)
-            .with_protocol_versions(TLS_PROTOCOL_VERSIONS)?
-            .with_root_certificates(cert_store)
-            .with_no_client_auth();
-
-        rustls_config.alpn_protocols.clone_from(&TLS_ALPN_PROTOCOLS);
-
-        let quic_client_config = QuicClientConfig::with_initial(
-            rustls_config.into(),
-            TLS_INITIAL_CIPHER_SUITE
-                .tls13()
-                .expect("QUIC initial suite is a valid TLS 1.3 suite")
-                .quic_suite()
-                .expect("QUIC initial suite is a valid QUIC suite"),
-        )
-        .map_err(|e| ConfigError::InvalidValue {
-            field: "quic_client_config".to_string(),
-            reason: format!("QUIC configuration creation failed: {e}"),
-        })?;
-
-        let mut quinn_config = quinn::ClientConfig::new(Arc::new(quic_client_config));
-        let mut transport_config = TransportConfig::default();
-
-        transport_config.max_idle_timeout(Some(
-            Duration::from_secs(self.connection.connection_timeout_s)
-                .try_into()
-                .map_err(|e| ConfigError::InvalidValue {
-                    field: "connection_timeout_s".to_string(),
-                    reason: format!("timeout value out of bounds: {e}"),
-                })?,
-        ));
-        transport_config.keep_alive_interval(Some(Duration::from_secs(
-            self.connection.keep_alive_interval_s,
-        )));
-        transport_config.initial_mtu(self.connection.mtu_with_overhead());
-        transport_config.min_mtu(self.connection.mtu_with_overhead());
-        transport_config
-            .congestion_controller_factory(self.connection.congestion_controller_factory());
-
-        quinn_config.transport_config(Arc::new(transport_config));
-
-        Ok(quinn_config)
-    }
-}
-
-impl ServerConfig {
-    /// Creates Quinn server configuration from this Mirage tunnel configuration.
-    ///
-    /// ### Arguments
-    /// - `connection_config` - the connection configuration to use
-    ///
-    /// ### Returns
-    /// - `quinn::ServerConfig` - the Quinn server configuration
-    pub fn as_quinn_server_config(&self) -> Result<quinn::ServerConfig> {
-        let certificate_file_path = self.certificate_file.clone();
-        let certificate_key_path = self.certificate_key_file.clone();
-        let key = load_private_key_from_file(&certificate_key_path)?;
-        let certs = load_certificates_from_file(&certificate_file_path)?;
-
-        let crypto_provider = Arc::from(self.crypto.crypto_provider());
-
-        let mut rustls_config = rustls::ServerConfig::builder_with_provider(crypto_provider)
-            .with_protocol_versions(TLS_PROTOCOL_VERSIONS)?
-            .with_no_client_auth()
-            .with_single_cert(certs, key.into())?;
-
-        rustls_config.alpn_protocols.clone_from(&TLS_ALPN_PROTOCOLS);
-        rustls_config.max_early_data_size = 0;
-
-        let quic_server_config = QuicServerConfig::with_initial(
-            rustls_config.into(),
-            TLS_INITIAL_CIPHER_SUITE
-                .tls13()
-                .expect("QUIC initial suite is a valid TLS 1.3 suite")
-                .quic_suite()
-                .expect("QUIC initial suite is a valid QUIC suite"),
-        )
-        .map_err(|e| ConfigError::InvalidValue {
-            field: "quic_server_config".to_string(),
-            reason: format!("QUIC configuration creation failed: {e}"),
-        })?;
-
-        let mut quinn_config = quinn::ServerConfig::with_crypto(Arc::new(quic_server_config));
-        let mut transport_config = TransportConfig::default();
-
-        transport_config.max_idle_timeout(Some(
-            Duration::from_secs(self.connection.connection_timeout_s)
-                .try_into()
-                .map_err(|e| ConfigError::InvalidValue {
-                    field: "connection_timeout_s".to_string(),
-                    reason: format!("timeout value out of bounds: {e}"),
-                })?,
-        ));
-        transport_config.initial_mtu(self.connection.mtu_with_overhead());
-        transport_config.min_mtu(self.connection.mtu_with_overhead());
-        transport_config
-            .congestion_controller_factory(self.connection.congestion_controller_factory());
-
-        quinn_config.transport_config(Arc::new(transport_config));
-
-        Ok(quinn_config)
-    }
+fn default_reality_sni() -> String {
+    "www.microsoft.com".to_string()
 }
 
 impl ConnectionConfig {
-    pub fn as_endpoint_config(&self) -> Result<EndpointConfig> {
-        let mut endpoint_config = EndpointConfig::default();
-        endpoint_config
-            .max_udp_payload_size(self.mtu_with_overhead())
-            .map_err(|e| ConfigError::InvalidValue {
-                field: "mtu".to_string(),
-                reason: format!("MTU configuration failed: {e}"),
-            })?;
-
-        Ok(endpoint_config)
-    }
-
+    /// Returns the MTU with TLS overhead added
     pub fn mtu_with_overhead(&self) -> u16 {
-        self.mtu + QUIC_MTU_OVERHEAD
-    }
-
-    pub fn congestion_controller_factory(
-        &self,
-    ) -> Arc<dyn quinn::congestion::ControllerFactory + Send + Sync> {
-        let config: Box<dyn quinn::congestion::ControllerFactory + Send + Sync> = match self
-            .congestion_controller
-        {
-            CongestionController::Cubic => Box::new(quinn::congestion::CubicConfig::default()),
-            CongestionController::Bbr => Box::new(quinn::congestion::BbrConfig::default()),
-            CongestionController::NewReno => Box::new(quinn::congestion::NewRenoConfig::default()),
-        };
-
-        Arc::from(config)
-    }
-}
-
-impl CryptoConfig {
-    fn crypto_provider(&self) -> CryptoProvider {
-        let mut custom_provider = aws_lc_rs::default_provider();
-
-        custom_provider.cipher_suites.retain(|suite| {
-            matches!(
-                suite.suite(),
-                CipherSuite::TLS13_AES_256_GCM_SHA384 | CipherSuite::TLS13_CHACHA20_POLY1305_SHA256
-            )
-        });
-
-        match self.key_exchange {
-            KeyExchange::Standard => custom_provider,
-            KeyExchange::Hybrid => CryptoProvider {
-                kx_groups: vec![X25519MLKEM768],
-                ..custom_provider
-            },
-            KeyExchange::PostQuantum => CryptoProvider {
-                kx_groups: vec![MLKEM768],
-                ..custom_provider
-            },
-        }
+        self.mtu + TLS_MTU_OVERHEAD
     }
 }
 
@@ -541,7 +313,7 @@ mod tests {
             certificate_file = "/path/to/cert.pem"
             certificate_key_file = "/path/to/key.pem"
             bind_address = "192.168.1.1"
-            bind_port = 12345
+            bind_port = 443
             reuse_socket = true
             tunnel_network = "10.0.0.1/24"
             isolate_clients = false
@@ -552,14 +324,16 @@ mod tests {
 
             [connection]
             mtu = 1500
-            congestion_controller = "Bbr"
             connection_timeout_s = 45
             keep_alive_interval_s = 20
             send_buffer_size = 4194304
             recv_buffer_size = 4194304
+            tcp_nodelay = true
 
-            [crypto]
-            key_exchange = "PostQuantum"
+            [reality]
+            target_sni = "www.google.com"
+            private_key = "base64_encoded_private_key"
+            short_id = "abcd1234"
 
             [log]
             level = "debug"
@@ -571,66 +345,34 @@ mod tests {
             .expect("Failed to parse server config");
 
         assert_eq!(config.name, "mirage-server");
-        assert_eq!(config.certificate_file, PathBuf::from("/path/to/cert.pem"));
-        assert_eq!(
-            config.certificate_key_file,
-            PathBuf::from("/path/to/key.pem")
-        );
-        assert_eq!(
-            config.bind_address,
-            "192.168.1.1".parse::<IpAddr>().unwrap()
-        );
-        assert_eq!(config.bind_port, 12345);
-        assert!(config.reuse_socket);
-        assert_eq!(
-            config.tunnel_network,
-            "10.0.0.1/24".parse::<IpNet>().unwrap()
-        );
-        assert!(!config.isolate_clients);
-        assert_eq!(config.authentication.auth_type, AuthType::UsersFile);
-        assert_eq!(
-            config.authentication.users_file,
-            PathBuf::from("/path/to/users")
-        );
-        assert_eq!(config.connection.mtu, 1500);
-        assert_eq!(
-            config.connection.congestion_controller,
-            CongestionController::Bbr
-        );
-        assert_eq!(config.connection.connection_timeout_s, 45);
-        assert_eq!(config.connection.keep_alive_interval_s, 20);
-        assert_eq!(config.connection.send_buffer_size, 4194304);
-        assert_eq!(config.connection.recv_buffer_size, 4194304);
-        assert_eq!(config.crypto.key_exchange, KeyExchange::PostQuantum);
-        assert_eq!(config.log.level, "debug");
+        assert_eq!(config.bind_port, 443);
+        assert_eq!(config.reality.target_sni, "www.google.com");
     }
 
     #[test]
     fn parse_client_config_full() {
         let toml = r#"
-            connection_string = "example.com:55555"
+            connection_string = "example.com:443"
 
             [authentication]
             auth_type = "UsersFile"
             username = "testuser"
             password = "testpass"
-            trusted_certificate_paths = ["/path/to/cert1.pem", "/path/to/cert2.pem"]
-            trusted_certificates = ["-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"]
+            trusted_certificate_paths = ["/path/to/cert1.pem"]
 
             [connection]
             mtu = 1500
-            congestion_controller = "NewReno"
             connection_timeout_s = 45
             keep_alive_interval_s = 20
-            send_buffer_size = 1048576
-            recv_buffer_size = 1048576
 
             [network]
             routes = ["10.0.1.0/24", "192.168.0.0/16"]
             dns_servers = ["8.8.8.8", "8.8.4.4"]
 
-            [crypto]
-            key_exchange = "Standard"
+            [reality]
+            target_sni = "www.google.com"
+            public_key = "base64_encoded_public_key"
+            short_id = "abcd1234"
 
             [log]
             level = "trace"
@@ -641,45 +383,7 @@ mod tests {
             .extract()
             .expect("Failed to parse client config");
 
-        assert_eq!(config.connection_string, "example.com:55555");
-        assert_eq!(config.authentication.auth_type, AuthType::UsersFile);
-        assert_eq!(config.authentication.username, "testuser");
-        assert_eq!(config.authentication.password, "testpass");
-        assert_eq!(
-            config.authentication.trusted_certificate_paths,
-            vec![
-                PathBuf::from("/path/to/cert1.pem"),
-                PathBuf::from("/path/to/cert2.pem")
-            ]
-        );
-        assert_eq!(
-            config.authentication.trusted_certificates,
-            vec!["-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"]
-        );
-        assert_eq!(config.connection.mtu, 1500);
-        assert_eq!(
-            config.connection.congestion_controller,
-            CongestionController::NewReno
-        );
-        assert_eq!(config.connection.connection_timeout_s, 45);
-        assert_eq!(config.connection.keep_alive_interval_s, 20);
-        assert_eq!(config.connection.send_buffer_size, 1048576);
-        assert_eq!(config.connection.recv_buffer_size, 1048576);
-        assert_eq!(
-            config.network.routes,
-            vec![
-                "10.0.1.0/24".parse::<IpNet>().unwrap(),
-                "192.168.0.0/16".parse::<IpNet>().unwrap()
-            ]
-        );
-        assert_eq!(
-            config.network.dns_servers,
-            vec![
-                "8.8.8.8".parse::<IpAddr>().unwrap(),
-                "8.8.4.4".parse::<IpAddr>().unwrap()
-            ]
-        );
-        assert_eq!(config.crypto.key_exchange, KeyExchange::Standard);
-        assert_eq!(config.log.level, "trace");
+        assert_eq!(config.connection_string, "example.com:443");
+        assert_eq!(config.reality.target_sni, "www.google.com");
     }
 }

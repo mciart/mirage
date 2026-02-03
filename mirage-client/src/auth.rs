@@ -1,17 +1,21 @@
+//! Client-side authentication handling for the Mirage VPN.
+//!
+//! This module provides the AuthClient which handles the authentication
+//! handshake with the Mirage server over TLS streams.
+
 use std::time::Duration;
 
 use ipnet::IpNet;
-use quinn::Connection;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use mirage::{
     auth::{
-        stream::{AuthMessage, AuthStreamBuilder, AuthStreamMode},
+        stream::{AuthMessage, AuthStream},
         ClientAuthenticator,
     },
     error::AuthError,
     Result,
 };
-use tokio::time::timeout;
 
 /// Represents an authentication client handling initial authentication and session management.
 pub struct AuthClient {
@@ -28,10 +32,11 @@ impl AuthClient {
         }
     }
 
-    /// Establishes a session with the server.
+    /// Establishes a session with the server over a TLS stream.
     ///
     /// # Arguments
-    /// * `connection` - The connection to the server
+    /// * `reader` - The read half of the TLS stream
+    /// * `writer` - The write half of the TLS stream
     ///
     /// # Returns
     /// A tuple containing the client and server IP addresses
@@ -41,22 +46,30 @@ impl AuthClient {
     /// - `InvalidCredentials` - When credentials are rejected by the server
     /// - `Timeout` - When authentication times out
     /// - `StreamError` - When communication with the server fails
-    pub async fn authenticate(&self, connection: &Connection) -> Result<(IpNet, IpNet)> {
-        let auth_stream_builder = AuthStreamBuilder::new(AuthStreamMode::Client);
-        let mut auth_stream = auth_stream_builder
-            .connect(connection, self.auth_timeout)
-            .await?;
+    pub async fn authenticate<R, W>(
+        &self,
+        reader: R,
+        writer: W,
+    ) -> Result<(IpNet, IpNet)>
+    where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        let mut auth_stream = AuthStream::new(reader, writer);
 
         let authentication_payload = self.authenticator.generate_payload().await?;
         auth_stream
-            .send_message(AuthMessage::Authenticate {
-                payload: authentication_payload,
-            })
+            .send_message_timeout(
+                AuthMessage::Authenticate {
+                    payload: authentication_payload,
+                },
+                self.auth_timeout,
+            )
             .await?;
 
-        let auth_response = timeout(self.auth_timeout, auth_stream.recv_message())
-            .await
-            .map_err(|_| AuthError::Timeout)??;
+        let auth_response = auth_stream
+            .recv_message_timeout(self.auth_timeout)
+            .await?;
 
         match auth_response {
             AuthMessage::Authenticated {

@@ -40,6 +40,6 @@ async fn run_client() -> Result<()> {
     tracing::subscriber::set_global_default(log_subscriber(&config.log.level))?;
 
     let mut client = MirageClient::new(config);
-    client.start::<TunRsInterface>().await?;
-    client.wait_for_shutdown().await
+    // start() blocks until the connection is closed or shutdown signal received
+    client.start::<TunRsInterface>().await
 }

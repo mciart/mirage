@@ -24,8 +24,7 @@ use mirage::error::Result;
 fn try_parse_config(path: &Path) -> Result<ClientConfig> {
     // Parse the TOML configuration
     let cfg = ClientConfig::from_path(path, "MIRAGE_")?;
-    // Validate the config by building the quinn client config
-    let _ = cfg.quinn_client_config()?;
+    // Config validation is now handled at connection time
 
     Ok(cfg)
 }

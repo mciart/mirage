@@ -11,7 +11,9 @@ pub mod config;
 pub mod constants;
 pub mod error;
 pub mod network;
+pub mod transport;
 pub mod utils;
 
 // Re-export common types for convenience
 pub use error::{MirageError, Result};
+

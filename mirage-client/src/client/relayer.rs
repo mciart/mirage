@@ -1,42 +1,60 @@
+//! Client packet relayer for the Mirage VPN.
+//!
+//! This module handles bidirectional packet relay between the TUN interface
+//! and the TCP/TLS tunnel using FramedStream.
+
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use mirage::network::interface::{Interface, InterfaceIO};
 use mirage::utils::tasks::abort_all;
 use mirage::{MirageError, Result};
-use quinn::{Connection, VarInt};
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::signal;
 use tokio::sync::broadcast;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
-pub struct ClientRelayer {
-    connection: Connection,
+/// Client relayer that handles packet forwarding between TUN and TCP/TLS tunnel.
+#[allow(dead_code)]
+pub struct ClientRelayer<S> {
+    /// Write half of the TLS stream for sending packets
+    writer: Arc<Mutex<WriteHalf<S>>>,
     relayer_task: JoinHandle<Result<()>>,
     shutdown_tx: broadcast::Sender<()>,
 }
 
-impl ClientRelayer {
+impl<S> ClientRelayer<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     /// Creates a new instance of the client relayer and starts relaying packets between
-    /// the TUN interface and the QUIC connection.
-    pub fn start(interface: Interface<impl InterfaceIO>, connection: Connection) -> Result<Self> {
+    /// the TUN interface and the TCP/TLS connection.
+    pub fn start(interface: Interface<impl InterfaceIO>, stream: S) -> Result<Self> {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let interface = Arc::new(interface);
+        
+        // Split the stream for concurrent read/write
+        let (read_half, write_half) = tokio::io::split(stream);
+        let writer = Arc::new(Mutex::new(write_half));
 
         let relayer_task = tokio::spawn(Self::relay_packets(
             interface.clone(),
-            connection.clone(),
+            read_half,
+            writer.clone(),
             shutdown_rx,
         ));
 
         Ok(Self {
-            connection,
+            writer,
             relayer_task,
             shutdown_tx,
         })
     }
 
     /// Send a shutdown signal to the relayer task.
+    #[allow(dead_code)]
     pub async fn stop(&mut self) -> Result<()> {
         // Send shutdown signal to the relayer task
         self.shutdown_tx
@@ -54,29 +72,22 @@ impl ClientRelayer {
             .map_err(|_| MirageError::system("Relayer task failed"))?
     }
 
-    pub fn connection(&self) -> &Connection {
-        &self.connection
-    }
-
-    /// Relays packets between the TUN interface and the Mirage clients.
-    ///
-    /// ### Arguments
-    /// - `connection` - a Quinn connection representing the connection to the Mirage server
-    /// - `interface` - the TUN interface
+    /// Relays packets between the TUN interface and the TCP/TLS tunnel.
     async fn relay_packets(
         interface: Arc<Interface<impl InterfaceIO>>,
-        connection: Connection,
+        reader: ReadHalf<S>,
+        writer: Arc<Mutex<WriteHalf<S>>>,
         mut shutdown_rx: broadcast::Receiver<()>,
     ) -> Result<()> {
         let mut tasks = FuturesUnordered::new();
 
         tasks.extend([
             tokio::spawn(Self::process_inbound_traffic(
-                connection.clone(),
+                reader,
                 interface.clone(),
             )),
             tokio::spawn(Self::process_outgoing_traffic(
-                connection.clone(),
+                writer,
                 interface.clone(),
             )),
         ]);
@@ -98,49 +109,55 @@ impl ClientRelayer {
         // Stop all running tasks
         let _ = abort_all(tasks).await;
 
-        // Close the QUIC connection
-        connection.close(VarInt::from_u32(0x01), "Client shutdown".as_bytes());
-
         result
     }
 
-    /// Handles incoming packets from the TUN interface and relays them to the Mirage server.
-    ///
-    /// ### Arguments
-    /// - `connection` - a Quinn connection representing the connection to the Mirage server
-    /// - `interface` - TUN interface
+    /// Handles incoming packets from the TUN interface and relays them to the server.
     async fn process_outgoing_traffic(
-        connection: Connection,
+        writer: Arc<Mutex<WriteHalf<S>>>,
         interface: Arc<Interface<impl InterfaceIO>>,
     ) -> Result<()> {
-        debug!("Started outgoing traffic task (interface -> QUIC tunnel)");
+        debug!("Started outgoing traffic task (interface -> TLS tunnel)");
 
         loop {
             let packets = interface.read_packets().await?;
 
             for packet in packets {
-                connection
-                    .send_datagram(packet.into())
-                    .map_err(|e| MirageError::system(format!("Failed to send packet: {e}")))?;
+                let mut writer_guard = writer.lock().await;
+                // Use length-prefixed framing
+                let len = packet.len() as u32;
+                use tokio::io::AsyncWriteExt;
+                writer_guard.write_all(&len.to_be_bytes()).await?;
+                writer_guard.write_all(&packet).await?;
+                writer_guard.flush().await?;
             }
         }
     }
 
-    /// Handles incoming packets from the Mirage server and relays them to the TUN interface queue.
-    ///
-    /// ### Arguments
-    /// - `connection` - a Quinn connection representing the connection to the Mirage server
-    /// - `interface` - TUN interface
+    /// Handles incoming packets from the server and relays them to the TUN interface.
     async fn process_inbound_traffic(
-        connection: Connection,
+        mut reader: ReadHalf<S>,
         interface: Arc<Interface<impl InterfaceIO>>,
     ) -> Result<()> {
-        debug!("Started inbound traffic task (QUIC tunnel -> interface)");
+        debug!("Started inbound traffic task (TLS tunnel -> interface)");
+        
+        use tokio::io::AsyncReadExt;
+        let mut header = [0u8; 4];
 
         loop {
-            let packet = connection.read_datagram().await?.into();
+            // Read length prefix
+            reader.read_exact(&mut header).await?;
+            let len = u32::from_be_bytes(header) as usize;
+            
+            if len > 2048 {
+                return Err(MirageError::system(format!("Packet too large: {} bytes", len)));
+            }
+            
+            // Read packet data
+            let mut packet = vec![0u8; len];
+            reader.read_exact(&mut packet).await?;
 
-            interface.write_packet(packet).await?;
+            interface.write_packet(bytes::Bytes::from(packet).into()).await?;
         }
     }
 }

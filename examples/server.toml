@@ -1,9 +1,13 @@
 # Name of the server instance (currently not used as the name of the interface)
 name = "tun0"
-# Path to the certificate used for TLS
+# Path to the certificate used for TLS (fallback/standard mode)
 certificate_file = "examples/cert/server_cert.pem"
 # Path to the certificate key used for TLS
 certificate_key_file = "examples/cert/server_key.pem"
+# The address to bind the tunnel to
+bind_address = "0.0.0.0"
+# The port to bind the tunnel to
+bind_port = 443
 # The address of the tunnel endpoint and base address of the address pool available to clients
 tunnel_network = "10.0.0.1/24"
 
@@ -12,8 +16,18 @@ tunnel_network = "10.0.0.1/24"
 users_file = "examples/users"
 
 [connection]
-# The MTU used by the QUIC tunnel and the spawned TUN interface
+# The MTU used by the tunnel and the spawned TUN interface
 mtu = 1400
+# Whether to reuse the socket (SO_REUSEADDR)
+reuse_socket = true
+
+[reality]
+# SNI camouflage target (website to steal certificate from)
+target_sni = "www.microsoft.com"
+# Private key for x25519 (optional, for auth)
+# private_key = "..."
+# List of valid short IDs (optional)
+# short_ids = ["..."]
 
 [log]
 # The log level
