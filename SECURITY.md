@@ -2,19 +2,19 @@
 
 ## Supported Versions
 
-Only the latest _minor_ version of Quincy is supported.
+Only the latest _minor_ version of Mirage is supported.
 
 If the latest version is `0.13.3`, then a reported vulnerability will only get patched for `0.13.X` versions. 
 Any other versions affected by the vulnerability will get yanked on crates.io and marked as yanked on their respective GitHub release pages.
 
 ## Reporting a Vulnerability
 
-If you find a vulnerability in Quincy, please report it to the contacts below.
+If you find a vulnerability in Mirage, please report it to the contacts below.
 
 The expected response time is up to 24 hours, at which point you will get updated on the status of the reported vulnerability, including a link to a GitHub Security Advisory if the vulnerability is confirmed.
 
 ### Email
-Address: [security@quincy.rs](mailto:security@quincy.rs) <details>
+Address: [security@mirage.rs](mailto:security@mirage.rs) <details>
 <summary>PGP public key</summary>
   
   ```

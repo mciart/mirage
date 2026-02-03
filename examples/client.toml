@@ -1,5 +1,5 @@
-# The address and port the Quincy server is available at
-connection_string = "quincy:55555"
+# The address and port the Mirage server is available at
+connection_string = "mirage:55555"
 
 [authentication]
 # The username used for authentication

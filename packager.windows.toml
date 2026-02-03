@@ -1,19 +1,19 @@
 name = "windows"
-product_name = "Quincy"
+product_name = "Mirage"
 version = "0.0.0"
-identifier = "rs.quincy.quincy"
+identifier = "rs.mirage.mirage"
 description = "QUIC-based VPN"
 long_description = "A modern, fast VPN built on the QUIC protocol for secure and reliable connections."
-homepage = "https://github.com/quincy-rs/quincy"
-authors = ["Quincy Contributors"]
-publisher = "quincy-rs"
+homepage = "https://github.com/mirage-rs/mirage"
+authors = ["Mirage Contributors"]
+publisher = "mirage-rs"
 copyright = "Licensed under AGPL-3.0. See LICENCE file."
 license_file = "LICENCE"
 before_packaging_command = "PowerShell -NoProfile -ExecutionPolicy Bypass -File resources/scripts/package_windows.ps1"
 icons = ["resources/common/icon.ico"]
 binaries = [
-    { path = "quincy-client-gui", main = true },
-    { path = "quincy-client-daemon", main = false }
+    { path = "mirage-client-gui", main = true },
+    { path = "mirage-client-daemon", main = false }
 ]
 resources = ["target/release/wintun.dll"]
 out_dir = "target/release"

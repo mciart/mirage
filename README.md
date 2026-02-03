@@ -1,16 +1,16 @@
-# Quincy
-[![Crates.io](https://img.shields.io/crates/v/quincy.svg)](https://crates.io/crates/quincy)
-[![Docker](https://img.shields.io/docker/v/m0dex/quincy?logo=docker&label=docker&color=blue)](https://hub.docker.com/r/m0dex/quincy)
-[![Documentation](https://docs.rs/quincy/badge.svg)](https://docs.rs/quincy/)
-[![Build status](https://github.com/quincy-rs/quincy/workflows/CI/badge.svg)](https://github.com/M0dEx/quincy/actions?query=workflow%3ACI)
-[![codecov](https://codecov.io/github/quincy-rs/quincy/graph/badge.svg?token=YRKG8VIGWQ)](https://codecov.io/github/quincy-rs/quincy)
+# Mirage
+[![Crates.io](https://img.shields.io/crates/v/mirage.svg)](https://crates.io/crates/mirage)
+[![Docker](https://img.shields.io/docker/v/m0dex/mirage?logo=docker&label=docker&color=blue)](https://hub.docker.com/r/m0dex/mirage)
+[![Documentation](https://docs.rs/mirage/badge.svg)](https://docs.rs/mirage/)
+[![Build status](https://github.com/mirage-rs/mirage/workflows/CI/badge.svg)](https://github.com/M0dEx/mirage/actions?query=workflow%3ACI)
+[![codecov](https://codecov.io/github/mirage-rs/mirage/graph/badge.svg?token=YRKG8VIGWQ)](https://codecov.io/github/mirage-rs/mirage)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENCE)
-[![Matrix](https://img.shields.io/badge/chat-%23quincy:matrix.org-%2346BC99?logo=matrix)](https://matrix.to/#/#quincy:matrix.org)
+[![Matrix](https://img.shields.io/badge/chat-%23mirage:matrix.org-%2346BC99?logo=matrix)](https://matrix.to/#/#mirage:matrix.org)
 
-Quincy is a VPN client and server implementation using the [QUIC](https://en.wikipedia.org/wiki/QUIC) protocol with support for pre-quantum, hybrid and post-quantum cryptography.
+Mirage is a VPN client and server implementation using the [QUIC](https://en.wikipedia.org/wiki/QUIC) protocol with support for pre-quantum, hybrid and post-quantum cryptography.
 
 <img src="docs/gui.png" alt="GUI" width="800">
-<img src="docs/quincy-client-cap.gif" alt="CLI", width="800">
+<img src="docs/mirage-client-cap.gif" alt="CLI", width="800">
 
 ## Table of contents
 - [Supported platforms](#supported-platforms)
@@ -44,19 +44,19 @@ Binaries and installers are available for Windows, Linux (x86_64) and macOS (aar
 Using cargo, installation of any published version can be done with a simple command:
 ```bash
 # CLI client binary
-cargo install quincy-client
+cargo install mirage-client
 
 # CLI server binaries
-cargo install quincy-server
+cargo install mirage-server
 
 # Client GUI binaries
-cargo install quincy-gui
+cargo install mirage-gui
 ```
 
 ### Docker
-Docker images are available on [Docker Hub](https://hub.docker.com/r/m0dex/quincy) in different flavours:
-- `m0dex/quincy:latest`: The latest version of Quincy
-- `m0dex/quincy:<version>`: A specific version of Quincy
+Docker images are available on [Docker Hub](https://hub.docker.com/r/m0dex/mirage) in different flavours:
+- `m0dex/mirage:latest`: The latest version of Mirage
+- `m0dex/mirage:<version>`: A specific version of Mirage
 
 **Note: it is not possible to use the `dns_servers` configuration option due to how Docker networking works**
 
@@ -67,9 +67,9 @@ docker run
   --cap-add=NET_ADMIN # needed for creating the TUN interface
   --device=/dev/net/tun # needed for creating the TUN interface
   -p "55555:55555" # server port-forwarding
-  -v <configuration directory>:/etc/quincy # directory with the configuration files
-  m0dex/quincy:latest # or any of the other tags
-  quincy-server --config-path /etc/quincy/server.toml
+  -v <configuration directory>:/etc/mirage # directory with the configuration files
+  m0dex/mirage:latest # or any of the other tags
+  mirage-server --config-path /etc/mirage/server.toml
 ```
 
 To add or remove a user to the `users` file, you can run the following command:
@@ -77,29 +77,29 @@ To add or remove a user to the `users` file, you can run the following command:
 docker run
   --rm # remove the container after it stops
   -it # interactive mode
-  -v <configuration directory>:/etc/quincy # directory with the configuration files
-  m0dex/quincy:latest # or any of the other tags
-  quincy-users --add /etc/quincy/users
-  # quincy-users --delete /etc/quincy/users
+  -v <configuration directory>:/etc/mirage # directory with the configuration files
+  m0dex/mirage:latest # or any of the other tags
+  mirage-users --add /etc/mirage/users
+  # mirage-users --delete /etc/mirage/users
 ```
 
 ### Installers
-Platform-specific installers for the GUI client are available for download from the [GitHub releases](https://github.com/quincy-rs/quincy/releases):
+Platform-specific installers for the GUI client are available for download from the [GitHub releases](https://github.com/mirage-rs/mirage/releases):
 - **Windows**: NSIS installer (`.exe`)
 - **macOS**: DMG disk image (`.dmg`)
 - **Linux**: Debian package (`.deb`) and AppImage (`.AppImage`)
 
 **Note for macOS users**: After installing, you may need to remove the quarantine attribute before the app can be launched:
 ```bash
-xattr -d com.apple.quarantine /Applications/Quincy.app
+xattr -d com.apple.quarantine /Applications/Mirage.app
 ```
 
 ## Building from sources
-As Quincy does not rely upon any non-Rust libraries, the build process is incredibly simple:
+As Mirage does not rely upon any non-Rust libraries, the build process is incredibly simple:
 ```bash
 cargo build
 ```
-If you additionally want to build Quincy in release mode with optimizations, add the `--release` switch:
+If you additionally want to build Mirage in release mode with optimizations, add the `--release` switch:
 ```bash
 cargo build --release
 ```
@@ -115,46 +115,46 @@ For more information, see [aws-lc-rs build instructions](https://github.com/aws/
 - `offload`: Enables GSO/GRO offload optimization for TUN interfaces on Linux [default: **enabled**]
 
 ## Usage
-Quincy provides a couple of binaries based on their intended use:
-- `quincy-client`: The VPN client CLI
-- `quincy-server`: The VPN server CLI
-- `quincy-users`: A utility CLI binary meant for managing the `users` file
-- `quincy-client-gui`: The VPN client GUI
-- `quincy-client-daemon`: The VPN client daemon (background privileged service)
+Mirage provides a couple of binaries based on their intended use:
+- `mirage-client`: The VPN client CLI
+- `mirage-server`: The VPN server CLI
+- `mirage-users`: A utility CLI binary meant for managing the `users` file
+- `mirage-client-gui`: The VPN client GUI
+- `mirage-client-daemon`: The VPN client daemon (background privileged service)
 
 ### Client (CLI)
-The Quincy client requires a separate configuration file, an example of which can be found in [`examples/client.toml`](examples/client.toml).
-The documentation for the client configuration file fields can be found [here](https://docs.rs/quincy/latest/quincy/config/struct.ClientConfig.html).
+The Mirage client requires a separate configuration file, an example of which can be found in [`examples/client.toml`](examples/client.toml).
+The documentation for the client configuration file fields can be found [here](https://docs.rs/mirage/latest/mirage/config/struct.ClientConfig.html).
 
 With the configuration file in place, the client can be started using the following command:
 ```bash
-quincy-client --config-path examples/client.toml
+mirage-client --config-path examples/client.toml
 ```
 
 Routes are set by default to the address and netmask received from the server.
 Any additional routes now have to be set up manually.
 
 ### Client (GUI)
-The Quincy client GUI is cross-platform and built using [iced](https://iced.rs/).
+The Mirage client GUI is cross-platform and built using [iced](https://iced.rs/).
 It provides a simple interface for managing and (dis)connecting multiple client instances and viewing connection statistics.
 
-All configuration files are stored either in `~/.config/quincy` (Linux, macOS) or `%APPDATA%\quincy` (Windows).
+All configuration files are stored either in `~/.config/mirage` (Linux, macOS) or `%APPDATA%\mirage` (Windows).
 
-The GUI runs in unprivileged mode and uses a separate executable (`quincy-client-daemon`) to handle privileged operations such as creating the TUN interface and setting up routes. 
+The GUI runs in unprivileged mode and uses a separate executable (`mirage-client-daemon`) to handle privileged operations such as creating the TUN interface and setting up routes. 
 
 _The current way this is done is using rather primitive privilege escallation commands, which do not have the best user experience. This is subject to change and will be improved upon in the future_.
 
 ### Server
-The Quincy server requires a separate configuration file, an example of which can be found in [`examples/server.toml`](examples/server.toml).
-The documentation for the server configuration file fields can be found [here](https://docs.rs/quincy/latest/quincy/config/struct.ServerConfig.html).
+The Mirage server requires a separate configuration file, an example of which can be found in [`examples/server.toml`](examples/server.toml).
+The documentation for the server configuration file fields can be found [here](https://docs.rs/mirage/latest/mirage/config/struct.ServerConfig.html).
 
 With the configuration file in place, the client can be started using the following command:
 ```bash
-quincy-server --config-path examples/server.toml
+mirage-server --config-path examples/server.toml
 ```
 
 **Please keep in mind that the pre-generated certificate in [`examples/cert/server_cert.pem`](examples/cert/server_cert.pem)
-is self-signed and uses the hostname `quincy`. It should be replaced with a proper certificate,
+is self-signed and uses the hostname `mirage`. It should be replaced with a proper certificate,
 which can be generated using the instructions in the [Certificate management](#certificate-management) section.**
 
 ### Users
@@ -163,7 +163,7 @@ The `users` file contains usernames and password hashes in a format similar to `
 
 The following command can be used to add users to this file:
 ```bash
-quincy-users --add examples/users
+mirage-users --add examples/users
 ```
 
 The prompts will look something like this:
@@ -175,7 +175,7 @@ Confirm password for user 'test':
 
 A similar command can be used to remove users from the file:
 ```bash
-quincy-users --remove examples/users
+mirage-users --remove examples/users
 ```
 
 The prompt will again look something like this:
@@ -184,7 +184,7 @@ Enter the username: test
 ```
 
 ## Architecture
-Quincy uses the QUIC protocol implemented by [`quinn`](https://github.com/quinn-rs/quinn) to create an encrypted tunnel between clients and the server.
+Mirage uses the QUIC protocol implemented by [`quinn`](https://github.com/quinn-rs/quinn) to create an encrypted tunnel between clients and the server.
 
 This tunnel serves two purposes:
 - authentication using a reliable bi-directional stream
@@ -200,14 +200,14 @@ The [`tokio`](https://github.com/tokio-rs/tokio) runtime is used to provide an e
 [![Architecture diagram](docs/architecture_diagram.svg)](docs/architecture_diagram.svg)
 
 ## Certificate management
-There are a couple of options when it comes to setting up the certificates used by Quincy.
+There are a couple of options when it comes to setting up the certificates used by Mirage.
 
 ### Certificate signed by a trusted CA
-This is the *proper* way to manage certificates with Quincy.
+This is the *proper* way to manage certificates with Mirage.
 
 You can either request/pay for a certificate from a service with a globally trusted CA (Let's Encrypt, GoDaddy, ...) or generate your own certificate authority and then sign an end-point certificate.
 
-If you have a certificate signed by a globally trusted CA, you can simply add it to the server configuration file and run Quincy. The client will trust the certificate, as the signing certificate is most likely in the system's trusted root certificate store.
+If you have a certificate signed by a globally trusted CA, you can simply add it to the server configuration file and run Mirage. The client will trust the certificate, as the signing certificate is most likely in the system's trusted root certificate store.
 
 If you have a certificate signed by your own (self-signed) CA, follow the steps above and additionally add your CA certificate to the client configuration file.
 
@@ -216,7 +216,7 @@ You can use [mkcert](https://github.com/FiloSottile/mkcert) for generating your 
 ### Self-signed certificate
 This is an easier set up that might be used by home-lab administrators or for local testing.
 
-The steps to generate a self-signed certificate that can be used with Quincy:
+The steps to generate a self-signed certificate that can be used with Mirage:
 1) Generate a private key (I use ECC for my certificates, but RSA is fine)
 ```
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -out <your_certificate_key_file>
@@ -239,7 +239,7 @@ State or Province Name (full name) [Some-State]:.
 Locality Name (eg, city) []:.
 Organization Name (eg, company) [Internet Widgits Pty Ltd]:.
 Organizational Unit Name (eg, section) []:.
-Common Name (e.g. server FQDN or YOUR name) []:quincy
+Common Name (e.g. server FQDN or YOUR name) []:mirage
 Email Address []:
 
 Please enter the following 'extra' attributes
@@ -254,7 +254,7 @@ subjectKeyIdentifier   = hash
 authorityKeyIdentifier = keyid:always,issuer:always
 basicConstraints       = CA:FALSE
 keyUsage               = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment, keyAgreement, keyCertSign
-subjectAltName         = DNS:quincy
+subjectAltName         = DNS:mirage
 issuerAltName          = issuer:copy
 ```
 

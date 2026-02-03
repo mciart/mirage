@@ -1,32 +1,28 @@
 [workspace]
-members = ["quincy", "quincy-client", "quincy-server", "quincy-gui", "quincy-tests"]
+members = ["mirage", "mirage-client", "mirage-server", "mirage-gui", "mirage-tests"]
 resolver = "2"
 
 [workspace.package]
-version = "1.2.2"
-authors = ["Jakub Kubík <jakub.kubik.it@protonmail.com>"]
+version = "0.1.0"
+authors = ["mciart"]
 license = "AGPL-3.0-or-later"
 readme = "README.md"
 edition = "2021"
 rust-version = "1.80"
-homepage = "https://github.com/quincy-rs/quincy"
-repository = "https://github.com/quincy-rs/quincy"
-keywords = ["vpn", "quic", "tunnel", "networking", "tokio"]
+homepage = "https://github.com/mciart/mirage"
+repository = "https://github.com/mciart/mirage"
+keywords = ["vpn", "reality", "tls", "tunnel", "networking", "tokio"]
 categories = ["command-line-utilities", "network-programming"]
 
 [workspace.dependencies]
 # Internal crates
-quincy = { path = "quincy", version = "1.2.2" }
-quincy-client = { path = "quincy-client", version = "1.2.2" }
-quincy-server = { path = "quincy-server", version = "1.2.2" }
+mirage = { path = "mirage", version = "0.1.0" }
+mirage-client = { path = "mirage-client", version = "0.1.0" }
+mirage-server = { path = "mirage-server", version = "0.1.0" }
 
-# Quinn
-quinn = { version = "^0.11.8", default-features = false, features = [
-    "log",
-    "platform-verifier",
-    "runtime-tokio",
-    "rustls-aws-lc-rs",
-] }
+# BoringSSL TLS (Chrome fingerprint)
+boring = "4"
+tokio-boring = "4"
 
 # Interfaces and networking
 tun-rs = { version = "=2.7.3", features = ["async_tokio"] } # pinned audited version
@@ -52,11 +48,9 @@ figment = { version = "^0.10.8", features = ["toml", "env"] }
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = "^1.0"
 
-# TLS
-rustls = { version = "^0.23.18", default-features = false, features = [
-    "aws-lc-rs",
-] }
-rustls-pemfile = "^2.0"
+# Cryptography (for Reality x25519)
+x25519-dalek = "2"
+rand = "0.8"
 
 # Authentication
 argon2 = "^0.5.0"

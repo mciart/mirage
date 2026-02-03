@@ -1,0 +1,60 @@
+[package]
+name = "mirage-server"
+description = "Reality-based VPN with XTLS-Vision - Server binaries"
+readme = "../README.md"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "mirage-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "mirage-users"
+path = "src/bin/users.rs"
+
+[features]
+default = ["offload", "jemalloc"]
+offload = ["mirage/offload"]
+jemalloc = ["mirage/jemalloc"]
+
+[dependencies]
+mirage = { workspace = true }
+
+# Configuration
+clap = { workspace = true }
+
+# Authentication (for mirage-users)
+rpassword = { workspace = true }
+argon2 = { workspace = true }
+rand_core = { workspace = true }
+
+# Utils
+dashmap = { workspace = true }
+
+# Tokio
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+# Tracing/Logging
+tracing = { workspace = true }
+
+# Networking
+ipnet = { workspace = true }
+bytes = { workspace = true }
+
+# BoringSSL TLS
+boring = { workspace = true }
+tokio-boring = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }

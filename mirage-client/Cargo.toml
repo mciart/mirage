@@ -1,0 +1,55 @@
+[package]
+name = "mirage-client"
+description = "Reality-based VPN with XTLS-Vision - Client binary"
+readme = "../README.md"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "mirage-client"
+path = "src/bin/main.rs"
+
+[lib]
+name = "mirage_client"
+path = "src/lib.rs"
+
+[features]
+default = ["offload", "jemalloc"]
+offload = ["mirage/offload"]
+jemalloc = ["mirage/jemalloc"]
+
+[dependencies]
+mirage = { workspace = true }
+
+# Configuration
+clap = { workspace = true }
+
+# Tokio
+tokio = { workspace = true }
+
+# Tracing/Logging
+tracing = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Async
+async-trait = { workspace = true }
+
+# Tokio
+futures = { workspace = true }
+
+# BoringSSL TLS
+boring = { workspace = true }
+tokio-boring = { workspace = true }
+
+# Networking
+ipnet = { workspace = true }

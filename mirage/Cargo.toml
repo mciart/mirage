@@ -1,0 +1,67 @@
+[package]
+name = "mirage"
+description = "Reality-based VPN with XTLS-Vision - Core library"
+readme = "../README.md"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "mirage"
+path = "src/lib.rs"
+
+[features]
+default = []
+offload = []
+jemalloc = ["jemallocator"]
+
+[dependencies]
+# BoringSSL TLS (Chrome fingerprint)
+boring = { workspace = true }
+tokio-boring = { workspace = true }
+
+# Interfaces and networking
+tun-rs = { workspace = true }
+socket2 = { workspace = true }
+bytes = { workspace = true }
+ipnet = { workspace = true }
+
+# Tokio
+tokio = { workspace = true }
+dashmap = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+# Configuration
+figment = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Cryptography (for Reality x25519)
+x25519-dalek = { workspace = true }
+rand = { workspace = true }
+
+# Tracing/Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+nu-ansi-term = { workspace = true }
+
+# Utils
+thiserror = { workspace = true }
+
+# Alloc
+[target.'cfg(unix)'.dependencies]
+jemallocator = { workspace = true, optional = true }
+
+# WinTun
+[target.'cfg(windows)'.dependencies]
+wintun-bindings = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
