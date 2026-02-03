@@ -297,7 +297,7 @@ quincy (QUIC)  →  mirage (TCP/TLS over BoringSSL)
 - [x] Fork `quincy`，重命名为 `mirage`
 - [x] 移除 `quinn` 依赖，引入 `boring` + `tokio-boring`
 - [x] 实现 `TcpTlsTransport` 结构体 (FramedStream + SslStream)
-- [ ] 从 `reqwest-impersonate` 提取 Chrome 指纹配置
+- [x] 从 `reqwest-impersonate` 提取 Chrome 指纹配置
 - [x] 实现 Length-Prefixed 帧格式：`[4B 长度][IP包]`
 - [ ] 测试：TUN → TCP/TLS → TUN 完整数据通路
 

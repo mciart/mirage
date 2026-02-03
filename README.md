@@ -218,7 +218,7 @@ users_file = "users.db"
 - [/] **Phase 2**: 功能增强 (Dual Stack 已完成)
   - [x] Dual Stack (IPv4/IPv6)
   - [ ] NAT 自动配置文档
-- [ ] **Phase 3**: Reality 协议与 Chrome 指纹
+- [ ] **Phase 3**: Reality 协议
 - [ ] **Phase 4**: XTLS-Vision 流控优化
 
 ---
