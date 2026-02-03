@@ -129,6 +129,10 @@ pub struct ConnectionConfig {
     /// WARNING: Only use this for testing!
     #[serde(default = "default_false_fn")]
     pub insecure: bool,
+    /// List of enabled protocols in order of priority (default = ["reality"])
+    /// Options: "reality", "tcp-tls"
+    #[serde(default = "default_enabled_protocols")]
+    pub enabled_protocols: Vec<String>,
 }
 
 /// Reality protocol configuration for SNI camouflage
@@ -137,15 +141,9 @@ pub struct RealityConfig {
     /// Target SNI to impersonate (e.g., "www.microsoft.com")
     #[serde(default = "default_reality_sni")]
     pub target_sni: String,
-    /// Server's x25519 public key (base64 encoded) - client only
+    /// Short IDs for client identification (hex strings)
     #[serde(default)]
-    pub public_key: Option<String>,
-    /// Server's x25519 private key (base64 encoded) - server only
-    #[serde(default)]
-    pub private_key: Option<String>,
-    /// Short ID for client identification (hex string)
-    #[serde(default)]
-    pub short_id: Option<String>,
+    pub short_ids: Vec<String>,
 }
 
 /// Network configuration
@@ -217,6 +215,7 @@ impl Default for ConnectionConfig {
             recv_buffer_size: default_buffer_size(),
             tcp_nodelay: default_true_fn(),
             insecure: default_false_fn(),
+            enabled_protocols: default_enabled_protocols(),
         }
     }
 }
@@ -235,9 +234,7 @@ impl Default for RealityConfig {
     fn default() -> Self {
         Self {
             target_sni: default_reality_sni(),
-            public_key: None,
-            private_key: None,
-            short_id: None,
+            short_ids: Vec::new(),
         }
     }
 }
@@ -302,12 +299,18 @@ fn default_reality_sni() -> String {
     "www.microsoft.com".to_string()
 }
 
+fn default_enabled_protocols() -> Vec<String> {
+    vec!["reality".to_string()]
+}
+
 impl ConnectionConfig {
     /// Returns the MTU with TLS overhead added
     pub fn mtu_with_overhead(&self) -> u16 {
         self.mtu + TLS_MTU_OVERHEAD
     }
 }
+
+
 
 #[cfg(test)]
 mod tests {
@@ -340,8 +343,7 @@ mod tests {
 
             [reality]
             target_sni = "www.google.com"
-            private_key = "base64_encoded_private_key"
-            short_id = "abcd1234"
+            short_ids = ["abcd1234"]
 
             [log]
             level = "debug"
@@ -379,8 +381,7 @@ mod tests {
 
             [reality]
             target_sni = "www.google.com"
-            public_key = "base64_encoded_public_key"
-            short_id = "abcd1234"
+            short_ids = ["abcd1234"]
 
             [log]
             level = "trace"
@@ -393,5 +394,6 @@ mod tests {
 
         assert_eq!(config.connection_string, "example.com:443");
         assert_eq!(config.reality.target_sni, "www.google.com");
+        assert_eq!(config.reality.short_ids, vec!["abcd1234"]);
     }
 }

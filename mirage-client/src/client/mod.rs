@@ -135,15 +135,8 @@ impl MirageClient {
     }
 
     /// Connects to the Mirage server via TCP/TLS.
+    /// Connects to the Mirage server via TCP/TLS.
     async fn connect_to_server(&self) -> Result<(SslStream<TcpStream>, SocketAddr)> {
-        let _server_hostname = self
-            .config
-            .connection_string
-            .split(':')
-            .next()
-            .ok_or_else(|| MirageError::config_error("Invalid connection string format"))?
-            .to_string();
-
         let server_addr = self
             .config
             .connection_string
@@ -156,7 +149,37 @@ impl MirageClient {
                 ))
             })?;
 
-        info!("Connecting: {}", self.config.connection_string);
+        let protocols = &self.config.connection.enabled_protocols;
+        if protocols.is_empty() {
+             return Err(MirageError::config_error("No enabled protocols specified in configuration"));
+        }
+
+        info!("Connection Strategy: Enabled protocols: {:?}", protocols);
+
+        let mut last_error = None;
+
+        for protocol in protocols {
+            info!("Attempting connection using protocol: {}", protocol);
+            
+            match self.connect_with_protocol(server_addr, protocol).await {
+                Ok(stream) => {
+                    info!("Successfully connected using protocol: {}", protocol);
+                    return Ok((stream, server_addr));
+                },
+                Err(e) => {
+                    warn!("Failed to connect using {}: {}", protocol, e);
+                    last_error = Some(e);
+                    // Continue to next protocol
+                    tokio::time::sleep(Duration::from_millis(500)).await; // Brief pause between attempts
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| MirageError::connection_failed("All connection attempts failed")))
+    }
+
+    async fn connect_with_protocol(&self, server_addr: SocketAddr, protocol: &str) -> Result<SslStream<TcpStream>> {
+        info!("Connecting: {} ({})", self.config.connection_string, protocol);
 
         // Create TCP connection
         let tcp_stream = TcpStream::connect(server_addr).await?;
@@ -169,55 +192,89 @@ impl MirageClient {
         let mut connector_builder = SslConnector::builder(SslMethod::tls_client())
             .map_err(|e| MirageError::system(format!("Failed to create SSL connector: {e}")))?;
 
-        // Set SNI for Reality camouflage
-        let sni = &self.config.reality.target_sni;
-        debug!("Using SNI: {}", sni);
-
-        // Configure ALPN protocols (Chrome order)
-        let alpn_protocols: Vec<u8> = TLS_ALPN_PROTOCOLS
-            .iter()
-            .flat_map(|p| {
-                let mut v = vec![p.len() as u8];
-                v.extend_from_slice(p);
-                v
-            })
-            .collect();
-        connector_builder
-            .set_alpn_protos(&alpn_protocols)
-            .map_err(|e| MirageError::system(format!("Failed to set ALPN: {e}")))?;
-
-        // Apply Chrome Fingerprint (Cipher Suites, Curves, GREASE)
-        // This makes the TLS ClientHello look exactly like Chrome 120+
-        mirage::crypto::impersonate::apply_chrome_fingerprint(&mut connector_builder)?;
-
-        // Configure certificate verification
+        // Common Config
         if self.config.connection.insecure {
             warn!("TLS certificate verification DISABLED - this is unsafe!");
             connector_builder.set_verify(SslVerifyMode::NONE);
         } else {
-            // Default secure configuration
             connector_builder.set_verify(SslVerifyMode::PEER);
-
-            // Load trusted CA certificates from files
+             // Load trusted CA certificates from files
             for path in &self.config.authentication.trusted_certificate_paths {
                 connector_builder.set_ca_file(path).map_err(|e| {
                     MirageError::config_error(format!("Failed to load CA file {:?}: {}", path, e))
                 })?;
             }
-
-            // Load trusted CA certificates from strings
+             // Load trusted CA certificates from strings
             for pem in &self.config.authentication.trusted_certificates {
                 let cert = boring::x509::X509::from_pem(pem.as_bytes()).map_err(|e| {
                     MirageError::config_error(format!("Failed to parse CA certificate: {}", e))
                 })?;
-                connector_builder
-                    .cert_store_mut()
-                    .add_cert(cert)
-                    .map_err(|e| {
-                        MirageError::system(format!("Failed to add CA certificate to store: {}", e))
-                    })?;
+                connector_builder.cert_store_mut().add_cert(cert).map_err(|e| {
+                     MirageError::system(format!("Failed to add CA certificate to store: {}", e))
+                })?;
             }
         }
+
+        // Protocol Specific Config
+        let sni = if protocol == "reality" {
+            // Apply Reality Config
+            let sni = &self.config.reality.target_sni;
+            debug!("Using SNI (Reality): {}", sni);
+
+            // Chrome Fingerprint
+            mirage::crypto::impersonate::apply_chrome_fingerprint(&mut connector_builder)?;
+
+            // ALPN Auth Token
+             // Configure ALPN protocols (Chrome order + Auth Token)
+            let mut protocols_to_send: Vec<Vec<u8>> = TLS_ALPN_PROTOCOLS.iter().cloned().collect();
+            
+            // Inject Reality ShortID as ALPN token
+            if let Some(token) = self.config.reality.short_ids.first() {
+                protocols_to_send.push(token.as_bytes().to_vec());
+            }
+
+            let alpn_protocols: Vec<u8> = protocols_to_send
+                .iter()
+                .flat_map(|p| {
+                    let mut v = vec![p.len() as u8];
+                    v.extend_from_slice(p);
+                    v
+                })
+                .collect();
+            
+            connector_builder
+                .set_alpn_protos(&alpn_protocols)
+                .map_err(|e| MirageError::system(format!("Failed to set ALPN: {e}")))?;
+            
+            sni.clone()
+        } else {
+             // Standard TCP/TLS (Fallback mode)
+             // Use connection string hostname as SNI (if available) or Reality target?
+             // Usually standard TLS connects to the actual server domain.
+             // If we use the "disguised" domain, we will just proxy.
+             // If we use the "real" domain (if it has a cert), we might connect.
+             // BUT, the server is hiding behind the disguised domain. 
+             // To trigger "Fallback" on the server, we must simply NOT match the Reality criteria.
+             // Server Reality Match: SNI == target && ALPN == Token.
+             // Server Fallback: SNI != target OR (SNI == target && ALPN != Token).
+             
+             // So if we send SNI=target but NO ALPN Token, we get PROXIED (not VPN).
+             // To get VPN via Fallback, we must hit the "Fallback" case AND the server must Accept it.
+             // But the dispatcher Logic says:
+             // Proxy if (SNI == target && Invalid Token).
+             // Fallback if (SNI != target).
+             // So if we want to use "Standard TLS", we must use a DIFFERENT SNI (e.g. the real IP or a dedicated VPN domain).
+             // Let's assume the user configures `target_sni` for Reality, but for Standard TLS they might rely on `connection_string` hostname.
+             
+             let host = self.config.connection_string.split(':').next().unwrap_or("");
+             debug!("Using SNI (Standard): {}", host);
+             
+             // No Chrome Fingerprint, No Special ALPN (unless HTTP/2 etc needed)
+             connector_builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
+             
+             host.to_string()
+        };
+
 
         let connector = connector_builder.build();
         let ssl_config = connector
@@ -225,15 +282,16 @@ impl MirageClient {
             .map_err(|e| MirageError::system(format!("Failed to configure SSL: {e}")))?;
 
         // Connect with TLS
-        let tls_stream = tokio_boring::connect(ssl_config, sni, tcp_stream)
+        let tls_stream = tokio_boring::connect(ssl_config, &sni, tcp_stream)
             .await
             .map_err(|e| MirageError::connection_failed(format!("TLS handshake failed: {e}")))?;
 
         info!(
-            "TLS connection established: {}",
-            self.config.connection_string
+            "TLS connection established: {} (Protocol: {})",
+            self.config.connection_string, protocol
         );
 
-        Ok((tls_stream, server_addr))
+        Ok(tls_stream)
     }
+
 }

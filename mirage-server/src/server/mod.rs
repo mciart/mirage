@@ -5,6 +5,7 @@
 
 pub mod address_pool;
 mod connection;
+mod dispatcher;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -32,6 +33,7 @@ use tokio_boring::SslStream;
 use tracing::{debug, info, warn};
 
 use self::address_pool::AddressPool;
+use self::dispatcher::{proxy_connection, DispatchResult, TlsDispatcher};
 
 type ConnectionQueues = Arc<DashMap<IpAddr, Sender<Bytes>>>;
 
@@ -145,32 +147,52 @@ impl MirageServer {
                         warn!("Failed to set TCP_NODELAY: {e}");
                     }
 
-                    // TLS handshake
-                    let tls_stream = match tokio_boring::accept(&acceptor, tcp_stream).await {
-                        Ok(stream) => stream,
-                        Err(e) => {
-                            warn!("TLS handshake with '{}' failed: {e}", remote_addr.ip());
-                            continue;
-                        }
-                    };
-
-                    debug!("TLS handshake complete with '{}'", remote_addr.ip());
-
-                    // Spawn authentication and connection handling
+                    // Dispatch traffic (Reality / Standard / Proxy)
+                    let dispatcher = TlsDispatcher::new(&self.config);
+                    
+                    // Dispatch logic needs to be robust against probing
+                    // We dispatch in a separate spawn to not block the acceptor loop
+                    // while waiting for peek bytes.
                     let auth_server = auth_server.clone();
                     let ingress_queue = ingress_queue.clone();
                     let connection_queues = self.connection_queues.clone();
                     let address_pool = self.address_pool.clone();
+                    let acceptor = acceptor.clone();
 
                     connection_tasks.push(tokio::spawn(async move {
-                        Self::handle_client(
-                            tls_stream,
-                            remote_addr,
-                            auth_server,
-                            ingress_queue,
-                            connection_queues,
-                            address_pool,
-                        ).await
+                        match dispatcher.dispatch(tcp_stream).await {
+                            Ok(DispatchResult::Accept(stream)) | Ok(DispatchResult::Fallback(stream)) => {
+                                // Proceed with VPN Handshake
+                                let tls_stream = match tokio_boring::accept(&acceptor, stream).await {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        warn!("TLS handshake failed: {e}");
+                                        return Ok(());
+                                    }
+                                };
+                                
+                                Self::handle_client(
+                                    tls_stream,
+                                    remote_addr,
+                                    auth_server,
+                                    ingress_queue,
+                                    connection_queues,
+                                    address_pool,
+                                ).await
+                            }
+                            Ok(DispatchResult::Proxy(stream, target)) => {
+                                // Proxy to real target
+                                debug!("Proxying connection from {} to {}", remote_addr, target);
+                                if let Err(e) = proxy_connection(stream, &target).await {
+                                    warn!("Proxy error: {}", e);
+                                }
+                                Ok(())
+                            }
+                            Err(e) => {
+                                warn!("Dispatch error for {}: {}", remote_addr, e);
+                                Ok(())
+                            }
+                        }
                     }));
                 }
 

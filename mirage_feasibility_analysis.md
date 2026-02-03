@@ -299,7 +299,7 @@ quincy (QUIC)  →  mirage (TCP/TLS over BoringSSL)
 - [x] 实现 `TcpTlsTransport` 结构体 (FramedStream + SslStream)
 - [x] 从 `reqwest-impersonate` 提取 Chrome 指纹配置
 - [x] 实现 Length-Prefixed 帧格式：`[4B 长度][IP包]`
-- [ ] 测试：TUN → TCP/TLS → TUN 完整数据通路
+- [x] 测试：TUN → TCP/TLS → TUN 完整数据通路
 
 **产出**：可工作的 Rust TCP VPN，Chrome TLS 指纹
 
@@ -309,22 +309,27 @@ quincy (QUIC)  →  mirage (TCP/TLS over BoringSSL)
 
 **目标**：实现服务端伪装和流量分流
 
-- [ ] 实现 TLS ClientHello 解析器
-  - 提取 SNI (Server Name Indication)
-  - 提取 Session Ticket 或自定义扩展 (ShortId)
-- [ ] 实现 x25519 密钥验证机制
-- [ ] **实现双模共存与切换 (Standard TLS / Reality)**：
-  - 基于 SNI 判断进入标准模式还是 Reality 模式
-  - 支持配置文件开关
-- [ ] 实现双模式分流：
+- [x] 实现 TLS ClientHello 解析器
+  - [x] 提取 SNI (Server Name Indication)
+  - [x] 提取 Session Ticket 或自定义扩展 (ALPN)
+- [x] **实现认证机制 (ALPN Auth Token)**：
+  - 替代原定的 x25519 握手，采用更隐蔽的 ALPN 扩展携带 ShortId
+  - 兼容标准 TLS 握手流程，无须修改底层 SSL 库
+- [x] **实现双模共存与切换 (Standard TLS / Reality)**：
+  - 支持客户端配置协议优先级列表 (List: `enabled_protocols=["reality", "tcp-tls"]`)
+  - 自动回退机制 (Retry loop)
+  - 配置文件支持 `short_ids` 列表
+- [x] 实现双模式分流：
   ```rust
-  match validate_client(&client_hello) {
-      Valid(shortid) => enter_vpn_mode(stream),
-      Invalid => proxy_to_real_site(stream, sni),
+  // 伪代码逻辑
+  match (sni, alpn_tokens) {
+      (target_sni, Some(tokens)) if tokens.contains(&my_short_id) => enter_vpn_mode(stream), // 认证通过
+      (target_sni, _) => proxy_to_real_site(stream, sni), // 伪装成目标网站
+      _ => fallback_to_standard_tls(stream), // 回退到标准 TLS
   }
   ```
-- [ ] 实现 SNI Proxy：透明转发到真实网站
-- [ ] 测试：用浏览器直接访问服务器，应显示真实网站
+- [x] 实现 SNI Proxy：透明转发到真实网站
+- [x] 测试：用浏览器直接访问服务器，应显示真实网站 (伪装生效)
 
 **产出**：服务端抗主动探测，伪装为真实网站
 

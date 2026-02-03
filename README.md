@@ -3,7 +3,6 @@
 [![Crates.io](https://img.shields.io/crates/v/mirage.svg)](https://crates.io/crates/mirage)
 [![Docker](https://img.shields.io/docker/v/m0dex/mirage?logo=docker&label=docker&color=blue)](https://hub.docker.com/r/m0dex/mirage)
 [![Documentation](https://docs.rs/mirage/badge.svg)](https://docs.rs/mirage/)
-[![Build status](https://github.com/mirage-rs/mirage/workflows/CI/badge.svg)](https://github.com/M0dEx/mirage/actions?query=workflow%3ACI)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENCE)
 
 > [!WARNING]
@@ -107,11 +106,17 @@ docker run --rm \
 ### 客户端 (`client.toml`)
 
 ```toml
+# Mirage 服务器的连接地址和端口
 connection_string = "your-server.com:443"
+
+# 开启的协议优先顺序 (支持: "reality", "tcp-tls")
+enabled_protocols = ["reality", "tcp-tls"]
 
 [reality]
 # 伪装的目标域名，必须与服务端一致
 target_sni = "www.microsoft.com"
+# 客户端认证 ShortId (列表)
+short_ids = ["abcd1234deadbeef"]
 
 [authentication]
 username = "myuser"
@@ -136,6 +141,8 @@ tunnel_network = "10.0.0.1/24"
 [reality]
 # 伪装目标，非 VPN 流量将被转发到此地址
 target_sni = "www.microsoft.com"
+# 客户端客户端 ShortId 列表 (需要与客户端匹配)
+short_ids = ["abcd1234deadbeef"]
 
 [connection]
 reuse_socket = true
@@ -215,11 +222,12 @@ users_file = "users.db"
 
 ### 开发路线图 (Roadmap)
 - [x] **Phase 1**: 基础 TCP/TLS 隧道开发 (已完成)
-- [/] **Phase 2**: 功能增强 (Dual Stack 已完成)
+- [x] **Phase 2**: 功能增强与伪装 (Reality 已完成)
   - [x] Dual Stack (IPv4/IPv6)
-  - [ ] NAT 自动配置文档
-- [ ] **Phase 3**: Reality 协议
-- [ ] **Phase 4**: XTLS-Vision 流控优化
+  - [x] Reality 协议 (ALPN Auth, SNI Dispatcher)
+  - [x] 双模共存与回退 (Protocol Fallback)
+- [ ] **Phase 3**: XTLS-Vision 流控优化
+- [ ] **Phase 4**: CDN 支持 (WebSocket)
 
 ---
 

@@ -54,3 +54,4 @@ tokio-boring = { workspace = true }
 
 # Networking
 ipnet = { workspace = true }
+hex = { workspace = true }

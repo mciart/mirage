@@ -1,48 +1,53 @@
-# The address and port the Mirage server is available at
+# Mirage 服务器的连接地址和端口
 connection_string = "mirage:443"
 
 [authentication]
-# The username used for authentication
+# 认证使用的用户名
 username = "test"
-# The password used for authentication
+# 认证使用的密码
 password = "test"
-# A list of trusted certificate file paths the server can use or have its certificate signed by
+# 信任的证书文件路径列表（服务器证书或自签名 CA）
 # trusted_certificate_paths = ["examples/cert/server_cert.pem"]
-# A list of trusted certificates as PEM strings (optional)
+# 信任的 PEM 格式证书字符串列表（可选）
 # trusted_certificates = [
 #     "-----BEGIN CERTIFICATE-----\n..."
 # ]
 
 [connection]
-# The MTU used by the tunnel and the spawned TUN interface
-# TCP overhead is automatically handled
+# 隧道和生成的 TUN 接口使用的 MTU
+# TCP 开销会自动处理
 mtu = 1280
-# Connection timeout in seconds
+# 连接超时时间（秒）
 connection_timeout_s = 30
-# Keep-alive interval in seconds
+# 开启的协议优先顺序 (支持: "reality", "tcp-tls")
+# 客户端将按照列表顺序尝试连接
+enabled_protocols = ["reality", "tcp-tls"]
+# 心跳保活间隔（秒）
 keep_alive_interval_s = 25
-# TESTING ONLY: Disable TLS certificate verification (useful for self-signed certs)
+# 仅供测试：禁用 TLS 证书验证（适用于自签名证书）
+# 警告：不安全！
 insecure = true
 
 [network]
-# A list of routes to route through the tunnel (CIDR notation)
+# 需要通过隧道路由的网段列表 (CIDR 格式)
 routes = [
     "10.11.12.0/24",
     # "fd00::/64"
 ]
-# Optional interface name to request for the TUN device
+# 申请的 TUN 设备名称（可选）
 # interface_name = "utun5"
+# 隧道使用的 DNS 服务器
 dns_servers = [
     "1.1.1.1",
     # "2606:4700:4700::1111"
 ]
 
 [reality]
-# SNI camouflage target (must match server's configuration)
+# 目标 SNI (必须与 Server 一致)
 target_sni = "www.microsoft.com"
-# Short ID for Reality authentication (optional)
-# short_id = "abc1234"
+# 客户端认证 ShortId (取列表第一个)
+short_ids = ["abcd1234deadbeef"]
 
 [log]
-# The log level
+# 日志级别 (trace, debug, info, warn, error)
 level = "info"

@@ -1,41 +1,42 @@
-# Name of the server instance (currently not used as the name of the interface)
+# 服务器实例名称（目前未用作接口名称）
 name = "tun0"
-# Path to the certificate used for TLS (fallback/standard mode)
+# TLS 使用的证书路径 (Fallback/Standard 模式)
 certificate_file = "examples/cert/server_cert.pem"
-# Path to the certificate key used for TLS
+# TLS 使用的私钥路径
 certificate_key_file = "examples/cert/server_key.pem"
-# The address to bind the tunnel to
+# 隧道绑定的地址
 bind_address = "0.0.0.0"
 # IPv6: bind_address = "::0"
-# The port to bind the tunnel to
+# 隧道绑定的端口
 bind_port = 443
-# The address of the tunnel endpoint and base address of the address pool available to clients
+# 隧道端点地址和分配给客户端的地址池基准地址
 tunnel_network = "10.11.12.1/24"
-# IPv6 Tunnel Network (Optional, enables Dual Stack)
+# IPv6 隧道网络 (可选，启用双栈)
 # tunnel_network_v6 = "fd00::1/64"
-# Optional interface name to request for the TUN device
+# 申请的 TUN 设备名称（可选）
 # interface_name = "tun0"
-# Whether to isolate clients from each other (clients cannot ping each other)
+# 是否隔离客户端（客户端之间无法互相访问）
 isolate_clients = true
 
 [authentication]
-# Path to the file containing user credentials
+# 包含用户凭据的文件路径
 users_file = "examples/users"
 
 [connection]
-# The MTU used by the tunnel and the spawned TUN interface
+# 隧道和生成的 TUN 接口使用的 MTU
 mtu = 1280
-# Whether to reuse the socket (SO_REUSEADDR)
+# 是否复用套接字 (SO_REUSEADDR)
 reuse_socket = true
 
 [reality]
-# SNI camouflage target (website to steal certificate from)
+# 伪装的目标域名 (SNI) -> 建议选择大厂域名
 target_sni = "www.microsoft.com"
-# Private key for x25519 (optional, for auth)
-# private_key = "..."
-# List of valid short IDs (optional)
-# short_ids = ["..."]
+# 客户端认证 ShortId 列表 (十六进制)，对应客户端配置
+short_ids = [
+    "abcd1234deadbeef", 
+    "0011223344556677"
+]
 
 [log]
-# The log level
+# 日志级别 (trace, debug, info, warn, error)
 level = "info"
