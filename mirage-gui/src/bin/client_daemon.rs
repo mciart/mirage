@@ -97,7 +97,7 @@ impl ClientDaemon {
         mut cancel_rx: oneshot::Receiver<()>,
     ) -> Result<bool> {
         let state = self.state.clone();
-        
+
         {
             let state_guard = state.lock().await;
             if state_guard.is_running {
@@ -112,7 +112,7 @@ impl ClientDaemon {
         let state_clone = state.clone();
         let start_future = async move {
             let result = client.start::<TunRsInterface>().await;
-            
+
             // Update state after connection
             let mut state_guard = state_clone.lock().await;
             if result.is_ok() {
@@ -144,7 +144,7 @@ impl ClientDaemon {
     /// Stops the running VPN client.
     async fn stop_client(&self) -> Result<()> {
         let mut state_guard = self.state.lock().await;
-        
+
         if state_guard.is_running {
             state_guard.is_running = false;
             state_guard.start_time = None;
@@ -169,8 +169,8 @@ impl ClientDaemon {
             ClientStatus {
                 status: ConnectionStatus::Connected,
                 metrics: Some(ConnectionMetrics {
-                    bytes_sent: 0,      // TODO: Implement packet counting
-                    bytes_received: 0,  // TODO: Implement packet counting
+                    bytes_sent: 0,     // TODO: Implement packet counting
+                    bytes_received: 0, // TODO: Implement packet counting
                     packets_sent: 0,
                     packets_received: 0,
                     connection_duration,

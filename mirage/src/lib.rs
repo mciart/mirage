@@ -16,4 +16,3 @@ pub mod utils;
 
 // Re-export common types for convenience
 pub use error::{MirageError, Result};
-

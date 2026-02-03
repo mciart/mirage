@@ -86,10 +86,7 @@ where
 }
 
 /// Processes incoming data and sends it to the TUN interface queue.
-async fn process_incoming_data<R>(
-    mut reader: R,
-    ingress_queue: Sender<Packet>,
-) -> Result<()>
+async fn process_incoming_data<R>(mut reader: R, ingress_queue: Sender<Packet>) -> Result<()>
 where
     R: AsyncRead + Unpin,
 {

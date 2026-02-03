@@ -26,7 +26,7 @@ pub const MAX_FRAME_SIZE: usize = 2048;
 /// Represents the supported TLS ALPN protocols for Mirage.
 pub static TLS_ALPN_PROTOCOLS: LazyLock<Vec<Vec<u8>>> = LazyLock::new(|| {
     vec![
-        b"h2".to_vec(),        // HTTP/2 - Chrome order
-        b"http/1.1".to_vec(),  // HTTP/1.1
+        b"h2".to_vec(),       // HTTP/2 - Chrome order
+        b"http/1.1".to_vec(), // HTTP/1.1
     ]
 });

@@ -1,5 +1,5 @@
-use privesc::{PrivilegedChild, PrivilegedCommand};
 use mirage::{MirageError, Result};
+use privesc::{PrivilegedChild, PrivilegedCommand};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

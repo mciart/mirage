@@ -9,7 +9,7 @@ use mirage::network::interface::{Interface, InterfaceIO};
 use mirage::utils::tasks::abort_all;
 use mirage::{MirageError, Result};
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
 use tokio::signal;
 use tokio::sync::broadcast;
 use tokio::sync::Mutex;
@@ -34,7 +34,7 @@ where
     pub fn start(interface: Interface<impl InterfaceIO>, stream: S) -> Result<Self> {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let interface = Arc::new(interface);
-        
+
         // Split the stream for concurrent read/write
         let (read_half, write_half) = tokio::io::split(stream);
         let writer = Arc::new(Mutex::new(write_half));
@@ -82,14 +82,8 @@ where
         let mut tasks = FuturesUnordered::new();
 
         tasks.extend([
-            tokio::spawn(Self::process_inbound_traffic(
-                reader,
-                interface.clone(),
-            )),
-            tokio::spawn(Self::process_outgoing_traffic(
-                writer,
-                interface.clone(),
-            )),
+            tokio::spawn(Self::process_inbound_traffic(reader, interface.clone())),
+            tokio::spawn(Self::process_outgoing_traffic(writer, interface.clone())),
         ]);
 
         interface.configure()?;
@@ -140,7 +134,7 @@ where
         interface: Arc<Interface<impl InterfaceIO>>,
     ) -> Result<()> {
         debug!("Started inbound traffic task (TLS tunnel -> interface)");
-        
+
         use tokio::io::AsyncReadExt;
         let mut header = [0u8; 4];
 
@@ -148,16 +142,21 @@ where
             // Read length prefix
             reader.read_exact(&mut header).await?;
             let len = u32::from_be_bytes(header) as usize;
-            
+
             if len > 2048 {
-                return Err(MirageError::system(format!("Packet too large: {} bytes", len)));
+                return Err(MirageError::system(format!(
+                    "Packet too large: {} bytes",
+                    len
+                )));
             }
-            
+
             // Read packet data
             let mut packet = vec![0u8; len];
             reader.read_exact(&mut packet).await?;
 
-            interface.write_packet(bytes::Bytes::from(packet).into()).await?;
+            interface
+                .write_packet(bytes::Bytes::from(packet).into())
+                .await?;
         }
     }
 }

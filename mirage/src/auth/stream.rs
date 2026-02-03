@@ -65,20 +65,20 @@ where
     /// Returns `AuthError::StreamError` if network transmission fails
     pub async fn send_message(&mut self, message: AuthMessage) -> Result<()> {
         let serialized = serde_json::to_vec(&message).map_err(|_| AuthError::InvalidPayload)?;
-        
+
         // Write length prefix
         let len = serialized.len() as u32;
         self.writer
             .write_all(&len.to_be_bytes())
             .await
             .map_err(|_| AuthError::StreamError)?;
-        
+
         // Write message
         self.writer
             .write_all(&serialized)
             .await
             .map_err(|_| AuthError::StreamError)?;
-        
+
         self.writer
             .flush()
             .await
@@ -99,13 +99,13 @@ where
             .read_exact(&mut len_buf)
             .await
             .map_err(|_| AuthError::StreamError)?;
-        
+
         let len = u32::from_be_bytes(len_buf) as usize;
-        
+
         if len > AUTH_MESSAGE_BUFFER_SIZE {
             return Err(AuthError::InvalidPayload.into());
         }
-        
+
         // Read message
         let mut buf = BytesMut::with_capacity(len);
         buf.resize(len, 0);
@@ -155,7 +155,9 @@ where
 }
 
 /// Helper to create an AuthStream from a split TLS stream
-pub fn create_auth_stream<S>(stream: S) -> AuthStream<tokio::io::ReadHalf<S>, tokio::io::WriteHalf<S>>
+pub fn create_auth_stream<S>(
+    stream: S,
+) -> AuthStream<tokio::io::ReadHalf<S>, tokio::io::WriteHalf<S>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {

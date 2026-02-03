@@ -21,7 +21,7 @@ use std::net::ToSocketAddrs;
 use std::time::Duration;
 
 use crate::client::relayer::ClientRelayer;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Represents a Mirage client that connects to a server and relays packets between the server and a TUN interface.
 pub struct MirageClient {
@@ -47,10 +47,10 @@ impl MirageClient {
     pub async fn start<I: InterfaceIO>(&mut self) -> Result<()> {
         // Connect to server via TCP/TLS
         let tls_stream = self.connect_to_server().await?;
-        
+
         // Split stream for auth - we need to get addresses first
         let (read_half, write_half) = tokio::io::split(tls_stream);
-        
+
         // Create authenticator
         let authenticator = Box::new(UsersFileClientAuthenticator::new(
             &self.config.authentication,
@@ -61,7 +61,8 @@ impl MirageClient {
         );
 
         // Authenticate
-        let (client_address, server_address) = auth_client.authenticate(read_half, write_half).await?;
+        let (client_address, server_address) =
+            auth_client.authenticate(read_half, write_half).await?;
 
         info!("Successfully authenticated");
         info!("Received client address: {client_address}");
@@ -85,7 +86,7 @@ impl MirageClient {
 
         // Start relayer with the new connection
         let relayer = ClientRelayer::start(interface, data_stream)?;
-        
+
         // Wait for relayer to finish
         relayer.wait_for_shutdown().await?;
 
@@ -132,7 +133,7 @@ impl MirageClient {
 
         // Create TCP connection
         let tcp_stream = TcpStream::connect(server_addr).await?;
-        
+
         // Configure TCP socket
         tcp_stream.set_nodelay(self.config.connection.tcp_nodelay)?;
         debug!("TCP connection established to {}", server_addr);
@@ -154,7 +155,8 @@ impl MirageClient {
                 v
             })
             .collect();
-        connector_builder.set_alpn_protos(&alpn_protocols)
+        connector_builder
+            .set_alpn_protos(&alpn_protocols)
             .map_err(|e| MirageError::system(format!("Failed to set ALPN: {e}")))?;
 
         // Configure certificate verification
@@ -163,7 +165,7 @@ impl MirageClient {
             connector_builder.set_verify(SslVerifyMode::NONE);
         } else {
             // Default secure configuration
-            // Note: In Phase 1 we might default to NONE if no CA is provided, 
+            // Note: In Phase 1 we might default to NONE if no CA is provided,
             // but strict mode should require CA or system trust.
             // For now, we follow the flag strictly.
             connector_builder.set_verify(SslVerifyMode::PEER);
@@ -179,7 +181,10 @@ impl MirageClient {
             .await
             .map_err(|e| MirageError::connection_failed(format!("TLS handshake failed: {e}")))?;
 
-        info!("TLS connection established: {}", self.config.connection_string);
+        info!(
+            "TLS connection established: {}",
+            self.config.connection_string
+        );
 
         Ok(tls_stream)
     }

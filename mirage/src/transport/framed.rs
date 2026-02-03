@@ -80,10 +80,7 @@ where
 
         if len > MAX_FRAME_SIZE {
             return Err(NetworkError::PacketError {
-                reason: format!(
-                    "Frame too large: {} bytes (max: {})",
-                    len, MAX_FRAME_SIZE
-                ),
+                reason: format!("Frame too large: {} bytes (max: {})", len, MAX_FRAME_SIZE),
             }
             .into());
         }
@@ -118,15 +115,15 @@ where
 #[allow(dead_code)]
 pub fn split_framed<S>(
     stream: FramedStream<S>,
-) -> (FramedReader<tokio::io::ReadHalf<S>>, FramedWriter<tokio::io::WriteHalf<S>>)
+) -> (
+    FramedReader<tokio::io::ReadHalf<S>>,
+    FramedWriter<tokio::io::WriteHalf<S>>,
+)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let (read_half, write_half) = tokio::io::split(stream.stream);
-    (
-        FramedReader::new(read_half),
-        FramedWriter::new(write_half),
-    )
+    (FramedReader::new(read_half), FramedWriter::new(write_half))
 }
 
 /// Read half of a split FramedStream.

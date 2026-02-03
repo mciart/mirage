@@ -24,9 +24,10 @@ use mirage::network::packet::Packet;
 use mirage::utils::tasks::abort_all;
 use mirage::{MirageError, Result};
 use std::net::IpAddr;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::signal;
-use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_boring::SslStream;
 use tracing::{debug, info, warn};
 
@@ -224,7 +225,7 @@ impl MirageServer {
         // We need a new connection for data transfer (auth consumed the stream split)
         // In practice, we'd use a different approach, but for now return OK
         // The actual data connection would need to be handled separately
-        
+
         // Register client in connection queues
         let (connection_sender, connection_receiver) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
         let client_ip = client_address.addr();
