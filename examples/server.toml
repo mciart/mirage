@@ -6,10 +6,12 @@ certificate_file = "examples/cert/server_cert.pem"
 certificate_key_file = "examples/cert/server_key.pem"
 # The address to bind the tunnel to
 bind_address = "0.0.0.0"
+# IPv6: bind_address = "::0"
 # The port to bind the tunnel to
 bind_port = 443
 # The address of the tunnel endpoint and base address of the address pool available to clients
-tunnel_network = "10.0.0.1/24"
+tunnel_network = "10.11.12.1/24"
+# IPv6: tunnel_network = "fd00::1/64"
 # Optional interface name to request for the TUN device
 # interface_name = "tun0"
 # Whether to isolate clients from each other (clients cannot ping each other)

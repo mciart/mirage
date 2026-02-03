@@ -25,14 +25,17 @@ keep_alive_interval_s = 25
 insecure = true
 
 [network]
+# A list of routes to route through the tunnel (CIDR notation)
 routes = [
     "10.0.1.0/24",
-    "10.11.12.0/24"
+    "10.11.12.0/24",
+    # "fd00::/64"
 ]
 # Optional interface name to request for the TUN device
 # interface_name = "utun5"
 dns_servers = [
-    "1.1.1.1"
+    "1.1.1.1",
+    # "2606:4700:4700::1111"
 ]
 
 [reality]

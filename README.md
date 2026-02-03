@@ -61,6 +61,7 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
 - [x] Windows (x86_64) - 使用 Wintun
 - [x] Linux (x86_64, aarch64)
 - [x] macOS (aarch64)
+- [x] FreeBSD (x86_64, aarch64)
 
 ### 编译安装
 
@@ -111,8 +112,10 @@ password = "mypassword"
 
 ```toml
 bind_address = "0.0.0.0"
+# IPv6: bind_address = "::0"
 bind_port = 443
 tunnel_network = "10.0.0.1/24"
+# IPv6: tunnel_network = "fd00::1/64"
 
 [reality]
 # 伪装目标，非 VPN 流量将被转发到此地址
@@ -131,8 +134,8 @@ reuse_socket = true
 详情请参阅项目中的 [mirage_feasibility_analysis.md](./mirage_feasibility_analysis.md) 文档，其中详细阐述了从 QUIC 迁移到 TCP/TLS 的技术决策过程和路线图。
 
 ### 开发路线图 (Roadmap)
-- [x] **Phase 1**: 基础 TCP/TLS 隧道开发 (当前阶段)
-- [ ] **Phase 2**: Reality 服务端逻辑与转发 (支持标准TLS/Reality双模共存)
+- [x] **Phase 1**: 基础 TCP/TLS 隧道开发 (已完成)
+- [/] **Phase 2**: Reality 服务端逻辑与转发 (当前阶段)
 - [ ] **Phase 3**: Chrome 指纹深度集成
 - [ ] **Phase 4**: XTLS-Vision 流控优化
 
