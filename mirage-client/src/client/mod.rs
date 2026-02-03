@@ -105,17 +105,13 @@ impl MirageClient {
 
     /// Connects to the Mirage server via TCP/TLS.
     async fn connect_to_server(&self) -> Result<SslStream<TcpStream>> {
-        let server_hostname = self
+        let _server_hostname = self
             .config
             .connection_string
             .split(':')
             .next()
-            .ok_or_else(|| {
-                MirageError::config_file_not_found(format!(
-                    "Could not parse hostname from connection string '{}'",
-                    self.config.connection_string
-                ))
-            })?;
+            .ok_or_else(|| MirageError::config_error("Invalid connection string format"))?
+            .to_string();
 
         let server_addr = self
             .config
