@@ -23,21 +23,26 @@ pub fn add_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &str
 /// Adds a route to the routing table.
 fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
     let network_str = network.to_string();
-    
+
     // Windows netsh expects gateway IP. If target is interface, what do we do?
     // netsh interface ip add route <prefix> <interface> <gateway>
     // If gateway is direct/on-link, we usually use 0.0.0.0 or exclude it?
     // Actually `netsh` allows skipping gateway or using `nexthop=...`
-    // For now, if it's Interface target, we assume it's the SAME interface as `interface_name`? 
+    // For now, if it's Interface target, we assume it's the SAME interface as `interface_name`?
     // Wait, the `target` IS the nexthop.
-    
+
     let gateway_str = match target {
         RouteTarget::Gateway(ip) => ip.to_string(),
         RouteTarget::Interface(_) => {
             // If target is interface, we might just use 0.0.0.0 (on-link) or skip it?
             // "If the destination is on the local subnet, the gateway is 0.0.0.0"
             // Let's assume on-link for interface route.
-            if network.addr().is_ipv6() { "::" } else { "0.0.0.0" }.to_string()
+            if network.addr().is_ipv6() {
+                "::"
+            } else {
+                "0.0.0.0"
+            }
+            .to_string()
         }
     };
 
@@ -52,7 +57,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         "store=active",
     ];
     // ... rest of implementation
-    
+
     let output = run_command("netsh", &route_args)
         // ... (preserving error handling)
         .map_err(|e| RouteError::PlatformError {

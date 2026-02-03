@@ -14,7 +14,8 @@ const ROUTE_ADD_IFACE_V4: &str = "route add -net {network} netmask {netmask} dev
 #[cfg(target_os = "macos")]
 const ROUTE_ADD_COMMAND_V4: &str = "route -n add -net {network} -netmask {netmask} {gateway}";
 #[cfg(target_os = "macos")]
-const ROUTE_ADD_IFACE_V4: &str = "route -n add -net {network} -netmask {netmask} -interface {interface}";
+const ROUTE_ADD_IFACE_V4: &str =
+    "route -n add -net {network} -netmask {netmask} -interface {interface}";
 
 #[cfg(target_os = "freebsd")]
 const ROUTE_ADD_COMMAND_V4: &str = "route add -net {network} -netmask {netmask} {gateway}";
@@ -201,7 +202,7 @@ fn get_gateway_for_linux(target: IpAddr) -> Result<RouteTarget> {
     // On-link: 192.168.1.5 dev eth0 src 192.168.1.2
     if let Some(line) = stdout.lines().next() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        
+
         // Check for 'via'
         if let Some(via_index) = parts.iter().position(|&r| r == "via") {
             if via_index + 1 < parts.len() {

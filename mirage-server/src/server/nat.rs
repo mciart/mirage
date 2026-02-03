@@ -7,9 +7,9 @@ use mirage::config::NatConfig;
 pub struct NatManager {
     config: NatConfig,
     tun_interface: String,
-    tunnel_network_v4: String,        // CIDR, e.g. "10.0.0.1/24"
+    tunnel_network_v4: String,         // CIDR, e.g. "10.0.0.1/24"
     tunnel_network_v6: Option<String>, // CIDR, e.g. "fd00::1/64"
-    active_rules: Vec<String>,        // Track added rules for cleanup (simplified description)
+    active_rules: Vec<String>,         // Track added rules for cleanup (simplified description)
 }
 
 impl NatManager {
@@ -60,17 +60,29 @@ impl NatManager {
         }
 
         // 2. Allow FORWARD chain (Core VPN traffic)
-        self.add_rule("iptables", &["-I", "FORWARD", "-i", &tun_iface, "-j", "ACCEPT"]);
-        self.add_rule("iptables", &["-I", "FORWARD", "-o", &tun_iface, "-j", "ACCEPT"]);
+        self.add_rule(
+            "iptables",
+            &["-I", "FORWARD", "-i", &tun_iface, "-j", "ACCEPT"],
+        );
+        self.add_rule(
+            "iptables",
+            &["-I", "FORWARD", "-o", &tun_iface, "-j", "ACCEPT"],
+        );
 
         // 3. Masquerade (NAT)
         self.add_rule(
             "iptables",
             &[
-                "-t", "nat", "-A", "POSTROUTING",
-                "-s", &tunnel_net,
-                "-o", outbound_iface,
-                "-j", "MASQUERADE",
+                "-t",
+                "nat",
+                "-A",
+                "POSTROUTING",
+                "-s",
+                &tunnel_net,
+                "-o",
+                outbound_iface,
+                "-j",
+                "MASQUERADE",
             ],
         );
     }
@@ -79,21 +91,33 @@ impl NatManager {
         let tun_iface = self.tun_interface.clone();
         // 1. Enable forwarding
         if let Err(e) = run_cmd("sysctl", &["-w", "net.ipv6.conf.all.forwarding=1"]) {
-             warn!("Failed to enable IPv6 forwarding: {}", e);
+            warn!("Failed to enable IPv6 forwarding: {}", e);
         }
 
         // 2. Allow FORWARD chain
-        self.add_rule("ip6tables", &["-I", "FORWARD", "-i", &tun_iface, "-j", "ACCEPT"]);
-        self.add_rule("ip6tables", &["-I", "FORWARD", "-o", &tun_iface, "-j", "ACCEPT"]);
+        self.add_rule(
+            "ip6tables",
+            &["-I", "FORWARD", "-i", &tun_iface, "-j", "ACCEPT"],
+        );
+        self.add_rule(
+            "ip6tables",
+            &["-I", "FORWARD", "-o", &tun_iface, "-j", "ACCEPT"],
+        );
 
         // 3. Masquerade (NAT)
         self.add_rule(
             "ip6tables",
             &[
-                "-t", "nat", "-A", "POSTROUTING",
-                "-s", v6_net,
-                "-o", outbound_iface,
-                "-j", "MASQUERADE",
+                "-t",
+                "nat",
+                "-A",
+                "POSTROUTING",
+                "-s",
+                v6_net,
+                "-o",
+                outbound_iface,
+                "-j",
+                "MASQUERADE",
             ],
         );
     }
@@ -128,10 +152,12 @@ impl NatManager {
         info!("Cleaning up NAT rules...");
         for rule_cmd in self.active_rules.iter().rev() {
             let parts: Vec<&str> = rule_cmd.split_whitespace().collect();
-            if parts.len() < 2 { continue; }
+            if parts.len() < 2 {
+                continue;
+            }
             let cmd = parts[0];
             let args = &parts[1..];
-            
+
             if let Err(e) = run_cmd(cmd, args) {
                 // It's possible the rule was already removed or modified
                 debug!("Failed to cleanup rule '{}': {}", rule_cmd, e);
