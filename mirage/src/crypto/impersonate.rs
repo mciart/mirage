@@ -1,5 +1,5 @@
-use boring::ssl::{SslConnectorBuilder, SslVersion};
 use crate::Result;
+use boring::ssl::{SslConnectorBuilder, SslVersion};
 
 /// Applies Chrome-like TLS configuration to the SslConnectorBuilder.
 ///
@@ -54,7 +54,7 @@ pub fn apply_chrome_fingerprint(builder: &mut SslConnectorBuilder) -> Result<()>
     // 5. Extensions & Features
     // Enable OCSP Stapling (Status Request)
     builder.enable_ocsp_stapling();
-    
+
     // Enable Signed Certificate Timestamps (SCT)
     builder.enable_signed_cert_timestamps();
 
