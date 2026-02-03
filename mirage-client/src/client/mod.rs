@@ -82,6 +82,7 @@ impl MirageClient {
             client_address_v6,
             self.config.connection.mtu,
             Some(server_address.addr()),
+            server_address_v6.map(|n| n.addr()),
             self.config.network.interface_name.clone(),
             Some(self.config.network.routes.clone()),
             Some(self.config.network.dns_servers.clone()),

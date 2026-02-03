@@ -61,6 +61,7 @@ impl MirageServer {
             self.config.tunnel_network_v6,
             self.config.connection.mtu,
             Some(self.config.tunnel_network.network()),
+            self.config.tunnel_network_v6.map(|n| n.network()),
             self.config.interface_name.clone(),
             None,
             None,

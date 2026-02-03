@@ -22,7 +22,7 @@ pub struct TunRsInterface {
     reader_task: JoinHandle<Result<()>>,
     writer_task: JoinHandle<Result<()>>,
     mtu: u16,
-    gateway: Option<IpAddr>,
+
 }
 
 impl InterfaceIO for TunRsInterface {
@@ -101,24 +101,33 @@ impl InterfaceIO for TunRsInterface {
             reader_task: reader_handle,
             writer_task: writer_handle,
             mtu,
-            gateway: tunnel_gateway,
         })
     }
 
-    fn configure_routes(&self, routes: &[IpNet]) -> Result<()> {
-        add_routes(
-            routes,
-            &self
-                .gateway
-                .ok_or_else(|| InterfaceError::ConfigurationFailed {
-                    reason: "Missing gateway address on client".to_string(),
-                })?,
-            &self
-                .name()
-                .ok_or_else(|| InterfaceError::ConfigurationFailed {
-                    reason: "Missing interface name on client".to_string(),
-                })?,
-        )?;
+    fn configure_routes(
+        &self,
+        routes: &[IpNet],
+        gateway_v4: Option<IpAddr>,
+        gateway_v6: Option<IpAddr>,
+    ) -> Result<()> {
+        for route in routes {
+            let gateway = match route {
+                IpNet::V4(_) => gateway_v4,
+                IpNet::V6(_) => gateway_v6,
+            };
+
+            if let Some(gateway) = gateway {
+                add_routes(&[*route], &gateway, self.name().as_deref().unwrap_or("utun"))?;
+            } else {
+                return Err(InterfaceError::ConfigurationFailed {
+                    reason: format!(
+                        "No gateway found for route family: {}",
+                        if route.addr().is_ipv4() { "v4" } else { "v6" }
+                    ),
+                }
+                .into());
+            }
+        }
         info!("Added routes: {routes:?}");
 
         Ok(())

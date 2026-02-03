@@ -25,7 +25,12 @@ pub trait InterfaceIO: Send + Sync + 'static {
         Self: Sized;
 
     /// Configures the runtime routes for the interface.
-    fn configure_routes(&self, routes: &[IpNet]) -> Result<()>;
+    fn configure_routes(
+        &self,
+        routes: &[IpNet],
+        gateway_v4: Option<IpAddr>,
+        gateway_v6: Option<IpAddr>,
+    ) -> Result<()>;
 
     /// Configures the runtime DNS servers for the interface.
     fn configure_dns(&self, dns_servers: &[IpAddr]) -> Result<()>;
@@ -73,6 +78,8 @@ pub struct Interface<I: InterfaceIO> {
     inner: Arc<I>,
     routes: Option<Vec<IpNet>>,
     dns_servers: Option<Vec<IpAddr>>,
+    gateway_v4: Option<IpAddr>,
+    gateway_v6: Option<IpAddr>,
 }
 
 impl<I: InterfaceIO> Interface<I> {
@@ -81,6 +88,7 @@ impl<I: InterfaceIO> Interface<I> {
         interface_address_v6: Option<IpNet>,
         mtu: u16,
         tunnel_gateway: Option<IpAddr>,
+        tunnel_gateway_v6: Option<IpAddr>,
         interface_name: Option<String>,
         routes: Option<Vec<IpNet>>,
         dns_servers: Option<Vec<IpAddr>>,
@@ -99,13 +107,15 @@ impl<I: InterfaceIO> Interface<I> {
             inner: Arc::new(interface),
             routes,
             dns_servers,
+            gateway_v4: tunnel_gateway,
+            gateway_v6: tunnel_gateway_v6,
         })
     }
 
     pub fn configure(&self) -> Result<()> {
         if let Some(routes) = self.routes.as_deref() {
             if !routes.is_empty() {
-                self.inner.configure_routes(routes)?;
+                self.inner.configure_routes(routes, self.gateway_v4, self.gateway_v6)?;
             }
         }
 

@@ -86,7 +86,12 @@ macro_rules! interface_impl {
             }
 
             /// Configures the runtime routes for the interface.
-            fn configure_routes(&self, _routes: &[IpNet]) -> Result<()> {
+            fn configure_routes(
+                &self,
+                _routes: &[IpNet],
+                _gateway_v4: Option<IpAddr>,
+                _gateway_v6: Option<IpAddr>,
+            ) -> Result<()> {
                 Ok(())
             }
 
