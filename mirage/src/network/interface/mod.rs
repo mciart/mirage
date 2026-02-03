@@ -83,6 +83,7 @@ pub struct Interface<I: InterfaceIO> {
 }
 
 impl<I: InterfaceIO> Interface<I> {
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         interface_address: IpNet,
         interface_address_v6: Option<IpNet>,
