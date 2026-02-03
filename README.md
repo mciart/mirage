@@ -156,6 +156,13 @@ iptables -t nat -A POSTROUTING -s 10.11.12.0/24 -o eth0 -j MASQUERADE
 ip6tables -t nat -A POSTROUTING -s fd00::/64 -o eth0 -j MASQUERADE
 ```
 
+**关键：放行转发流量 (FORWARD Chain)**:
+如果系统的默认策略是 DROP，您必须显式放行 VPN 流量，否则包会被内核丢弃！
+```bash
+iptables -I FORWARD -o tun+ -j ACCEPT
+iptables -I FORWARD -i tun+ -j ACCEPT
+```
+
 ---
 
 ## 用户管理 (User Management)

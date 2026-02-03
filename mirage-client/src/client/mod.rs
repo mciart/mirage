@@ -12,12 +12,13 @@ use boring::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use mirage::config::ClientConfig;
 use mirage::constants::TLS_ALPN_PROTOCOLS;
 use mirage::network::interface::{Interface, InterfaceIO};
+use mirage::network::route::{add_routes, get_gateway_for};
 use mirage::{MirageError, Result};
 use tokio::net::TcpStream;
 use tokio_boring::SslStream;
 
 use ipnet::IpNet;
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
 use crate::client::relayer::ClientRelayer;
@@ -46,7 +47,30 @@ impl MirageClient {
     /// Connects to the Mirage server and starts the workers for this instance of the Mirage client.
     pub async fn start<I: InterfaceIO>(&mut self) -> Result<()> {
         // Connect to server via TCP/TLS
-        let tls_stream = self.connect_to_server().await?;
+        let (tls_stream, remote_addr) = self.connect_to_server().await?;
+
+        // Anti-Loop: Add exclusion route for the server IP via the gateway used to reach it
+        // This prevents the VPN connection itself from being routed through the VPN tunnel
+        let server_ip = remote_addr.ip();
+        if let Ok(gateway) = get_gateway_for(server_ip) {
+            info!(
+                "Detected gateway for server {}: {}. Adding exclusion route.",
+                server_ip, gateway
+            );
+
+            // Create a /32 (IPv4) or /128 (IPv6) mask for the single host
+            let mask = if server_ip.is_ipv4() { 32 } else { 128 };
+            if let Ok(server_net) = IpNet::new(server_ip, mask) {
+                // Interface name is largely ignored on Posix for route add, but we pass "en0" as a placeholder
+                if let Err(e) = add_routes(&[server_net], &gateway, "en0") {
+                    warn!("Failed to add exclusion route for server (loop risk): {}", e);
+                } else {
+                    info!("Successfully added exclusion route for server");
+                }
+            }
+        } else {
+            warn!("Could not detect gateway for {}. If using global routing, you might encounter specific routing loops.", server_ip);
+        }
 
         // Split stream for auth - we need to get addresses first
         let (read_half, write_half) = tokio::io::split(tls_stream);
@@ -108,7 +132,7 @@ impl MirageClient {
     }
 
     /// Connects to the Mirage server via TCP/TLS.
-    async fn connect_to_server(&self) -> Result<SslStream<TcpStream>> {
+    async fn connect_to_server(&self) -> Result<(SslStream<TcpStream>, SocketAddr)> {
         let _server_hostname = self
             .config
             .connection_string
@@ -203,6 +227,6 @@ impl MirageClient {
             self.config.connection_string
         );
 
-        Ok(tls_stream)
+        Ok((tls_stream, server_addr))
     }
 }

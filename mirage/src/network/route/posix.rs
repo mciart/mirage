@@ -74,3 +74,110 @@ fn add_route(network: &IpNet, gateway: &IpAddr) -> Result<()> {
 
     Ok(())
 }
+
+
+/// Retrieves the gateway address for a specific destination IP.
+pub fn get_gateway_for(target: IpAddr) -> Result<IpAddr> {
+    #[cfg(target_os = "macos")]
+    {
+        get_gateway_for_macos(target)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        get_gateway_for_linux(target)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err(RouteError::PlatformError {
+            message: "Unsupported platform for getting gateway".to_string(),
+        }
+        .into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_gateway_for_macos(target: IpAddr) -> Result<IpAddr> {
+    let output = run_command("route", &["-n", "get", &target.to_string()])
+        .map_err(|e| RouteError::PlatformError {
+            message: format!("failed to execute route command: {e}"),
+        })?
+        .wait_with_output()
+        .map_err(|e| RouteError::PlatformError {
+            message: format!("failed to wait for route command: {e}"),
+        })?;
+
+    if !output.status.success() {
+        return Err(RouteError::PlatformError {
+            message: format!("failed to get route for {}", target),
+        }
+        .into());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if line.trim().starts_with("gateway:") {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() > 1 {
+                let gateway_str = parts[1].trim();
+                // Handle scope id in IPv6 link-local addresses (e.g. fe80::1%en0)
+                let clean_gateway_str = if let Some(idx) = gateway_str.find('%') {
+                    &gateway_str[..idx]
+                } else {
+                    gateway_str
+                };
+
+                let ip = clean_gateway_str.parse::<IpAddr>().map_err(|e| RouteError::PlatformError {
+                    message: format!("failed to parse gateway IP '{}': {}", gateway_str, e),
+                })?;
+                return Ok(ip);
+            }
+        }
+    }
+
+    Err(RouteError::PlatformError {
+        message: "gateway not found in route output".to_string(),
+    }
+    .into())
+}
+
+#[cfg(target_os = "linux")]
+fn get_gateway_for_linux(target: IpAddr) -> Result<IpAddr> {
+    let output = run_command("ip", &["route", "get", &target.to_string()])
+        .map_err(|e| RouteError::PlatformError {
+            message: format!("failed to execute ip command: {e}"),
+        })?
+        .wait_with_output()
+        .map_err(|e| RouteError::PlatformError {
+            message: format!("failed to wait for ip command: {e}"),
+        })?;
+
+    if !output.status.success() {
+        return Err(RouteError::PlatformError {
+            message: format!("failed to get route for {}", target),
+        }
+        .into());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Output: 8.8.8.8 via 10.0.0.1 dev eth0 src 10.0.0.2 uid 1000
+    if let Some(line) = stdout.lines().next() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        // search for "via" token
+        if let Some(via_index) = parts.iter().position(|&r| r == "via") {
+            if via_index + 1 < parts.len() {
+                let gateway_str = parts[via_index + 1];
+                let ip = gateway_str.parse::<IpAddr>().map_err(|e| RouteError::PlatformError {
+                    message: format!("failed to parse gateway IP: {e}"),
+                })?;
+                return Ok(ip);
+            }
+        }
+    }
+
+    Err(RouteError::PlatformError {
+        message: "gateway not found in ip route output".to_string(),
+    }
+    .into())
+}
