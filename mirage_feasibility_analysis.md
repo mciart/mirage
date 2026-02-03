@@ -241,6 +241,30 @@ graph TD
 **配置方式**：
 配置文件支持同时开启两种模式，使用不同或相同的 SNI 区分。
 
+
+### 2.6 CDN 传输层支持 (救活被墙 IP)
+
+Mirage 目前的 TCP/TLS 直连模式虽然高效，但如果 IP 被墙，流量将被阻断。为了**复活 IP**，我们需要通过 CDN (如 Cloudflare) 中转流量。
+
+**核心矛盾**：
+`XTLS-Vision` (零拷贝直通) 与 `CDN Transport` (WS/HTTP 封装) 是**互斥**的。
+- **Vision**: 需要内核层直接转发原始 TCP流。
+- **CDN**: 必须将数据包封装在 WebSocket Frame 或 HTTP/2 Frame 中。
+
+**解决方案：双模式运行**
+1. **Direct Mode (高性能)**: TCP + TLS + XTLS-Vision (默认)
+2. **CDN Mode (高可用)**: WebSocket + TLS (无 Vision，作为备用)
+
+**传输协议选择**:
+
+| 协议 | 兼容性 | 性能 | 实现难度 | 推荐度 |
+|------|--------|------|----------|--------|
+| **WebSocket (WS)** | ⭐⭐⭐⭐⭐ (所有 CDN) | ⭐⭐⭐ (有握手开销) | ⭐ 简单 (`tungstenite`) | ✅ **首选 MVP** |
+| **gRPC (HTTP/2)** | ⭐⭐⭐ (部分 CDN) | ⭐⭐⭐⭐ (多路复用) | ⭐⭐⭐ 复杂 (`tonic`) | ⚠️ 次选 |
+| **XHTTP/SplitHTTP** | ⭐⭐ (Xray 新标准) | ⭐⭐ (延迟高/隐蔽强) | ⭐⭐⭐⭐ 困难 | ❌ 暂不考虑 |
+
+**建议**：在 Phase 3 优先实现 **标准 WebSocket** 传输层。
+
 ---
 
 ## 三、阶段性实现路线图

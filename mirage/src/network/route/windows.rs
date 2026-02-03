@@ -58,3 +58,13 @@ fn add_route(network: &IpNet, gateway: &IpAddr, interface_name: &str) -> Result<
 
     Ok(())
 }
+
+/// Retrieves the gateway address for a specific destination IP.
+///
+/// Note: Currently not implemented for Windows.
+pub fn get_gateway_for(_target: IpAddr) -> Result<IpAddr> {
+    Err(RouteError::PlatformError {
+        message: "Automatic gateway detection not supported on Windows yet".to_string(),
+    }
+    .into())
+}
