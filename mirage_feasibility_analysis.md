@@ -336,25 +336,17 @@ quincy (QUIC)  →  mirage (TCP/TLS over BoringSSL)
 
 ---
 
-### Phase 3: XTLS-Vision 流控 (2 周) 🟡
+### Phase 3: 流量混淆与性能优化 (2 周) 🟡
 
-**目标**：优化性能，消除 TLS-in-TLS 特征
+**目标**：消除 TLS 长度/时序特征，优化 Tun 模式下的吞吐量
 
-- [ ] 实现 TLS Record 解析 (5 字节 Header)
-  ```rust
-  fn parse_tls_record(data: &[u8]) -> TlsRecordType {
-      match data[0] {
-          0x17 => ApplicationData,  // 可 Splice
-          0x16 => Handshake,        // 需加密
-          _ => Other,
-      }
-  }
-  ```
-- [ ] 实现 Application Data 直通 (zero-copy splice)
-- [ ] 实现 Handshake 阶段随机 Padding
-- [ ] 可选：拦截 UDP 443 (QUIC) 降级为 TCP
+- [ ] **动态 Record Padding**: 随机填充 TLS Record 长度，对抗长度指纹分析 (Length Fingerprinting)
+- [ ] **时序混淆 (Timing Obfuscation)**: 模拟浏览器的连接/传输时序，消除 VPN 特征
+- [ ] **零拷贝优化 (Zero-Copy Optimization)**: 
+  - 放弃 Tun 模式下极难实现的 "Splice" (直通)
+  - 转而优化应用层内存管理 (`BytesMut`), 减少内核/用户态拷贝开销
 
-**产出**：性能提升 3-10 倍，流量特征接近原生 HTTPS
+**产出**：流量特征隐匿 ("像访问 HTTPS 网站")，吞吐量提升
 
 ---
 

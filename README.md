@@ -7,7 +7,7 @@
 > [!WARNING]
 > **🚧 项目开发中 (Work in Progress) 🚧**
 >
-> Mirage 目前处于 **Phase 3 (XTLS-Vision 流控)** 开发阶段。虽然代码可以通过编译 (`cargo build --release`)，但可能仍不稳定。
+> Mirage 目前处于 **Phase 3 (流量混淆与性能优化)** 开发阶段。虽然代码可以通过编译 (`cargo build --release`)，但可能仍不稳定。
 > 详情请查阅 [Mirage 可行性分析](./mirage_feasibility_analysis.md)。
 
 > **Mirage** 是一款基于 Rust 开发的下一代 VPN 客户端和服务端，旨在提供极致的隐蔽性和性能。
@@ -33,7 +33,7 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
 
 ### 3. 高性能 TCP 传输 🚀
 - 采用 Length-Prefixed 帧协议，解决 TCP 粘包问题。
-- 设计为未来支持 **XTLS-Vision** 流控，旨在消除 TLS-in-TLS 双重加密开销，实现原生 HTTPS 级别的性能。
+- 设计即将支持 **流量混淆与隐匿** 流控，旨在消除 TLS-in-TLS 双重加密开销，实现原生 HTTPS 级别的性能。
 
 ### 4. 多模共存 (Multi-Mode) 🌗
 服务端单端口 (443) 同时支持 **标准 TLS** 和 **Reality** 等多种协议，客户端拥有极高的连接灵活性：
@@ -252,10 +252,7 @@ users_file = "users"
 ### 开发路线图 (Roadmap)
 - [x] **Phase 1**: 基础 TCP/TLS 隧道开发 (已完成)
 - [x] **Phase 2**: 功能增强与伪装 (Reality 已完成)
-  - [x] Dual Stack (IPv4/IPv6)
-  - [x] Reality 协议 (ALPN Auth, SNI Dispatcher)
-  - [x] 双模共存与回退 (Protocol Fallback)
-- [ ] **Phase 3**: XTLS-Vision 流控优化
+- [ ] **Phase 3**: 流量混淆与隐匿 (Padding & Timing)
 - [ ] **Phase 4**: CDN 支持 (WebSocket, gRPC 等)
 
 ---
