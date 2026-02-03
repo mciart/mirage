@@ -22,7 +22,6 @@ pub struct TunRsInterface {
     reader_task: JoinHandle<Result<()>>,
     writer_task: JoinHandle<Result<()>>,
     mtu: u16,
-
 }
 
 impl InterfaceIO for TunRsInterface {
@@ -117,7 +116,11 @@ impl InterfaceIO for TunRsInterface {
             };
 
             if let Some(gateway) = gateway {
-                add_routes(&[*route], &gateway, self.name().as_deref().unwrap_or("utun"))?;
+                add_routes(
+                    &[*route],
+                    &gateway,
+                    self.name().as_deref().unwrap_or("utun"),
+                )?;
             } else {
                 return Err(InterfaceError::ConfigurationFailed {
                     reason: format!(

@@ -115,7 +115,8 @@ impl<I: InterfaceIO> Interface<I> {
     pub fn configure(&self) -> Result<()> {
         if let Some(routes) = self.routes.as_deref() {
             if !routes.is_empty() {
-                self.inner.configure_routes(routes, self.gateway_v4, self.gateway_v6)?;
+                self.inner
+                    .configure_routes(routes, self.gateway_v4, self.gateway_v6)?;
             }
         }
 
