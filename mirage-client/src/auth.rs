@@ -46,7 +46,7 @@ impl AuthClient {
     /// - `InvalidCredentials` - When credentials are rejected by the server
     /// - `Timeout` - When authentication times out
     /// - `StreamError` - When communication with the server fails
-    pub async fn authenticate<R, W>(&self, reader: R, writer: W) -> Result<(IpNet, IpNet)>
+    pub async fn authenticate<R, W>(&self, reader: R, writer: W) -> Result<(IpNet, IpNet, R, W)>
     where
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
@@ -65,11 +65,14 @@ impl AuthClient {
 
         let auth_response = auth_stream.recv_message_timeout(self.auth_timeout).await?;
 
+        // Retrieve the stream parts back to be reused
+        let (reader, writer) = auth_stream.into_inner();
+
         match auth_response {
             AuthMessage::Authenticated {
                 client_address,
                 server_address,
-            } => Ok((client_address, server_address)),
+            } => Ok((client_address, server_address, reader, writer)),
             AuthMessage::Failed => Err(AuthError::InvalidCredentials)?,
             _ => Err(AuthError::InvalidPayload)?,
         }

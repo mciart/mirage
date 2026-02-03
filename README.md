@@ -143,10 +143,10 @@ cargo install --path mirage-server
 ### 2. 使用方法
 ```bash
 # 添加新用户 (交互式输入密码)
-mirage-users --add --users-file-path users.db
+mirage-users --add users
 
 # 删除用户
-mirage-users --delete --users-file-path users.db
+mirage-users --delete users
 ```
 
 ### 3. 服务端配置

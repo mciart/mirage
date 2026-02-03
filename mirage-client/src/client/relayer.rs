@@ -16,32 +16,33 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
-/// Client relayer that handles packet forwarding between TUN and TCP/TLS tunnel.
+/// Client relayer that handles packet forwarding between the TUN interface and the TCP/TLS tunnel.
 #[allow(dead_code)]
-pub struct ClientRelayer<S> {
+pub struct ClientRelayer<W> {
     /// Write half of the TLS stream for sending packets
-    writer: Arc<Mutex<WriteHalf<S>>>,
+    writer: Arc<Mutex<W>>,
     relayer_task: JoinHandle<Result<()>>,
     shutdown_tx: broadcast::Sender<()>,
 }
 
-impl<S> ClientRelayer<S>
+impl<W> ClientRelayer<W>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
 {
     /// Creates a new instance of the client relayer and starts relaying packets between
     /// the TUN interface and the TCP/TLS connection.
-    pub fn start(interface: Interface<impl InterfaceIO>, stream: S) -> Result<Self> {
+    pub fn start<R>(interface: Interface<impl InterfaceIO>, reader: R, writer: W) -> Result<Self>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+    {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let interface = Arc::new(interface);
 
-        // Split the stream for concurrent read/write
-        let (read_half, write_half) = tokio::io::split(stream);
-        let writer = Arc::new(Mutex::new(write_half));
+        let writer = Arc::new(Mutex::new(writer));
 
         let relayer_task = tokio::spawn(Self::relay_packets(
             interface.clone(),
-            read_half,
+            reader,
             writer.clone(),
             shutdown_rx,
         ));
@@ -73,12 +74,15 @@ where
     }
 
     /// Relays packets between the TUN interface and the TCP/TLS tunnel.
-    async fn relay_packets(
+    async fn relay_packets<R>(
         interface: Arc<Interface<impl InterfaceIO>>,
-        reader: ReadHalf<S>,
-        writer: Arc<Mutex<WriteHalf<S>>>,
+        reader: R,
+        writer: Arc<Mutex<W>>,
         mut shutdown_rx: broadcast::Receiver<()>,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+    {
         let mut tasks = FuturesUnordered::new();
 
         tasks.extend([
@@ -108,7 +112,7 @@ where
 
     /// Handles incoming packets from the TUN interface and relays them to the server.
     async fn process_outgoing_traffic(
-        writer: Arc<Mutex<WriteHalf<S>>>,
+        writer: Arc<Mutex<W>>,
         interface: Arc<Interface<impl InterfaceIO>>,
     ) -> Result<()> {
         debug!("Started outgoing traffic task (interface -> TLS tunnel)");
@@ -129,10 +133,13 @@ where
     }
 
     /// Handles incoming packets from the server and relays them to the TUN interface.
-    async fn process_inbound_traffic(
-        mut reader: ReadHalf<S>,
+    async fn process_inbound_traffic<R>(
+        mut reader: R,
         interface: Arc<Interface<impl InterfaceIO>>,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+    {
         debug!("Started inbound traffic task (TLS tunnel -> interface)");
 
         use tokio::io::AsyncReadExt;

@@ -60,8 +60,8 @@ impl MirageClient {
             Duration::from_secs(self.config.connection.connection_timeout_s),
         );
 
-        // Authenticate
-        let (client_address, server_address) =
+        // Authenticate - now returns the stream parts back reuse!
+        let (client_address, server_address, reader, writer) =
             auth_client.authenticate(read_half, write_half).await?;
 
         info!("Successfully authenticated");
@@ -72,9 +72,6 @@ impl MirageClient {
         self.client_address = Some(client_address);
         self.server_address = Some(server_address);
 
-        // Reconnect for data transfer (auth consumed the stream)
-        let data_stream = self.connect_to_server().await?;
-
         let interface: Interface<I> = Interface::create(
             client_address,
             self.config.connection.mtu,
@@ -84,8 +81,8 @@ impl MirageClient {
             Some(self.config.network.dns_servers.clone()),
         )?;
 
-        // Start relayer with the new connection
-        let relayer = ClientRelayer::start(interface, data_stream)?;
+        // Start relayer with the REUSED connection
+        let relayer = ClientRelayer::start(interface, reader, writer)?;
 
         // Wait for relayer to finish
         relayer.wait_for_shutdown().await?;
