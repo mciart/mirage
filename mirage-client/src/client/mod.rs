@@ -12,7 +12,7 @@ use boring::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use mirage::config::ClientConfig;
 use mirage::constants::TLS_ALPN_PROTOCOLS;
 use mirage::network::interface::{Interface, InterfaceIO};
-use mirage::network::route::{add_routes, get_gateway_for, RouteTarget};
+use mirage::network::route::{add_routes, get_gateway_for, ExclusionRouteGuard, RouteTarget};
 use mirage::{MirageError, Result};
 use tokio::net::TcpStream;
 use tokio_boring::SslStream;
@@ -52,29 +52,66 @@ impl MirageClient {
         // Anti-Loop: Add exclusion route for the server IP via the gateway used to reach it
         // This prevents the VPN connection itself from being routed through the VPN tunnel
         let server_ip = remote_addr.ip();
+
+        let mut _route_guard: Option<ExclusionRouteGuard> = None;
+
         if let Ok(target) = get_gateway_for(server_ip) {
             match &target {
-                RouteTarget::Gateway(gw) => info!(
-                    "Detected gateway for server {}: {}. Adding exclusion route.",
-                    server_ip, gw
-                ),
-                RouteTarget::Interface(iface) => info!(
-                    "Detected interface for server {}: {}. Adding exclusion route.",
-                    server_ip, iface
-                ),
-            }
-
-            // Create a /32 (IPv4) or /128 (IPv6) mask for the single host
-            let mask = if server_ip.is_ipv4() { 32 } else { 128 };
-            if let Ok(server_net) = IpNet::new(server_ip, mask) {
-                // Interface name is largely ignored on Posix for route add, but we pass "en0" as a placeholder
-                if let Err(e) = add_routes(&[server_net], &target, "en0") {
-                    warn!(
-                        "Failed to add exclusion route for server (loop risk): {}",
-                        e
+                RouteTarget::Gateway(gw) => {
+                    info!(
+                        "Detected gateway for server {}: {}. Adding exclusion route.",
+                        server_ip, gw
                     );
-                } else {
-                    info!("Successfully added exclusion route for server");
+                    // Create a /32 (IPv4) or /128 (IPv6) mask for the single host
+                    let mask = if server_ip.is_ipv4() { 32 } else { 128 };
+                    if let Ok(server_net) = IpNet::new(server_ip, mask) {
+                        // Interface name is largely ignored on Posix for route add, but we pass "en0" as a placeholder
+                        if let Err(e) = add_routes(&[server_net], &target, "en0") {
+                            warn!(
+                                "Failed to add exclusion route for server (loop risk): {}",
+                                e
+                            );
+                        } else {
+                            info!("Successfully added exclusion route for server");
+                            _route_guard = Some(ExclusionRouteGuard {
+                                network: server_net,
+                                target: target.clone(),
+                                interface: "en0".to_string(),
+                            });
+                        }
+                    }
+                }
+                RouteTarget::Interface(iface) => {
+                    info!(
+                        "Detected interface for server {}: {}. Attempting to resolve default gateway to avoid blackhole.",
+                        server_ip, iface
+                    );
+                    // Fallback: Try to find the default gateway IP
+                    match mirage::network::route::get_default_gateway() {
+                        Ok(default_gw_ip) => {
+                            info!("Resolved default gateway: {}. Adding exclusion route using default gateway.", default_gw_ip);
+                            let target_gw = RouteTarget::Gateway(default_gw_ip);
+                            let mask = if server_ip.is_ipv4() { 32 } else { 128 };
+                            if let Ok(server_net) = IpNet::new(server_ip, mask) {
+                                if let Err(e) = add_routes(&[server_net], &target_gw, "en0") {
+                                    warn!(
+                                        "Failed to add exclusion route using default gateway: {}",
+                                        e
+                                    );
+                                } else {
+                                    info!("Successfully added exclusion route via default gateway");
+                                    _route_guard = Some(ExclusionRouteGuard {
+                                        network: server_net,
+                                        target: target_gw,
+                                        interface: "en0".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to resolve default gateway: {}. Skipping exclusion route. WARNING: Connectivity might fail or loop.", e);
+                        }
+                    }
                 }
             }
         } else {

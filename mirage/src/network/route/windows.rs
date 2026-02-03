@@ -16,6 +16,57 @@ pub fn add_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &str
     for network in networks {
         add_route(network, target, interface_name)?;
     }
+    Ok(())
+}
+
+/// Deletes a list of routes from the routing table.
+pub fn delete_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &str) -> Result<()> {
+    for network in networks {
+        delete_route(network, target, interface_name)?;
+    }
+    Ok(())
+}
+
+fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
+    let network_str = network.to_string();
+
+    // For delete, we might not need gateway if network+interface matches?
+    // match target to gateway string just in case
+    let gateway_str = match target {
+        RouteTarget::Gateway(ip) => ip.to_string(),
+        RouteTarget::Interface(_) => if network.addr().is_ipv6() {
+            "::"
+        } else {
+            "0.0.0.0"
+        }
+        .to_string(),
+    };
+
+    let route_args = vec![
+        "interface",
+        "ip",
+        "delete",
+        "route",
+        &network_str,
+        interface_name,
+        &gateway_str,
+        "store=active",
+    ];
+
+    let output = run_command("netsh", &route_args)
+        .map_err(|e| RouteError::PlatformError {
+            message: format!("failed to execute command: {e}"),
+        })?
+        .wait_with_output()
+        .map_err(|e| RouteError::PlatformError {
+            message: format!("failed to wait for command: {e}"),
+        })?;
+
+    // We often ignore errors on delete (if route doesn't exist)
+    if !output.status.success() {
+        // let stderr = String::from_utf8_lossy(&output.stderr);
+        // Maybe log warning but don't fail hard?
+    }
 
     Ok(())
 }
@@ -84,6 +135,13 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 pub fn get_gateway_for(_target: IpAddr) -> Result<RouteTarget> {
     Err(RouteError::PlatformError {
         message: "Automatic gateway detection not supported on Windows yet".to_string(),
+    }
+    .into())
+}
+
+pub fn get_default_gateway() -> Result<IpAddr> {
+    Err(RouteError::PlatformError {
+        message: "Not implemented for Windows".to_string(),
     }
     .into())
 }

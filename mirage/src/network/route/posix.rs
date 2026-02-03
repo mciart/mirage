@@ -32,12 +32,105 @@ const ROUTE_ADD_IFACE_V6: &str = "route -n add -inet6 {network}/{prefix} -interf
 
 #[cfg(target_os = "freebsd")]
 const ROUTE_ADD_COMMAND_V6: &str = "route add -inet6 {network}/{prefix} {gateway}";
+#[cfg(target_os = "linux")]
+const ROUTE_DEL_COMMAND_V4: &str = "route del -net {network} netmask {netmask} gw {gateway}";
+#[cfg(target_os = "linux")]
+const ROUTE_DEL_IFACE_V4: &str = "route del -net {network} netmask {netmask} dev {interface}";
+
+#[cfg(target_os = "macos")]
+const ROUTE_DEL_COMMAND_V4: &str = "route -n delete -net {network} -netmask {netmask} {gateway}";
+#[cfg(target_os = "macos")]
+const ROUTE_DEL_IFACE_V4: &str =
+    "route -n delete -net {network} -netmask {netmask} -interface {interface}";
+
+#[cfg(target_os = "freebsd")]
+const ROUTE_DEL_COMMAND_V4: &str = "route delete -net {network} -netmask {netmask} {gateway}";
+
+#[cfg(target_os = "linux")]
+const ROUTE_DEL_COMMAND_V6: &str = "route -A inet6 del {network}/{prefix} gw {gateway}";
+#[cfg(target_os = "linux")]
+const ROUTE_DEL_IFACE_V6: &str = "route -A inet6 del {network}/{prefix} dev {interface}";
+
+#[cfg(target_os = "macos")]
+const ROUTE_DEL_COMMAND_V6: &str = "route -n delete -inet6 {network}/{prefix} {gateway}";
+#[cfg(target_os = "macos")]
+const ROUTE_DEL_IFACE_V6: &str = "route -n delete -inet6 {network}/{prefix} -interface {interface}";
+
+#[cfg(target_os = "freebsd")]
+const ROUTE_DEL_COMMAND_V6: &str = "route delete -inet6 {network}/{prefix} {gateway}";
 
 /// Adds a list of routes to the routing table.
 pub fn add_routes(networks: &[IpNet], target: &RouteTarget, _interface_name: &str) -> Result<()> {
     for network in networks {
         add_route(network, target)?;
     }
+
+    Ok(())
+}
+
+/// Deletes a list of routes from the routing table.
+pub fn delete_routes(
+    networks: &[IpNet],
+    target: &RouteTarget,
+    _interface_name: &str,
+) -> Result<()> {
+    for network in networks {
+        delete_route(network, target)?;
+    }
+
+    Ok(())
+}
+
+fn delete_route(network: &IpNet, target: &RouteTarget) -> Result<()> {
+    let cmd_template = match (network, target) {
+        (IpNet::V4(_), RouteTarget::Gateway(_)) => ROUTE_DEL_COMMAND_V4,
+        (IpNet::V4(_), RouteTarget::Interface(_)) => ROUTE_DEL_IFACE_V4,
+        (IpNet::V6(_), RouteTarget::Gateway(_)) => ROUTE_DEL_COMMAND_V6,
+        (IpNet::V6(_), RouteTarget::Interface(_)) => ROUTE_DEL_IFACE_V6,
+    };
+
+    let cmd = match network {
+        IpNet::V4(_) => {
+            let mut s = cmd_template
+                .replace("{network}", &network.addr().to_string())
+                .replace("{netmask}", &network.netmask().to_string());
+            match target {
+                RouteTarget::Gateway(gw) => s = s.replace("{gateway}", &gw.to_string()),
+                RouteTarget::Interface(iface) => s = s.replace("{interface}", iface),
+            }
+            s
+        }
+        IpNet::V6(_) => {
+            let mut s = cmd_template
+                .replace("{network}", &network.addr().to_string())
+                .replace("{prefix}", &network.prefix_len().to_string());
+            match target {
+                RouteTarget::Gateway(gw) => s = s.replace("{gateway}", &gw.to_string()),
+                RouteTarget::Interface(iface) => s = s.replace("{interface}", iface),
+            }
+            s
+        }
+    };
+
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    if parts.is_empty() {
+        return Err(RouteError::PlatformError {
+            message: "Empty route command".to_string(),
+        }
+        .into());
+    }
+
+    let program = parts[0];
+    let args = &parts[1..];
+
+    run_command(program, args)
+        .map_err(|e| RouteError::PlatformError {
+            message: format!("failed to execute route command: {e}"),
+        })?
+        .wait_with_output()
+        .map_err(|e| RouteError::PlatformError {
+            message: format!("failed to wait for route command: {e}"),
+        })?;
 
     Ok(())
 }
@@ -122,7 +215,14 @@ pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
 
 #[cfg(target_os = "macos")]
 fn get_gateway_for_macos(target: IpAddr) -> Result<RouteTarget> {
-    let output = run_command("route", ["-n", "get", &target.to_string()])
+    let mut args = vec!["-n", "get"];
+    let target_str = target.to_string();
+    if target.is_ipv6() {
+        args.push("-inet6");
+    }
+    args.push(&target_str);
+
+    let output = run_command("route", &args)
         .map_err(|e| RouteError::PlatformError {
             message: format!("failed to execute route command: {e}"),
         })?
@@ -222,6 +322,76 @@ fn get_gateway_for_linux(target: IpAddr) -> Result<RouteTarget> {
 
     Err(RouteError::PlatformError {
         message: "gateway or interface not found in ip route output".to_string(),
+    }
+    .into())
+}
+
+/// Retrieves the default gateway IP address (specifically for fallback when specific route lookup returns only interface).
+pub fn get_default_gateway() -> Result<IpAddr> {
+    #[cfg(target_os = "macos")]
+    {
+        get_default_gateway_macos()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Linux usually returns Gateway via 'ip route get' correctly, but for completeness:
+        // 'ip route show default'
+        Err(RouteError::PlatformError {
+            message: "Not implemented for Linux yet".to_string(),
+        }
+        .into())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err(RouteError::PlatformError {
+            message: "Unsupported platform".to_string(),
+        }
+        .into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_default_gateway_macos() -> Result<IpAddr> {
+    // Parse 'netstat -nr -f inet6' for 'default'
+    // Output line: default  fe80::...%en0  UGc  en0
+    let output = run_command("netstat", ["-nr", "-f", "inet6"])
+        .map_err(|e| RouteError::PlatformError {
+            message: format!("failed to execute netstat: {e}"),
+        })?
+        .wait_with_output()
+        .map_err(|e| RouteError::PlatformError {
+            message: format!("failed to wait for netstat: {e}"),
+        })?;
+
+    if !output.status.success() {
+        return Err(RouteError::PlatformError {
+            message: "netstat failed".to_string(),
+        }
+        .into());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        // Look for "default" in first column
+        if parts.len() > 1 && parts[0] == "default" {
+            // Gateway is usually in second column
+            let gateway_str = parts[1];
+            // Handle scope id (fe80::1%en0)
+            let clean_gateway_str = if let Some(idx) = gateway_str.find('%') {
+                &gateway_str[..idx]
+            } else {
+                gateway_str
+            };
+
+            if let Ok(ip) = clean_gateway_str.parse::<IpAddr>() {
+                return Ok(ip);
+            }
+        }
+    }
+
+    Err(RouteError::PlatformError {
+        message: "default gateway not found in netstat output".to_string(),
     }
     .into())
 }
