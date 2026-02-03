@@ -72,6 +72,7 @@ macro_rules! interface_impl {
             /// Creates a new interface with the specified parameters.
             fn create_interface(
                 _interface_address: IpNet,
+                _interface_address_v6: Option<IpNet>,
                 _mtu: u16,
                 _tunnel_gateway: Option<IpAddr>,
                 _interface_name: Option<&str>,
