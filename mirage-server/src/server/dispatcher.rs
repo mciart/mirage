@@ -1,17 +1,17 @@
 use mirage::network::tls_detect::{parse_client_hello, ClientHelloInfo};
 use mirage::Result;
 use mirage::{config::ServerConfig, MirageError};
-
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
 pub enum DispatchResult {
     /// Matched VPN traffic (authorized). Process as VPN.
-    Accept(TcpStream),
+    Accept(Box<dyn AsyncIo>),
     /// Matched probe traffic (valid SNI, invalid auth). Proxy to real target.
-    Proxy(TcpStream, String),
+    Proxy(Box<dyn AsyncIo>, String),
     /// Standard traffic (invalid SNI or generic). Fallback to standard TLS.
-    Fallback(TcpStream),
+    Fallback(Box<dyn AsyncIo>),
 }
 
 pub struct TlsDispatcher {
@@ -30,52 +30,53 @@ impl TlsDispatcher {
     }
 
     /// Inspects the initial bytes of a TCP stream to decide how to route it.
-    ///
-    /// This function reads the start of the stream to parse the ClientHello.
-    /// It then reconstructs the stream (by combining the read buffer with the stream)
-    /// so that subsequent handlers see the full data.
-    pub async fn dispatch(&self, stream: TcpStream) -> Result<DispatchResult> {
-        let mut buf = vec![0u8; 4096];
+    pub async fn dispatch(&self, mut stream: TcpStream) -> Result<DispatchResult> {
+        let mut buf = Vec::with_capacity(4096);
+        let mut temp_buf = [0u8; 1024];
 
-        // Peek at the data without consuming it from the socket's perspective?
-        // TcpStream::peek is available but might be platform specific or limited.
-        // A more robust way in async Rust is to read into a buffer, parse it,
-        // and then return a composite reader.
-        // However, since we need to pass a raw `TcpStream` to `tokio_boring::accept`,
-        // we cannot easily wrap it in a `Chain<Cursor<Vec<u8>>, TcpStream>`.
-        //
-        // FORTUNATELY, `tokio` TcpStream allows `peek`.
-        // Let's try `peek` first. If it fails to return enough data, we wait.
-
-        // Wait for readable
-        stream.readable().await?;
-
-        let n = stream.peek(&mut buf).await?;
-        if n == 0 {
-            // EOF or empty
-            return Ok(DispatchResult::Fallback(stream));
-        }
-
-        match parse_client_hello(&buf[..n]) {
-            Ok(Some(info)) => self.decide(stream, info),
-            Ok(None) => {
-                // Incomplete, but we scraped what we could.
-                // If it's not enough to be a ClientHello, assume fallback.
-                Ok(DispatchResult::Fallback(stream))
+        // Loop until we have enough data to decide or fail
+        loop {
+            // Check if we hit size limit to prevent DoS
+            if buf.len() > 16384 {
+                return Ok(DispatchResult::Fallback(Box::new(PrefixedStream::new(buf, stream))));
             }
-            Err(_) => {
-                // Not a valid ClientHello or protocol mismatch -> Fallback
-                Ok(DispatchResult::Fallback(stream))
+
+            let n = stream.read(&mut temp_buf).await?;
+            if n == 0 {
+                // EOF
+                if buf.is_empty() {
+                    // Empty stream, just return generic Fallback (will likely close)
+                     return Ok(DispatchResult::Fallback(Box::new(stream)));
+                } else {
+                     return Ok(DispatchResult::Fallback(Box::new(PrefixedStream::new(buf, stream))));
+                }
+            }
+            
+            buf.extend_from_slice(&temp_buf[..n]);
+
+            match parse_client_hello(&buf) {
+                Ok(Some(info)) => {
+                    let prefixed_stream = Box::new(PrefixedStream::new(buf, stream));
+                    return self.decide(prefixed_stream, info)
+                },
+                Ok(None) => {
+                    // Incomplete, continue reading
+                    continue; 
+                }
+                Err(_) => {
+                    // Not a valid ClientHello or protocol mismatch -> Fallback
+                    let prefixed_stream = Box::new(PrefixedStream::new(buf, stream));
+                    return Ok(DispatchResult::Fallback(prefixed_stream))
+                }
             }
         }
     }
 
-    fn decide(&self, stream: TcpStream, info: ClientHelloInfo) -> Result<DispatchResult> {
+    fn decide(&self, stream: Box<dyn AsyncIo>, info: ClientHelloInfo) -> Result<DispatchResult> {
         if let Some(sni) = &info.sni {
             if sni == &self.target_sni {
                 // SNI matches the disguised domain!
-                // Step 2: Check ALPN for Auth Token
-
+                
                 if let Some(alpns) = &info.alpn {
                     // Check if any ALPN string is in our valid_tokens list
                     for proto in alpns {
@@ -100,12 +101,71 @@ impl TlsDispatcher {
     }
 }
 
+/// A wrapper that makes `TcpStream` compatible with `dyn AsyncIo`
+/// Not stricly necessary if we use generics, but simplifies `DispatchResult` to use `Box<dyn AsyncIo>`
+pub trait AsyncIo: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync> AsyncIo for T {}
+
+/// A stream that reads from a prefix buffer first, then the underlying stream.
+pub struct PrefixedStream<S> {
+    prefix: std::io::Cursor<Vec<u8>>,
+    stream: S,
+}
+
+impl<S> PrefixedStream<S> {
+    pub fn new(prefix: Vec<u8>, stream: S) -> Self {
+        Self {
+            prefix: std::io::Cursor::new(prefix),
+            stream,
+        }
+    }
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for PrefixedStream<S> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        // First try to read from prefix
+        if self.prefix.position() < self.prefix.get_ref().len() as u64 {
+            let b = self.prefix.get_ref();
+            let pos = self.prefix.position() as usize;
+            let available = &b[pos..];
+            
+            let to_read = std::cmp::min(available.len(), buf.remaining());
+            buf.put_slice(&available[..to_read]);
+            self.prefix.set_position((pos + to_read) as u64);
+            return std::task::Poll::Ready(Ok(()));
+        }
+        
+        // If prefix exhausted, read from stream
+        std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for PrefixedStream<S> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
 /// Proxies a TCP connection to a remote target.
 /// This acts as a transparent TCP pipe.
-pub async fn proxy_connection(mut source: TcpStream, target_host: &str) -> Result<()> {
+pub async fn proxy_connection(source: Box<dyn AsyncIo>, target_host: &str) -> Result<()> {
     // Resolve target
-    // Note: In production code, we should cache DNS or use a specific resolver.
-    // Here we rely on system resolver for simplicity.
     let target_addr = format!("{}:443", target_host);
     info!("Proxying connection to {}", target_addr);
 
@@ -117,11 +177,14 @@ pub async fn proxy_connection(mut source: TcpStream, target_host: &str) -> Resul
     })?;
 
     // Enable TCP_NODELAY on both sides for responsiveness
-    let _ = source.set_nodelay(true);
+    // Note: source is boxed trait object, we can't easily set nodelay unless we downcast
+    // or assume it was already set. For `TcpStream` it was set. 
+    // For `PrefixedStream`, we should set it on inner `TcpStream` *before* boxing.
+    // We'll skip setting it on source here for now.
     let _ = target.set_nodelay(true);
 
     // Bidirectional copy
-    let (mut source_read, mut source_write) = source.split();
+    let (mut source_read, mut source_write) = tokio::io::split(source);
     let (mut target_read, mut target_write) = target.split();
 
     // Use tokio::io::copy for efficient piping
@@ -136,7 +199,6 @@ pub async fn proxy_connection(mut source: TcpStream, target_host: &str) -> Resul
         }
         Err(e) => {
             warn!("Proxy connection ended with error: {}", e);
-            // It's normal for proxy connections to be cut abruptly
             Ok(())
         }
     }

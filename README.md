@@ -36,10 +36,11 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
 - 采用 Length-Prefixed 帧协议，解决 TCP 粘包问题。
 - 设计为未来支持 **XTLS-Vision** 流控，旨在消除 TLS-in-TLS 双重加密开销，实现原生 HTTPS 级别的性能。
 
-### 4. 双模共存 (Dual Mode) 🌗
-单端口 (443) 同时支持 **标准 TLS** 和 **Reality** 两种模式：
-- **Reality 优先**：服务端优先检查 SNI 是否匹配伪装域名。匹配成功则**强制**进入 Reality 流程 (转发或代理)，确保探测者永远无法获取标准证书。
-- **智能回落**：仅当 SNI 不匹配伪装目标时，才加载标准证书进入普通 TLS 模式，兼容旧版客户端。
+### 4. 多模共存 (Multi-Mode) 🌗
+服务端单端口 (443) 同时支持 **标准 TLS** 和 **Reality** 等多种协议，客户端拥有极高的连接灵活性：
+- **自定义优先级**：客户端可通过配置文件定义 `enabled_protocols` 列表（例如 `["reality", "tcp-tls"]`），决定连接尝试的顺序。
+- **按需开启**：您可以为不同的客户端单独配置开启哪些协议。例如，为不方便安装证书的设备仅开启 Reality，或为特定环境仅开启标准 TLS。
+- **智能回退**：如果首选协议连接失败（被阻断或超时），客户端会自动尝试列表中的下一个协议，确保连接的高可用性。
 
 ### 5. 全面双栈支持 (Full Dual Stack) 🌐
 - **IPv4/IPv6 并行**：隧道内部同时分配 V4 和 V6 地址，完美支持双栈流量。
@@ -181,8 +182,13 @@ ip6tables -t nat -A POSTROUTING -s fd00::/64 -o eth0 -j MASQUERADE
 **关键：放行转发流量 (FORWARD Chain)**:
 如果系统的默认策略是 DROP，您必须显式放行 VPN 流量，否则包会被内核丢弃！
 ```bash
+# IPv4
 iptables -I FORWARD -o tun+ -j ACCEPT
 iptables -I FORWARD -i tun+ -j ACCEPT
+
+# IPv6 (不要忘记这个！)
+ip6tables -I FORWARD -o tun+ -j ACCEPT
+ip6tables -I FORWARD -i tun+ -j ACCEPT
 ```
 
 ---
