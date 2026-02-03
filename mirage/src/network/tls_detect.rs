@@ -23,14 +23,16 @@ pub struct ClientHelloInfo {
 
 /// Parses the beginning of a TCP stream to extract ClientHello information.
 /// returns `Ok(Some(info))` if successful, `Ok(None)` if incomplete, or `Err` if invalid.
-pub fn parse_client_hello(buf: &[u8]) -> std::result::Result<Option<ClientHelloInfo>, TlsParseError> {
+pub fn parse_client_hello(
+    buf: &[u8],
+) -> std::result::Result<Option<ClientHelloInfo>, TlsParseError> {
     let mut cursor = Cursor::new(buf);
 
     // 1. TLS Record Header (5 bytes)
     if cursor.remaining() < 5 {
         return Ok(None);
     }
-    
+
     let content_type = cursor.get_u8();
     let _version = cursor.get_u16();
     let length = cursor.get_u16() as usize;
@@ -80,7 +82,7 @@ pub fn parse_client_hello(buf: &[u8]) -> std::result::Result<Option<ClientHelloI
     if reader.remaining() < session_id_len {
         return Err(TlsParseError::ProtocolError);
     }
-    
+
     // Extract Session ID
     let mut session_id = None;
     if session_id_len > 0 {
@@ -113,7 +115,11 @@ pub fn parse_client_hello(buf: &[u8]) -> std::result::Result<Option<ClientHelloI
     if reader.remaining() < 2 {
         // Extensions are optional in TLS 1.0 but mandatory in 1.2+ practically.
         // If no extensions, we are done.
-        return Ok(Some(ClientHelloInfo { sni: None, session_id, alpn: None }));
+        return Ok(Some(ClientHelloInfo {
+            sni: None,
+            session_id,
+            alpn: None,
+        }));
     }
 
     let extensions_len = reader.get_u16() as usize;
@@ -121,8 +127,10 @@ pub fn parse_client_hello(buf: &[u8]) -> std::result::Result<Option<ClientHelloI
         return Err(TlsParseError::ProtocolError);
     }
 
-    let mut ext_reader = Cursor::new(&reader.get_ref()[reader.position() as usize..reader.position() as usize + extensions_len]);
-    
+    let mut ext_reader = Cursor::new(
+        &reader.get_ref()[reader.position() as usize..reader.position() as usize + extensions_len],
+    );
+
     let mut sni = None;
     let mut alpn = None;
 
@@ -131,55 +139,74 @@ pub fn parse_client_hello(buf: &[u8]) -> std::result::Result<Option<ClientHelloI
         let ext_len = ext_reader.get_u16() as usize;
 
         if ext_reader.remaining() < ext_len {
-            break; 
+            break;
         }
 
         match ext_type {
             // Extension: Server Name (0x0000)
             0x0000 => {
-                 if ext_len < 2 { ext_reader.advance(ext_len); continue; }
-                 // SNI List Length
-                 let _list_len = ext_reader.get_u16();
-                 // Name Type (1 byte) + Name Len (2 bytes)
-                 if ext_reader.remaining() < 3 { ext_reader.advance(ext_len - 2); continue; } // -2 because we read list_len
-                 let name_type = ext_reader.get_u8();
-                 let name_len = ext_reader.get_u16() as usize;
-                 
-                 // name_type 0 is host_name
-                 if name_type == 0 && ext_reader.remaining() >= name_len {
-                     let mut name_bytes = vec![0u8; name_len];
-                     ext_reader.copy_to_slice(&mut name_bytes);
-                     sni = String::from_utf8(name_bytes).ok();
-                 }
-                 // Advance remaining if any (unlikely for SNI but technically list)
-                 // Just continue loop actually, we consumed what we assumed.
-                 // Better to skip the rest of this extension body correctly:
-                 // The ext_reader is at start_of_ext + 4 + ...
-                 // We should just use a slice reader for specific extensions to be safe.
+                if ext_len < 2 {
+                    ext_reader.advance(ext_len);
+                    continue;
+                }
+                // SNI List Length
+                let _list_len = ext_reader.get_u16();
+                // Name Type (1 byte) + Name Len (2 bytes)
+                if ext_reader.remaining() < 3 {
+                    ext_reader.advance(ext_len - 2);
+                    continue;
+                } // -2 because we read list_len
+                let name_type = ext_reader.get_u8();
+                let name_len = ext_reader.get_u16() as usize;
+
+                // name_type 0 is host_name
+                if name_type == 0 && ext_reader.remaining() >= name_len {
+                    let mut name_bytes = vec![0u8; name_len];
+                    ext_reader.copy_to_slice(&mut name_bytes);
+                    sni = String::from_utf8(name_bytes).ok();
+                }
+                // Advance remaining if any (unlikely for SNI but technically list)
+                // Just continue loop actually, we consumed what we assumed.
+                // Better to skip the rest of this extension body correctly:
+                // The ext_reader is at start_of_ext + 4 + ...
+                // We should just use a slice reader for specific extensions to be safe.
             }
             // Extension: ALPN (0x0010 = 16)
             0x0010 => {
-                if ext_len < 2 { ext_reader.advance(ext_len); continue; }
+                if ext_len < 2 {
+                    ext_reader.advance(ext_len);
+                    continue;
+                }
                 let list_len = ext_reader.get_u16() as usize;
-                if ext_reader.remaining() < list_len { ext_reader.advance(ext_reader.remaining()); continue; }
+                if ext_reader.remaining() < list_len {
+                    ext_reader.advance(ext_reader.remaining());
+                    continue;
+                }
 
-                let mut alpn_reader = Cursor::new(&ext_reader.get_ref()[ext_reader.position() as usize..ext_reader.position() as usize + list_len]);
+                let mut alpn_reader = Cursor::new(
+                    &ext_reader.get_ref()
+                        [ext_reader.position() as usize..ext_reader.position() as usize + list_len],
+                );
                 let mut protocols = Vec::new();
 
                 while alpn_reader.has_remaining() {
-                    if alpn_reader.remaining() < 1 { break; }
+                    if alpn_reader.remaining() < 1 {
+                        break;
+                    }
                     let proto_len = alpn_reader.get_u8() as usize;
-                    if alpn_reader.remaining() < proto_len { break; }
+                    if alpn_reader.remaining() < proto_len {
+                        break;
+                    }
                     let mut proto_bytes = vec![0u8; proto_len];
                     alpn_reader.copy_to_slice(&mut proto_bytes);
                     if let Ok(proto_str) = String::from_utf8(proto_bytes) {
-                       protocols.push(proto_str);
+                        protocols.push(proto_str);
                     }
                 }
                 alpn = Some(protocols);
-                
+
                 // Advance main reader past this extension
-                ext_reader.advance(list_len); 
+                ext_reader.advance(list_len);
                 // We manually advanced list_len, so we don't need to advance ext_len again?
                 // Wait, ext_len includes the list_len bytes (2 bytes)?
                 // RFC 7301:
@@ -192,12 +219,16 @@ pub fn parse_client_hello(buf: &[u8]) -> std::result::Result<Option<ClientHelloI
                 continue; // We already advanced.
             }
             _ => {
-                 ext_reader.advance(ext_len);
+                ext_reader.advance(ext_len);
             }
         }
     }
 
-    Ok(Some(ClientHelloInfo { sni, session_id, alpn }))
+    Ok(Some(ClientHelloInfo {
+        sni,
+        session_id,
+        alpn,
+    }))
 }
 
 fn read_u24(cursor: &mut Cursor<&[u8]>) -> u32 {

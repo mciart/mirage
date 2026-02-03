@@ -227,7 +227,7 @@ users_file = "users.db"
   - [x] Reality 协议 (ALPN Auth, SNI Dispatcher)
   - [x] 双模共存与回退 (Protocol Fallback)
 - [ ] **Phase 3**: XTLS-Vision 流控优化
-- [ ] **Phase 4**: CDN 支持 (WebSocket)
+- [ ] **Phase 4**: CDN 支持 (WebSocket, gRPC 等)
 
 ---
 

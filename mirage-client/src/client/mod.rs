@@ -151,7 +151,9 @@ impl MirageClient {
 
         let protocols = &self.config.connection.enabled_protocols;
         if protocols.is_empty() {
-             return Err(MirageError::config_error("No enabled protocols specified in configuration"));
+            return Err(MirageError::config_error(
+                "No enabled protocols specified in configuration",
+            ));
         }
 
         info!("Connection Strategy: Enabled protocols: {:?}", protocols);
@@ -160,12 +162,12 @@ impl MirageClient {
 
         for protocol in protocols {
             info!("Attempting connection using protocol: {}", protocol);
-            
+
             match self.connect_with_protocol(server_addr, protocol).await {
                 Ok(stream) => {
                     info!("Successfully connected using protocol: {}", protocol);
                     return Ok((stream, server_addr));
-                },
+                }
                 Err(e) => {
                     warn!("Failed to connect using {}: {}", protocol, e);
                     last_error = Some(e);
@@ -175,11 +177,19 @@ impl MirageClient {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| MirageError::connection_failed("All connection attempts failed")))
+        Err(last_error
+            .unwrap_or_else(|| MirageError::connection_failed("All connection attempts failed")))
     }
 
-    async fn connect_with_protocol(&self, server_addr: SocketAddr, protocol: &str) -> Result<SslStream<TcpStream>> {
-        info!("Connecting: {} ({})", self.config.connection_string, protocol);
+    async fn connect_with_protocol(
+        &self,
+        server_addr: SocketAddr,
+        protocol: &str,
+    ) -> Result<SslStream<TcpStream>> {
+        info!(
+            "Connecting: {} ({})",
+            self.config.connection_string, protocol
+        );
 
         // Create TCP connection
         let tcp_stream = TcpStream::connect(server_addr).await?;
@@ -198,20 +208,23 @@ impl MirageClient {
             connector_builder.set_verify(SslVerifyMode::NONE);
         } else {
             connector_builder.set_verify(SslVerifyMode::PEER);
-             // Load trusted CA certificates from files
+            // Load trusted CA certificates from files
             for path in &self.config.authentication.trusted_certificate_paths {
                 connector_builder.set_ca_file(path).map_err(|e| {
                     MirageError::config_error(format!("Failed to load CA file {:?}: {}", path, e))
                 })?;
             }
-             // Load trusted CA certificates from strings
+            // Load trusted CA certificates from strings
             for pem in &self.config.authentication.trusted_certificates {
                 let cert = boring::x509::X509::from_pem(pem.as_bytes()).map_err(|e| {
                     MirageError::config_error(format!("Failed to parse CA certificate: {}", e))
                 })?;
-                connector_builder.cert_store_mut().add_cert(cert).map_err(|e| {
-                     MirageError::system(format!("Failed to add CA certificate to store: {}", e))
-                })?;
+                connector_builder
+                    .cert_store_mut()
+                    .add_cert(cert)
+                    .map_err(|e| {
+                        MirageError::system(format!("Failed to add CA certificate to store: {}", e))
+                    })?;
             }
         }
 
@@ -225,9 +238,9 @@ impl MirageClient {
             mirage::crypto::impersonate::apply_chrome_fingerprint(&mut connector_builder)?;
 
             // ALPN Auth Token
-             // Configure ALPN protocols (Chrome order + Auth Token)
+            // Configure ALPN protocols (Chrome order + Auth Token)
             let mut protocols_to_send: Vec<Vec<u8>> = TLS_ALPN_PROTOCOLS.iter().cloned().collect();
-            
+
             // Inject Reality ShortID as ALPN token
             if let Some(token) = self.config.reality.short_ids.first() {
                 protocols_to_send.push(token.as_bytes().to_vec());
@@ -241,40 +254,44 @@ impl MirageClient {
                     v
                 })
                 .collect();
-            
+
             connector_builder
                 .set_alpn_protos(&alpn_protocols)
                 .map_err(|e| MirageError::system(format!("Failed to set ALPN: {e}")))?;
-            
+
             sni.clone()
         } else {
-             // Standard TCP/TLS (Fallback mode)
-             // Use connection string hostname as SNI (if available) or Reality target?
-             // Usually standard TLS connects to the actual server domain.
-             // If we use the "disguised" domain, we will just proxy.
-             // If we use the "real" domain (if it has a cert), we might connect.
-             // BUT, the server is hiding behind the disguised domain. 
-             // To trigger "Fallback" on the server, we must simply NOT match the Reality criteria.
-             // Server Reality Match: SNI == target && ALPN == Token.
-             // Server Fallback: SNI != target OR (SNI == target && ALPN != Token).
-             
-             // So if we send SNI=target but NO ALPN Token, we get PROXIED (not VPN).
-             // To get VPN via Fallback, we must hit the "Fallback" case AND the server must Accept it.
-             // But the dispatcher Logic says:
-             // Proxy if (SNI == target && Invalid Token).
-             // Fallback if (SNI != target).
-             // So if we want to use "Standard TLS", we must use a DIFFERENT SNI (e.g. the real IP or a dedicated VPN domain).
-             // Let's assume the user configures `target_sni` for Reality, but for Standard TLS they might rely on `connection_string` hostname.
-             
-             let host = self.config.connection_string.split(':').next().unwrap_or("");
-             debug!("Using SNI (Standard): {}", host);
-             
-             // No Chrome Fingerprint, No Special ALPN (unless HTTP/2 etc needed)
-             connector_builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
-             
-             host.to_string()
-        };
+            // Standard TCP/TLS (Fallback mode)
+            // Use connection string hostname as SNI (if available) or Reality target?
+            // Usually standard TLS connects to the actual server domain.
+            // If we use the "disguised" domain, we will just proxy.
+            // If we use the "real" domain (if it has a cert), we might connect.
+            // BUT, the server is hiding behind the disguised domain.
+            // To trigger "Fallback" on the server, we must simply NOT match the Reality criteria.
+            // Server Reality Match: SNI == target && ALPN == Token.
+            // Server Fallback: SNI != target OR (SNI == target && ALPN != Token).
 
+            // So if we send SNI=target but NO ALPN Token, we get PROXIED (not VPN).
+            // To get VPN via Fallback, we must hit the "Fallback" case AND the server must Accept it.
+            // But the dispatcher Logic says:
+            // Proxy if (SNI == target && Invalid Token).
+            // Fallback if (SNI != target).
+            // So if we want to use "Standard TLS", we must use a DIFFERENT SNI (e.g. the real IP or a dedicated VPN domain).
+            // Let's assume the user configures `target_sni` for Reality, but for Standard TLS they might rely on `connection_string` hostname.
+
+            let host = self
+                .config
+                .connection_string
+                .split(':')
+                .next()
+                .unwrap_or("");
+            debug!("Using SNI (Standard): {}", host);
+
+            // No Chrome Fingerprint, No Special ALPN (unless HTTP/2 etc needed)
+            connector_builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
+
+            host.to_string()
+        };
 
         let connector = connector_builder.build();
         let ssl_config = connector
@@ -293,5 +310,4 @@ impl MirageClient {
 
         Ok(tls_stream)
     }
-
 }

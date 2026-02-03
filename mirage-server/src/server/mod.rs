@@ -149,7 +149,7 @@ impl MirageServer {
 
                     // Dispatch traffic (Reality / Standard / Proxy)
                     let dispatcher = TlsDispatcher::new(&self.config);
-                    
+
                     // Dispatch logic needs to be robust against probing
                     // We dispatch in a separate spawn to not block the acceptor loop
                     // while waiting for peek bytes.
@@ -170,7 +170,7 @@ impl MirageServer {
                                         return Ok(());
                                     }
                                 };
-                                
+
                                 Self::handle_client(
                                     tls_stream,
                                     remote_addr,

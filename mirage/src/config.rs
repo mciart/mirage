@@ -310,8 +310,6 @@ impl ConnectionConfig {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

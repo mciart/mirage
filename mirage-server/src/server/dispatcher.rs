@@ -1,6 +1,6 @@
-use mirage::Result;
 use mirage::network::tls_detect::{parse_client_hello, ClientHelloInfo};
-use mirage::{MirageError, config::ServerConfig};
+use mirage::Result;
+use mirage::{config::ServerConfig, MirageError};
 
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
@@ -22,7 +22,7 @@ pub struct TlsDispatcher {
 impl TlsDispatcher {
     pub fn new(config: &ServerConfig) -> Self {
         let valid_tokens = config.reality.short_ids.clone();
-        
+
         Self {
             target_sni: config.reality.target_sni.clone(),
             valid_tokens,
@@ -30,13 +30,13 @@ impl TlsDispatcher {
     }
 
     /// Inspects the initial bytes of a TCP stream to decide how to route it.
-    /// 
+    ///
     /// This function reads the start of the stream to parse the ClientHello.
     /// It then reconstructs the stream (by combining the read buffer with the stream)
     /// so that subsequent handlers see the full data.
     pub async fn dispatch(&self, stream: TcpStream) -> Result<DispatchResult> {
         let mut buf = vec![0u8; 4096];
-        
+
         // Peek at the data without consuming it from the socket's perspective?
         // TcpStream::peek is available but might be platform specific or limited.
         // A more robust way in async Rust is to read into a buffer, parse it,
@@ -46,10 +46,10 @@ impl TlsDispatcher {
         //
         // FORTUNATELY, `tokio` TcpStream allows `peek`.
         // Let's try `peek` first. If it fails to return enough data, we wait.
-        
+
         // Wait for readable
         stream.readable().await?;
-        
+
         let n = stream.peek(&mut buf).await?;
         if n == 0 {
             // EOF or empty
@@ -59,7 +59,7 @@ impl TlsDispatcher {
         match parse_client_hello(&buf[..n]) {
             Ok(Some(info)) => self.decide(stream, info),
             Ok(None) => {
-                // Incomplete, but we scraped what we could. 
+                // Incomplete, but we scraped what we could.
                 // If it's not enough to be a ClientHello, assume fallback.
                 Ok(DispatchResult::Fallback(stream))
             }
@@ -75,18 +75,21 @@ impl TlsDispatcher {
             if sni == &self.target_sni {
                 // SNI matches the disguised domain!
                 // Step 2: Check ALPN for Auth Token
-                
+
                 if let Some(alpns) = &info.alpn {
-                     // Check if any ALPN string is in our valid_tokens list
-                     for proto in alpns {
-                         if self.valid_tokens.contains(proto) {
-                             debug!("Reality Match: SNI={} ALPN={} -> VPN", sni, proto);
-                             return Ok(DispatchResult::Accept(stream));
-                         }
-                     }
+                    // Check if any ALPN string is in our valid_tokens list
+                    for proto in alpns {
+                        if self.valid_tokens.contains(proto) {
+                            debug!("Reality Match: SNI={} ALPN={} -> VPN", sni, proto);
+                            return Ok(DispatchResult::Accept(stream));
+                        }
+                    }
                 }
-                
-                info!("Reality Probe Detected: SNI={} No Valid Auth Token -> Proxying to {}", sni, self.target_sni);
+
+                info!(
+                    "Reality Probe Detected: SNI={} No Valid Auth Token -> Proxying to {}",
+                    sni, self.target_sni
+                );
                 return Ok(DispatchResult::Proxy(stream, self.target_sni.clone()));
             }
         }
@@ -107,7 +110,10 @@ pub async fn proxy_connection(mut source: TcpStream, target_host: &str) -> Resul
     info!("Proxying connection to {}", target_addr);
 
     let mut target = TcpStream::connect(&target_addr).await.map_err(|e| {
-        MirageError::connection_failed(format!("Failed to connect to proxy target {}: {}", target_addr, e))
+        MirageError::connection_failed(format!(
+            "Failed to connect to proxy target {}: {}",
+            target_addr, e
+        ))
     })?;
 
     // Enable TCP_NODELAY on both sides for responsiveness
