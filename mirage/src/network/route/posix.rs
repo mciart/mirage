@@ -98,7 +98,7 @@ pub fn get_gateway_for(target: IpAddr) -> Result<IpAddr> {
 
 #[cfg(target_os = "macos")]
 fn get_gateway_for_macos(target: IpAddr) -> Result<IpAddr> {
-    let output = run_command("route", &["-n", "get", &target.to_string()])
+    let output = run_command("route", ["-n", "get", &target.to_string()])
         .map_err(|e| RouteError::PlatformError {
             message: format!("failed to execute route command: {e}"),
         })?
@@ -146,7 +146,7 @@ fn get_gateway_for_macos(target: IpAddr) -> Result<IpAddr> {
 
 #[cfg(target_os = "linux")]
 fn get_gateway_for_linux(target: IpAddr) -> Result<IpAddr> {
-    let output = run_command("ip", &["route", "get", &target.to_string()])
+    let output = run_command("ip", ["route", "get", &target.to_string()])
         .map_err(|e| RouteError::PlatformError {
             message: format!("failed to execute ip command: {e}"),
         })?
