@@ -239,7 +239,8 @@ impl MirageServer {
             client_address,
             connection_receiver,
             ingress_queue,
-        ).await;
+        )
+        .await;
 
         if let Err(e) = &relay_result {
             warn!("Connection relay error for {}: {}", client_ip, e);

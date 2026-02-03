@@ -169,16 +169,22 @@ impl MirageClient {
 
             // Load trusted CA certificates from files
             for path in &self.config.authentication.trusted_certificate_paths {
-                connector_builder.set_ca_file(path)
-                    .map_err(|e| MirageError::config_error(format!("Failed to load CA file {:?}: {}", path, e)))?;
+                connector_builder.set_ca_file(path).map_err(|e| {
+                    MirageError::config_error(format!("Failed to load CA file {:?}: {}", path, e))
+                })?;
             }
 
             // Load trusted CA certificates from strings
             for pem in &self.config.authentication.trusted_certificates {
-                let cert = boring::x509::X509::from_pem(pem.as_bytes())
-                    .map_err(|e| MirageError::config_error(format!("Failed to parse CA certificate: {}", e)))?;
-                connector_builder.cert_store_mut().add_cert(cert)
-                    .map_err(|e| MirageError::system(format!("Failed to add CA certificate to store: {}", e)))?;
+                let cert = boring::x509::X509::from_pem(pem.as_bytes()).map_err(|e| {
+                    MirageError::config_error(format!("Failed to parse CA certificate: {}", e))
+                })?;
+                connector_builder
+                    .cert_store_mut()
+                    .add_cert(cert)
+                    .map_err(|e| {
+                        MirageError::system(format!("Failed to add CA certificate to store: {}", e))
+                    })?;
             }
         }
 

@@ -31,11 +31,16 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
 ### 2. Reality 协议集成 🌐
 服务端不再仅仅是一个 VPN 端点，而是一个智能的 SNI 反向代理：
 - **验证通过**：进入 VPN 隧道模式，高速传输数据。
-- **验证失败**：无缝转发到真实的目标网站（如 www.microsoft.com），探测者只能看到合法的网站内容。
+- **验证失败**：无缝转发到真实的目标网站（如 `www.microsoft.com`），探测者只能看到合法的网站内容。
 
 ### 3. 高性能 TCP 传输 🚀
 - 采用 Length-Prefixed 帧协议，解决 TCP 粘包问题。
 - 设计为未来支持 **XTLS-Vision** 流控，旨在消除 TLS-in-TLS 双重加密开销，实现原生 HTTPS 级别的性能。
+
+### 4. 双模共存 (Dual Mode) 🌗
+单端口 (443) 同时支持 **标准 TLS** 和 **Reality** 两种模式：
+- **智能分流**：根据客户端 SNI 自动识别流量，合法 SNI 走标准 TLS，伪装 SNI 走 Reality。
+- **极致兼容**：既能满足高隐蔽性需求，也能兼容不支持 Reality 的旧版客户端。
 
 ---
 
