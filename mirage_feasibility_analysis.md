@@ -60,10 +60,10 @@ XTLS-Vision 的核心创新是**识别并直通内层 TLS 流量**：
 ```mermaid
 graph LR
     A[用户 HTTPS 请求] --> B{Vision 流控}
-    B -->|TLS 握手阶段| C[正常加密传输]
-    B -->|TLS 数据阶段| D[直通/Splice<br>跳过外层加密]
-    C --> E[外层 TLS 隧道]
-    D --> F[原始 TCP 直传]
+    B -->|TLS 握手阶段| C["正常加密传输"]
+    B -->|TLS 数据阶段| D["直通/Splice<br>跳过外层加密"]
+    C --> E["外层 TLS 隧道"]
+    D --> F["原始 TCP 直传"]
 ```
 
 **Vision 核心机制**：
@@ -169,15 +169,15 @@ fn configure_chrome_fingerprint(builder: &mut SslConnectorBuilder) {
 
 ```mermaid
 graph TD
-    A[TLS 指纹方案] --> B[🏆 boring + tokio-boring]
-    A --> C[ja-tools + rustls]
-    A --> D[FFI 调 Go uTLS]
-    A --> E[手写 ClientHello]
+    A["TLS 指纹方案"] --> B["🏆 boring + tokio-boring"]
+    A --> C["ja-tools + rustls"]
+    A --> D["FFI 调 Go uTLS"]
+    A --> E["手写 ClientHello"]
 
-    B --> B1[指纹真实度: 100%<br>维护成本: 低<br>编译: 需 C++ 工具链]
-    C --> C1[指纹真实度: 70%<br>维护成本: 高<br>编译: 纯 Rust]
-    D --> D1[指纹真实度: 95%<br>性能: 有损耗<br>复杂度: 高]
-    E --> E1[指纹真实度: 可变<br>工作量: 巨大<br>风险: 高]
+    B --> B1["指纹真实度: 100%<br>维护成本: 低<br>编译: 需 C++ 工具链"]
+    C --> C1["指纹真实度: 70%<br>维护成本: 高<br>编译: 纯 Rust"]
+    D --> D1["指纹真实度: 95%<br>性能: 有损耗<br>复杂度: 高"]
+    E --> E1["指纹真实度: 可变<br>工作量: 巨大<br>风险: 高"]
 
     style B fill:#90EE90
 ```
@@ -231,10 +231,10 @@ sequenceDiagram
 ```mermaid
 graph TD
     A[流量进入 TCP 443] --> B{解析 ClientHello SNI}
-    B -->|SNI: vpn.myself.com| C[标准 TLS 模式<br>(加载 server.crt)]
+    B -->|SNI: vpn.myself.com| C["标准 TLS 模式<br>(加载 server.crt)"]
     B -->|SNI: www.microsoft.com| D{验证 Reality ShortId}
-    D -->|验证通过| E[Reality VPN 模式<br>(隐蔽隧道)]
-    D -->|验证失败| F[SNI 转发<br>(直连 www.microsoft.com)]
+    D -->|验证通过| E["Reality VPN 模式<br>(隐蔽隧道)"]
+    D -->|验证失败| F["SNI 转发<br>(直连 www.microsoft.com)"]
     B -->|无 SNI / 其他| F
 ```
 

@@ -129,6 +129,35 @@ reuse_socket = true
 
 ---
 
+## 用户管理 (User Management)
+
+Mirage 使用 `Argon2` 算法存储加密的用户密码。服务端提供了配套的 `mirage-users` 命令行工具来管理用户文件。
+
+### 1. 安装工具
+`mirage-users` 包含在 `mirage-server` 包中：
+```bash
+cargo install --path mirage-server
+# 现在可以使用 mirage-users 命令
+```
+
+### 2. 使用方法
+```bash
+# 添加新用户 (交互式输入密码)
+mirage-users --add --users-file-path users.db
+
+# 删除用户
+mirage-users --delete --users-file-path users.db
+```
+
+### 3. 服务端配置
+生成好用户文件后，在 `server.toml` 中配置路径：
+```toml
+[authentication]
+type = "file"
+users_file = "users.db"
+```
+---
+
 ## 附录：Feasibility Analysis (可行性分析)
 
 详情请参阅项目中的 [mirage_feasibility_analysis.md](./mirage_feasibility_analysis.md) 文档，其中详细阐述了从 QUIC 迁移到 TCP/TLS 的技术决策过程和路线图。

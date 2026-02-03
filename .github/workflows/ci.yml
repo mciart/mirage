@@ -53,11 +53,6 @@ jobs:
             artifact_name: mirage-linux-aarch64
             use_cross: true
             cmd: cross
-          - os: ubuntu-latest
-            target: x86_64-unknown-freebsd
-            artifact_name: mirage-freebsd-x64
-            use_cross: true
-            cmd: cross
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: mirage-windows-x64
@@ -110,6 +105,7 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/mirage-client dist/
           cp target/${{ matrix.target }}/release/mirage-server dist/
+          cp target/${{ matrix.target }}/release/mirage-users dist/
           cp examples/client.toml dist/client-example.toml
           cp examples/server.toml dist/server-example.toml
 
@@ -119,6 +115,7 @@ jobs:
           mkdir dist
           copy target\${{ matrix.target }}\release\mirage-client.exe dist\
           copy target\${{ matrix.target }}\release\mirage-server.exe dist\
+          copy target\${{ matrix.target }}\release\mirage-users.exe dist\
           copy examples\client.toml dist\client-example.toml
           copy examples\server.toml dist\server-example.toml
 
