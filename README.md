@@ -7,7 +7,7 @@
 > [!WARNING]
 > **🚧 项目开发中 (Work in Progress) 🚧**
 >
-> Mirage 目前处于 **Phase 2 (Reality 服务端)** 开发阶段。虽然代码可以通过编译 (`cargo build --release`)，但可能仍不稳定。
+> Mirage 目前处于 **Phase 3 (XTLS-Vision 流控)** 开发阶段。虽然代码可以通过编译 (`cargo build --release`)，但可能仍不稳定。
 > 详情请查阅 [Mirage 可行性分析](./mirage_feasibility_analysis.md)。
 
 > **Mirage** 是一款基于 Rust 开发的下一代 VPN 客户端和服务端，旨在提供极致的隐蔽性和性能。

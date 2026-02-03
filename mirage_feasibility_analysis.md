@@ -286,7 +286,7 @@ Mirage 目前的 TCP/TLS 直连模式虽然高效，但如果 IP 被墙，流量
 
 ---
 
-### Phase 1: TCP/TLS 基础隧道 (2-3 周) 🟡
+### Phase 1: TCP/TLS 基础隧道 (2-3 周) 🟢
 
 **目标**：用 BoringSSL 替换 QUIC，实现基础 TCP VPN
 
@@ -305,7 +305,7 @@ quincy (QUIC)  →  mirage (TCP/TLS over BoringSSL)
 
 ---
 
-### Phase 2: Reality 服务端 (2-3 周) 🟡
+### Phase 2: Reality 服务端 (2-3 周) 🟢
 
 **目标**：实现服务端伪装和流量分流
 
@@ -358,7 +358,7 @@ quincy (QUIC)  →  mirage (TCP/TLS over BoringSSL)
 
 ---
 
-### Phase 4: 生产就绪 (2-3 周) �
+### Phase 4: 生产就绪 (2-3 周) 🟡
 
 **目标**：完善功能，准备发布
 
