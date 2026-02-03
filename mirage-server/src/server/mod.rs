@@ -229,7 +229,7 @@ impl MirageServer {
         let client_ip = client_address.addr();
         connection_queues.insert(client_ip, connection_sender.clone());
         if let Some(v6) = client_address_v6 {
-             connection_queues.insert(v6.addr(), connection_sender);
+            connection_queues.insert(v6.addr(), connection_sender);
         }
 
         info!("Client {} authenticated, ready for data relay", client_ip);
@@ -254,7 +254,7 @@ impl MirageServer {
         // Cleanup on disconnect
         connection_queues.remove(&client_ip);
         address_pool.release_address(&client_ip);
-        
+
         if let Some(v6) = client_address_v6 {
             connection_queues.remove(&v6.addr());
             address_pool.release_address(&v6.addr());

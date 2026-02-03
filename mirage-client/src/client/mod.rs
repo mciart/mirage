@@ -66,11 +66,11 @@ impl MirageClient {
         info!("Successfully authenticated");
         info!("Received client address: {client_address} (v4)");
         if let Some(v6) = client_address_v6 {
-             info!("Received client address: {v6} (v6)");
+            info!("Received client address: {v6} (v6)");
         }
         info!("Received server address: {server_address} (v4)");
         if let Some(v6) = server_address_v6 {
-             info!("Received server address: {v6} (v6)");
+            info!("Received server address: {v6} (v6)");
         }
 
         // Store the addresses for later access

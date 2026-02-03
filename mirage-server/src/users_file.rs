@@ -88,7 +88,10 @@ impl UsersFileClientAuthenticator {
 
 #[async_trait]
 impl ServerAuthenticator for UsersFileServerAuthenticator {
-    async fn authenticate_user(&self, authentication_payload: Value) -> Result<(String, IpNet, Option<IpNet>)> {
+    async fn authenticate_user(
+        &self,
+        authentication_payload: Value,
+    ) -> Result<(String, IpNet, Option<IpNet>)> {
         let payload: UsersFilePayload = serde_json::from_value(authentication_payload)
             .map_err(|_| AuthError::InvalidPayload)?;
 
@@ -96,9 +99,7 @@ impl ServerAuthenticator for UsersFileServerAuthenticator {
             .authenticate(&payload.username, payload.password)
             .await?;
 
-        let (client_address_v4, client_address_v6) = self
-            .address_pool
-            .next_available_address();
+        let (client_address_v4, client_address_v6) = self.address_pool.next_available_address();
 
         let client_address_v4 = client_address_v4.ok_or(AuthError::StoreUnavailable)?;
 

@@ -57,14 +57,16 @@ impl InterfaceIO for TunRsInterface {
                 let mut b = builder.ipv4(addr, netmask, destination);
 
                 if let Some(IpNet::V6(v6_net)) = interface_address_v6 {
-                     b = b.ipv6(v6_net.addr(), v6_net.prefix_len());
+                    b = b.ipv6(v6_net.addr(), v6_net.prefix_len());
                 }
                 b
             }
             IpNet::V6(_) => {
-                 return Err(InterfaceError::ConfigurationFailed {
-                     reason: "Primary interface address must be IPv4 in dual-stack mode (for now)".to_string()
-                 }.into());
+                return Err(InterfaceError::ConfigurationFailed {
+                    reason: "Primary interface address must be IPv4 in dual-stack mode (for now)"
+                        .to_string(),
+                }
+                .into());
             }
         };
 

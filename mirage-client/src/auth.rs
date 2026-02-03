@@ -46,7 +46,11 @@ impl AuthClient {
     /// - `InvalidCredentials` - When credentials are rejected by the server
     /// - `Timeout` - When authentication times out
     /// - `StreamError` - When communication with the server fails
-    pub async fn authenticate<R, W>(&self, reader: R, writer: W) -> Result<(IpNet, Option<IpNet>, IpNet, Option<IpNet>, R, W)>
+    pub async fn authenticate<R, W>(
+        &self,
+        reader: R,
+        writer: W,
+    ) -> Result<(IpNet, Option<IpNet>, IpNet, Option<IpNet>, R, W)>
     where
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
@@ -74,7 +78,14 @@ impl AuthClient {
                 client_address_v6,
                 server_address,
                 server_address_v6,
-            } => Ok((client_address, client_address_v6, server_address, server_address_v6, reader, writer)),
+            } => Ok((
+                client_address,
+                client_address_v6,
+                server_address,
+                server_address_v6,
+                reader,
+                writer,
+            )),
             AuthMessage::Failed => Err(AuthError::InvalidCredentials)?,
             _ => Err(AuthError::InvalidPayload)?,
         }

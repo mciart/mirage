@@ -31,9 +31,9 @@ impl AddressPool {
     /// Returns the next available address pair (v4, v6?).
     pub fn next_available_address(&self) -> (Option<IpNet>, Option<IpNet>) {
         let v4_addr = self.find_available(self.network_v4);
-        
+
         let v6_addr = if let Some(v6_net) = self.network_v6 {
-             self.find_available(v6_net)
+            self.find_available(v6_net)
         } else {
             None
         };
@@ -50,12 +50,12 @@ impl AddressPool {
                 IpAddrRange::V6(Ipv6AddrRange::new(network.network(), network.broadcast()))
             }
         };
-        
+
         range
             .find(|address| !self.used_addresses.contains(address))
             .map(|address| {
                 self.used_addresses.insert(address);
-                 IpNet::with_netmask(address, network.netmask())
+                IpNet::with_netmask(address, network.netmask())
                     .expect("Netmask will always be valid")
             })
     }
@@ -71,16 +71,16 @@ impl AddressPool {
     /// Resets the address pool by releasing all addresses.
     pub fn reset(&self) {
         self.used_addresses.clear();
-        
+
         // Reserve network/broadcast for v4
         self.used_addresses.insert(self.network_v4.network());
         self.used_addresses.insert(self.network_v4.broadcast());
         self.used_addresses.insert(self.network_v4.addr()); // server IP
 
-         if let Some(v6) = self.network_v6 {
+        if let Some(v6) = self.network_v6 {
             self.used_addresses.insert(v6.network());
             // v6 usually doesn't have broadcast like v4 but good to reserve first/last or server IP
-             self.used_addresses.insert(v6.addr());
+            self.used_addresses.insert(v6.addr());
         }
     }
 }

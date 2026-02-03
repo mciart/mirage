@@ -24,7 +24,10 @@ pub trait ServerAuthenticator: Send + Sync {
     /// - `InvalidCredentials` - When provided credentials are invalid
     /// - `UserNotFound` - When the username doesn't exist
     /// - `InvalidPayload` - When the payload format is malformed
-    async fn authenticate_user(&self, authentication_payload: Value) -> Result<(String, IpNet, Option<IpNet>)>;
+    async fn authenticate_user(
+        &self,
+        authentication_payload: Value,
+    ) -> Result<(String, IpNet, Option<IpNet>)>;
 }
 
 /// Represents a user authentication payload generator for the client.
