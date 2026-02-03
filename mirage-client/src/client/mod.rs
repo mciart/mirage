@@ -157,9 +157,17 @@ impl MirageClient {
         connector_builder.set_alpn_protos(&alpn_protocols)
             .map_err(|e| MirageError::system(format!("Failed to set ALPN: {e}")))?;
 
-        // For now, skip certificate verification (self-signed certs)
-        // TODO: Implement proper Reality validation
-        connector_builder.set_verify(SslVerifyMode::NONE);
+        // Configure certificate verification
+        if self.config.connection.insecure {
+            warn!("TLS certificate verification DISABLED - this is unsafe!");
+            connector_builder.set_verify(SslVerifyMode::NONE);
+        } else {
+            // Default secure configuration
+            // Note: In Phase 1 we might default to NONE if no CA is provided, 
+            // but strict mode should require CA or system trust.
+            // For now, we follow the flag strictly.
+            connector_builder.set_verify(SslVerifyMode::PEER);
+        }
 
         let connector = connector_builder.build();
         let ssl_config = connector

@@ -1,0 +1,77 @@
+name: Nightly Build
+
+on:
+  push:
+    branches: [ "main", "dev" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: mirage-linux-x64
+            asset_name: mirage-linux-x64
+          - os: windows-latest
+            artifact_name: mirage-windows-x64
+            asset_name: mirage-windows-x64.exe
+          - os: macos-latest
+            artifact_name: mirage-macos-arm64
+            asset_name: mirage-macos-arm64
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake golang nasm
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install cmake go nasm
+
+    - name: Install dependencies (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/setup-nasm@v1
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Build Release
+      run: cargo build --release --verbose -p mirage-client -p mirage-server
+
+    - name: Prepare Artifacts (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        mkdir -p dist
+        cp target/release/mirage-client dist/
+        cp target/release/mirage-server dist/
+        cp examples/client.toml dist/client-example.toml
+        cp examples/server.toml dist/server-example.toml
+
+    - name: Prepare Artifacts (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        mkdir dist
+        copy target\release\mirage-client.exe dist\
+        copy target\release\mirage-server.exe dist\
+        copy examples\client.toml dist\client-example.toml
+        copy examples\server.toml dist\server-example.toml
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: dist/
+        retention-days: 5

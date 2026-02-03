@@ -122,6 +122,10 @@ pub struct ConnectionConfig {
     /// Enable TCP_NODELAY for lower latency (default = true)
     #[serde(default = "default_true_fn")]
     pub tcp_nodelay: bool,
+    /// Whether to disable TLS certificate verification (default = false)
+    /// WARNING: Only use this for testing!
+    #[serde(default = "default_false_fn")]
+    pub insecure: bool,
 }
 
 /// Reality protocol configuration for SNI camouflage
@@ -209,6 +213,7 @@ impl Default for ConnectionConfig {
             send_buffer_size: default_buffer_size(),
             recv_buffer_size: default_buffer_size(),
             tcp_nodelay: default_true_fn(),
+            insecure: default_false_fn(),
         }
     }
 }

@@ -17,6 +17,8 @@ mtu = 1400
 connection_timeout_s = 30
 # Keep-alive interval in seconds
 keep_alive_interval_s = 25
+# TESTING ONLY: Disable TLS certificate verification (useful for self-signed certs)
+insecure = true
 
 [network]
 routes = [
