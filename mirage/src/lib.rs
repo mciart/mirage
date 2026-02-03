@@ -9,6 +9,7 @@ pub mod auth;
 pub mod certificates;
 pub mod config;
 pub mod constants;
+pub mod crypto;
 pub mod error;
 pub mod network;
 pub mod transport;

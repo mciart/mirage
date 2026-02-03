@@ -186,6 +186,10 @@ impl MirageClient {
             .set_alpn_protos(&alpn_protocols)
             .map_err(|e| MirageError::system(format!("Failed to set ALPN: {e}")))?;
 
+        // Apply Chrome Fingerprint (Cipher Suites, Curves, GREASE)
+        // This makes the TLS ClientHello look exactly like Chrome 120+
+        mirage::crypto::impersonate::apply_chrome_fingerprint(&mut connector_builder)?;
+
         // Configure certificate verification
         if self.config.connection.insecure {
             warn!("TLS certificate verification DISABLED - this is unsafe!");
