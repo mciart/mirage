@@ -25,7 +25,9 @@ pub enum AuthMessage {
     /// Successful authentication response with network configuration
     Authenticated {
         client_address: IpNet,
+        client_address_v6: Option<IpNet>,
         server_address: IpNet,
+        server_address_v6: Option<IpNet>,
     },
     /// Authentication failure response
     Failed,

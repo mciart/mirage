@@ -45,7 +45,7 @@ pub struct MirageServer {
 impl MirageServer {
     /// Creates a new instance of the Mirage server.
     pub fn new(config: ServerConfig) -> Result<Self> {
-        let address_pool = AddressPool::new(config.tunnel_network);
+        let address_pool = AddressPool::new(config.tunnel_network, config.tunnel_network_v6);
 
         Ok(Self {
             config,
@@ -58,6 +58,7 @@ impl MirageServer {
     pub async fn run<I: InterfaceIO>(&self) -> Result<()> {
         let interface: Interface<I> = Interface::create(
             self.config.tunnel_network,
+            self.config.tunnel_network_v6,
             self.config.connection.mtu,
             Some(self.config.tunnel_network.network()),
             self.config.interface_name.clone(),
@@ -73,6 +74,7 @@ impl MirageServer {
         let auth_server = Arc::new(AuthServer::new(
             authenticator,
             self.config.tunnel_network,
+            self.config.tunnel_network_v6,
             Duration::from_secs(self.config.connection.connection_timeout_s),
         ));
 
@@ -204,7 +206,7 @@ impl MirageServer {
         let (read_half, write_half) = tokio::io::split(stream);
 
         // Authenticate and retrieve streams back
-        let (username, client_address, read_half, write_half) = match auth_server
+        let (username, client_address, client_address_v6, read_half, write_half) = match auth_server
             .handle_authentication(read_half, write_half)
             .await
         {
@@ -225,7 +227,10 @@ impl MirageServer {
         // Register client in connection queues
         let (connection_sender, connection_receiver) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
         let client_ip = client_address.addr();
-        connection_queues.insert(client_ip, connection_sender);
+        connection_queues.insert(client_ip, connection_sender.clone());
+        if let Some(v6) = client_address_v6 {
+             connection_queues.insert(v6.addr(), connection_sender);
+        }
 
         info!("Client {} authenticated, ready for data relay", client_ip);
 
@@ -249,6 +254,11 @@ impl MirageServer {
         // Cleanup on disconnect
         connection_queues.remove(&client_ip);
         address_pool.release_address(&client_ip);
+        
+        if let Some(v6) = client_address_v6 {
+            connection_queues.remove(&v6.addr());
+            address_pool.release_address(&v6.addr());
+        }
 
         relay_result
     }

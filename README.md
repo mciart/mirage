@@ -115,7 +115,8 @@ bind_address = "0.0.0.0"
 # IPv6: bind_address = "::0"
 bind_port = 443
 tunnel_network = "10.0.0.1/24"
-# IPv6: tunnel_network = "fd00::1/64"
+# IPv6 (可选，开启双栈):
+# tunnel_network_v6 = "fd00::1/64"
 
 [reality]
 # 伪装目标，非 VPN 流量将被转发到此地址
@@ -126,6 +127,34 @@ reuse_socket = true
 ```
 
 更多示例请参考 [`examples/`](examples/) 目录。
+
+
+---
+
+## 网络配置与 NAT (Networking)
+
+为了让客户端能够通过 VPN 访问互联网，您**必须**在服务端进行网络配置 (Enable Forwarding & NAT)。
+
+### 1. 开启内核转发 (Kernel Forwarding)
+临时生效 (Linux):
+```bash
+sysctl -w net.ipv4.ip_forward=1
+sysctl -w net.ipv6.conf.all.forwarding=1
+```
+永久生效，请编辑 `/etc/sysctl.conf`。
+
+### 2. 配置 NAT (IPTables)
+假设您的外网网卡接口名称为 `eth0` (请使用 `ip addr` 确认)。
+
+**IPv4 NAT**:
+```bash
+iptables -t nat -A POSTROUTING -s 10.11.12.0/24 -o eth0 -j MASQUERADE
+```
+
+**IPv6 NAT**:
+```bash
+ip6tables -t nat -A POSTROUTING -s fd00::/64 -o eth0 -j MASQUERADE
+```
 
 ---
 
@@ -164,8 +193,10 @@ users_file = "users.db"
 
 ### 开发路线图 (Roadmap)
 - [x] **Phase 1**: 基础 TCP/TLS 隧道开发 (已完成)
-- [/] **Phase 2**: Reality 服务端逻辑与转发 (当前阶段)
-- [ ] **Phase 3**: Chrome 指纹深度集成
+- [/] **Phase 2**: 功能增强 (Dual Stack 已完成)
+  - [x] Dual Stack (IPv4/IPv6)
+  - [ ] NAT 自动配置文档
+- [ ] **Phase 3**: Reality 协议与 Chrome 指纹
 - [ ] **Phase 4**: XTLS-Vision 流控优化
 
 ---

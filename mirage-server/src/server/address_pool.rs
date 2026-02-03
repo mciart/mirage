@@ -3,8 +3,10 @@ use ipnet::{IpAddrRange, IpNet, Ipv4AddrRange, Ipv6AddrRange};
 use std::net::IpAddr;
 
 /// Represents a pool of addresses from which addresses can be requested and released.
+/// Represents a pool of addresses from which addresses can be requested and released.
 pub struct AddressPool {
-    network: IpNet,
+    network_v4: IpNet,
+    network_v6: Option<IpNet>,
     used_addresses: DashSet<IpAddr>,
 }
 
@@ -12,10 +14,12 @@ impl AddressPool {
     /// Creates a new instance of an `AddressPool`.
     ///
     /// ### Arguments
-    /// - `network` - the network address and mask
-    pub fn new(network: IpNet) -> Self {
+    /// - `network_v4` - the IPv4 network address
+    /// - `network_v6` - the optional IPv6 network address
+    pub fn new(network_v4: IpNet, network_v6: Option<IpNet>) -> Self {
         let pool = Self {
-            network,
+            network_v4,
+            network_v6,
             used_addresses: DashSet::new(),
         };
 
@@ -24,9 +28,21 @@ impl AddressPool {
         pool
     }
 
-    /// Returns the next available address if such an address exists.
-    pub fn next_available_address(&self) -> Option<IpNet> {
-        let mut range = match self.network {
+    /// Returns the next available address pair (v4, v6?).
+    pub fn next_available_address(&self) -> (Option<IpNet>, Option<IpNet>) {
+        let v4_addr = self.find_available(self.network_v4);
+        
+        let v6_addr = if let Some(v6_net) = self.network_v6 {
+             self.find_available(v6_net)
+        } else {
+            None
+        };
+
+        (v4_addr, v6_addr)
+    }
+
+    fn find_available(&self, network: IpNet) -> Option<IpNet> {
+        let mut range = match network {
             IpNet::V4(network) => {
                 IpAddrRange::V4(Ipv4AddrRange::new(network.network(), network.broadcast()))
             }
@@ -34,12 +50,12 @@ impl AddressPool {
                 IpAddrRange::V6(Ipv6AddrRange::new(network.network(), network.broadcast()))
             }
         };
-
+        
         range
             .find(|address| !self.used_addresses.contains(address))
             .map(|address| {
                 self.used_addresses.insert(address);
-                IpNet::with_netmask(address, self.network.netmask())
+                 IpNet::with_netmask(address, network.netmask())
                     .expect("Netmask will always be valid")
             })
     }
@@ -55,9 +71,17 @@ impl AddressPool {
     /// Resets the address pool by releasing all addresses.
     pub fn reset(&self) {
         self.used_addresses.clear();
-        self.used_addresses.insert(self.network.network());
-        self.used_addresses.insert(self.network.addr());
-        self.used_addresses.insert(self.network.broadcast());
+        
+        // Reserve network/broadcast for v4
+        self.used_addresses.insert(self.network_v4.network());
+        self.used_addresses.insert(self.network_v4.broadcast());
+        self.used_addresses.insert(self.network_v4.addr()); // server IP
+
+         if let Some(v6) = self.network_v6 {
+            self.used_addresses.insert(v6.network());
+            // v6 usually doesn't have broadcast like v4 but good to reserve first/last or server IP
+             self.used_addresses.insert(v6.addr());
+        }
     }
 }
 
@@ -69,16 +93,20 @@ mod tests {
 
     #[test]
     fn test_address_pool() {
-        let pool = AddressPool::new(IpNet::V4(
-            Ipv4Net::with_netmask(
-                Ipv4Addr::new(10, 0, 0, 1),
-                Ipv4Addr::new(255, 255, 255, 252),
-            )
-            .unwrap(),
-        ));
+        let pool = AddressPool::new(
+            IpNet::V4(
+                Ipv4Net::with_netmask(
+                    Ipv4Addr::new(10, 0, 0, 1),
+                    Ipv4Addr::new(255, 255, 255, 252),
+                )
+                .unwrap(),
+            ),
+            None,
+        );
 
+        let (v4, v6) = pool.next_available_address();
         assert_eq!(
-            pool.next_available_address().unwrap(),
+            v4.unwrap(),
             IpNet::V4(
                 Ipv4Net::with_netmask(
                     Ipv4Addr::new(10, 0, 0, 2),
@@ -87,12 +115,14 @@ mod tests {
                 .unwrap()
             )
         );
+        assert_eq!(v6, None);
 
-        assert_eq!(pool.next_available_address(), None);
+        assert_eq!(pool.next_available_address(), (None, None));
         pool.release_address(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)));
 
+        let (v4, _) = pool.next_available_address();
         assert_eq!(
-            pool.next_available_address().unwrap(),
+            v4.unwrap(),
             IpNet::V4(
                 Ipv4Net::with_netmask(
                     Ipv4Addr::new(10, 0, 0, 2),

@@ -60,13 +60,18 @@ impl MirageClient {
             Duration::from_secs(self.config.connection.connection_timeout_s),
         );
 
-        // Authenticate - now returns the stream parts back reuse!
-        let (client_address, server_address, reader, writer) =
+        let (client_address, client_address_v6, server_address, server_address_v6, reader, writer) =
             auth_client.authenticate(read_half, write_half).await?;
 
         info!("Successfully authenticated");
-        info!("Received client address: {client_address}");
-        info!("Received server address: {server_address}");
+        info!("Received client address: {client_address} (v4)");
+        if let Some(v6) = client_address_v6 {
+             info!("Received client address: {v6} (v6)");
+        }
+        info!("Received server address: {server_address} (v4)");
+        if let Some(v6) = server_address_v6 {
+             info!("Received server address: {v6} (v6)");
+        }
 
         // Store the addresses for later access
         self.client_address = Some(client_address);
@@ -74,6 +79,7 @@ impl MirageClient {
 
         let interface: Interface<I> = Interface::create(
             client_address,
+            client_address_v6,
             self.config.connection.mtu,
             Some(server_address.addr()),
             self.config.network.interface_name.clone(),

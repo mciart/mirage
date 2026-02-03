@@ -28,6 +28,7 @@ pub struct TunRsInterface {
 impl InterfaceIO for TunRsInterface {
     fn create_interface(
         interface_address: IpNet,
+        interface_address_v6: Option<IpNet>,
         mtu: u16,
         tunnel_gateway: Option<IpAddr>,
         interface_name: Option<&str>,
@@ -53,13 +54,17 @@ impl InterfaceIO for TunRsInterface {
                     None
                 };
 
-                builder.ipv4(addr, netmask, destination)
-            }
-            IpNet::V6(interface_address) => {
-                let addr = interface_address.addr();
-                let netmask = interface_address.netmask();
+                let mut b = builder.ipv4(addr, netmask, destination);
 
-                builder.ipv6(addr, netmask)
+                if let Some(IpNet::V6(v6_net)) = interface_address_v6 {
+                     b = b.ipv6(v6_net.addr(), v6_net.prefix_len());
+                }
+                b
+            }
+            IpNet::V6(_) => {
+                 return Err(InterfaceError::ConfigurationFailed {
+                     reason: "Primary interface address must be IPv4 in dual-stack mode (for now)".to_string()
+                 }.into());
             }
         };
 

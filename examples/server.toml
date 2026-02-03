@@ -11,7 +11,8 @@ bind_address = "0.0.0.0"
 bind_port = 443
 # The address of the tunnel endpoint and base address of the address pool available to clients
 tunnel_network = "10.11.12.1/24"
-# IPv6: tunnel_network = "fd00::1/64"
+# IPv6 Tunnel Network (Optional, enables Dual Stack)
+# tunnel_network_v6 = "fd00::1/64"
 # Optional interface name to request for the TUN device
 # interface_name = "tun0"
 # Whether to isolate clients from each other (clients cannot ping each other)

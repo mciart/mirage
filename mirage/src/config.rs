@@ -36,8 +36,11 @@ pub struct ServerConfig {
     /// Whether to reuse the socket (default = false)
     #[serde(default = "default_false_fn")]
     pub reuse_socket: bool,
-    /// The network address of this tunnel (address + mask)
+    /// The network address of this tunnel (IPv4, address + mask)
     pub tunnel_network: IpNet,
+    /// The network address of this tunnel (IPv6, address + mask)
+    #[serde(default)]
+    pub tunnel_network_v6: Option<IpNet>,
     /// Whether to isolate clients from each other (default = true)
     #[serde(default = "default_true_fn")]
     pub isolate_clients: bool,

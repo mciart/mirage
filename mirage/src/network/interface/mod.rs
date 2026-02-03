@@ -14,6 +14,7 @@ pub trait InterfaceIO: Send + Sync + 'static {
     /// Creates a new interface with the specified parameters.
     fn create_interface(
         interface_address: IpNet,
+        interface_address_v6: Option<IpNet>,
         mtu: u16,
         tunnel_gateway: Option<IpAddr>,
         interface_name: Option<&str>,
@@ -77,6 +78,7 @@ pub struct Interface<I: InterfaceIO> {
 impl<I: InterfaceIO> Interface<I> {
     pub fn create(
         interface_address: IpNet,
+        interface_address_v6: Option<IpNet>,
         mtu: u16,
         tunnel_gateway: Option<IpAddr>,
         interface_name: Option<String>,
@@ -85,6 +87,7 @@ impl<I: InterfaceIO> Interface<I> {
     ) -> Result<Self> {
         let interface = I::create_interface(
             interface_address,
+            interface_address_v6,
             mtu,
             tunnel_gateway,
             interface_name.as_deref(),
