@@ -40,7 +40,7 @@ pub struct Args {
 }
 
 /// Client connection state
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct ConnectionState {
     /// When the connection was established
     start_time: Option<Instant>,
@@ -50,17 +50,6 @@ struct ConnectionState {
     server_address: Option<ipnet::IpNet>,
     /// Whether the client is currently running
     is_running: bool,
-}
-
-impl Default for ConnectionState {
-    fn default() -> Self {
-        Self {
-            start_time: None,
-            client_address: None,
-            server_address: None,
-            is_running: false,
-        }
-    }
 }
 
 /// The Mirage client daemon that manages VPN connections and IPC communication.
