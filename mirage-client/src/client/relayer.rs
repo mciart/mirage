@@ -9,7 +9,7 @@ use mirage::network::interface::{Interface, InterfaceIO};
 use mirage::utils::tasks::abort_all;
 use mirage::{MirageError, Result};
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::signal;
 use tokio::sync::broadcast;
 use tokio::sync::Mutex;
