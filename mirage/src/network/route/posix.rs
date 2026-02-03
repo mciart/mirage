@@ -75,7 +75,6 @@ fn add_route(network: &IpNet, gateway: &IpAddr) -> Result<()> {
     Ok(())
 }
 
-
 /// Retrieves the gateway address for a specific destination IP.
 pub fn get_gateway_for(target: IpAddr) -> Result<IpAddr> {
     #[cfg(target_os = "macos")]
@@ -128,9 +127,12 @@ fn get_gateway_for_macos(target: IpAddr) -> Result<IpAddr> {
                     gateway_str
                 };
 
-                let ip = clean_gateway_str.parse::<IpAddr>().map_err(|e| RouteError::PlatformError {
-                    message: format!("failed to parse gateway IP '{}': {}", gateway_str, e),
-                })?;
+                let ip =
+                    clean_gateway_str
+                        .parse::<IpAddr>()
+                        .map_err(|e| RouteError::PlatformError {
+                            message: format!("failed to parse gateway IP '{}': {}", gateway_str, e),
+                        })?;
                 return Ok(ip);
             }
         }
@@ -168,9 +170,11 @@ fn get_gateway_for_linux(target: IpAddr) -> Result<IpAddr> {
         if let Some(via_index) = parts.iter().position(|&r| r == "via") {
             if via_index + 1 < parts.len() {
                 let gateway_str = parts[via_index + 1];
-                let ip = gateway_str.parse::<IpAddr>().map_err(|e| RouteError::PlatformError {
-                    message: format!("failed to parse gateway IP: {e}"),
-                })?;
+                let ip = gateway_str
+                    .parse::<IpAddr>()
+                    .map_err(|e| RouteError::PlatformError {
+                        message: format!("failed to parse gateway IP: {e}"),
+                    })?;
                 return Ok(ip);
             }
         }

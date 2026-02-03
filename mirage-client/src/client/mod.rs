@@ -63,7 +63,10 @@ impl MirageClient {
             if let Ok(server_net) = IpNet::new(server_ip, mask) {
                 // Interface name is largely ignored on Posix for route add, but we pass "en0" as a placeholder
                 if let Err(e) = add_routes(&[server_net], &gateway, "en0") {
-                    warn!("Failed to add exclusion route for server (loop risk): {}", e);
+                    warn!(
+                        "Failed to add exclusion route for server (loop risk): {}",
+                        e
+                    );
                 } else {
                     info!("Successfully added exclusion route for server");
                 }
