@@ -69,7 +69,12 @@ impl TlsDispatcher {
                     continue;
                 }
                 Err(e) => {
-                    warn!("TLS Parse Failed: {}. Buffer size: {}. First 16 bytes: {:02x?}", e, buf.len(), &buf[..std::cmp::min(16, buf.len())]);
+                    warn!(
+                        "TLS Parse Failed: {}. Buffer size: {}. First 16 bytes: {:02x?}",
+                        e,
+                        buf.len(),
+                        &buf[..std::cmp::min(16, buf.len())]
+                    );
                     // Not a valid ClientHello or protocol mismatch -> Fallback
                     let prefixed_stream = Box::new(PrefixedStream::new(buf, stream));
                     return Ok(DispatchResult::Fallback(prefixed_stream));
