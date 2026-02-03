@@ -39,8 +39,16 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
 
 ### 4. 双模共存 (Dual Mode) 🌗
 单端口 (443) 同时支持 **标准 TLS** 和 **Reality** 两种模式：
-- **智能分流**：根据客户端 SNI 自动识别流量，合法 SNI 走标准 TLS，伪装 SNI 走 Reality。
-- **极致兼容**：既能满足高隐蔽性需求，也能兼容不支持 Reality 的旧版客户端。
+- **Reality 优先**：服务端优先检查 SNI 是否匹配伪装域名。匹配成功则**强制**进入 Reality 流程 (转发或代理)，确保探测者永远无法获取标准证书。
+- **智能回落**：仅当 SNI 不匹配伪装目标时，才加载标准证书进入普通 TLS 模式，兼容旧版客户端。
+
+### 5. 全面双栈支持 (Full Dual Stack) 🌐
+- **IPv4/IPv6 并行**：隧道内部同时分配 V4 和 V6 地址，完美支持双栈流量。
+- **自动防环路**：客户端智能检测网关，自动添加防环路路由，彻底告别配置烦恼。
+
+### 6. CDN 友好架构 (Planned) ☁️
+- 得益于 **TCP/TLS** 架构，未来将支持 **WebSocket** 传输层。
+- **救活被墙 IP**：可配合 Cloudflare 等 CDN 复活被屏蔽的服务器 IP。
 
 ---
 
@@ -49,6 +57,8 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
 | 特性 | Quincy (旧版) | Mirage (新版) |
 |------|---------------|---------------|
 | **传输层** | QUIC (UDP) | TCP/TLS (1.3) |
+| **扩展性** | 难 (CDN 不支持 UDP) | 强 (原生支持 WebSocket/CDN) |
+| **网络层** | IPv4 Only (通常) | Full Dual Stack (IPv4 + IPv6) |
 | **TLS 库** | Rustls | BoringSSL (Chrome 同源) |
 | **伪装能力** | 弱 (仅标准 TLS) | 强 (Reality + Chrome 指纹) |
 | **抗探测** | 易受 UDP QoS 限制 | 伪装为 HTTPS，通用性更强 |
