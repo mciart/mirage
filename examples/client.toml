@@ -8,11 +8,15 @@ username = "test"
 password = "test"
 # A list of trusted certificate file paths the server can use or have its certificate signed by
 # trusted_certificate_paths = ["examples/cert/server_cert.pem"]
+# A list of trusted certificates as PEM strings (optional)
+# trusted_certificates = [
+#     "-----BEGIN CERTIFICATE-----\n..."
+# ]
 
 [connection]
 # The MTU used by the tunnel and the spawned TUN interface
 # TCP overhead is automatically handled
-mtu = 1400
+mtu = 1280
 # Connection timeout in seconds
 connection_timeout_s = 30
 # Keep-alive interval in seconds
@@ -25,6 +29,8 @@ routes = [
     "10.0.1.0/24",
     "10.11.12.0/24"
 ]
+# Optional interface name to request for the TUN device
+# interface_name = "utun5"
 dns_servers = [
     "1.1.1.1"
 ]

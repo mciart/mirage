@@ -127,7 +127,7 @@ reuse_socket = true
 
 ### 开发路线图 (Roadmap)
 - [x] **Phase 1**: 基础 TCP/TLS 隧道开发 (当前阶段)
-- [ ] **Phase 2**: Reality 服务端逻辑与转发
+- [ ] **Phase 2**: Reality 服务端逻辑与转发 (支持标准TLS/Reality双模共存)
 - [ ] **Phase 3**: Chrome 指纹深度集成
 - [ ] **Phase 4**: XTLS-Vision 流控优化
 

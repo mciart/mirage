@@ -203,8 +203,8 @@ impl MirageServer {
         // Split stream for authentication
         let (read_half, write_half) = tokio::io::split(stream);
 
-        // Authenticate
-        let (username, client_address) = match auth_server
+        // Authenticate and retrieve streams back
+        let (username, client_address, read_half, write_half) = match auth_server
             .handle_authentication(read_half, write_half)
             .await
         {
@@ -222,26 +222,34 @@ impl MirageServer {
             remote_addr.ip(),
         );
 
-        // We need a new connection for data transfer (auth consumed the stream split)
-        // In practice, we'd use a different approach, but for now return OK
-        // The actual data connection would need to be handled separately
-
         // Register client in connection queues
         let (connection_sender, connection_receiver) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
         let client_ip = client_address.addr();
         connection_queues.insert(client_ip, connection_sender);
 
-        // Note: In a full implementation, we'd reconnect or use a different
-        // handshake protocol that doesn't consume the stream. For now,
-        // this demonstrates the auth flow.
-
         info!("Client {} authenticated, ready for data relay", client_ip);
+
+        // Run bidirectional packet relay
+        // This blocks until connection is closed or error occurs
+        let relay_result = crate::server::connection::run_connection_relay(
+            read_half,
+            write_half,
+            remote_addr,
+            username,
+            client_address,
+            connection_receiver,
+            ingress_queue,
+        ).await;
+
+        if let Err(e) = &relay_result {
+            warn!("Connection relay error for {}: {}", client_ip, e);
+        }
 
         // Cleanup on disconnect
         connection_queues.remove(&client_ip);
         address_pool.release_address(&client_ip);
 
-        Ok(())
+        relay_result
     }
 
     /// Creates a TLS acceptor with BoringSSL.

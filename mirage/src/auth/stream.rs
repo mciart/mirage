@@ -48,7 +48,12 @@ where
     /// * `reader` - The read half of the stream
     /// * `writer` - The write half of the stream
     pub fn new(reader: R, writer: W) -> Self {
-        AuthStream { reader, writer }
+        Self { reader, writer }
+    }
+
+    /// Consumes the AuthStream and returns the underlying reader and writer.
+    pub fn into_inner(self) -> (R, W) {
+        (self.reader, self.writer)
     }
 
     /// Sends an authentication message to the other side of the connection.

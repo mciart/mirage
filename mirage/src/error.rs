@@ -594,6 +594,13 @@ impl MirageError {
     pub fn config_file_not_found(path: impl Into<PathBuf>) -> Self {
         MirageError::Config(ConfigError::FileNotFound { path: path.into() })
     }
+
+    /// Creates a MirageError for a general configuration error.
+    pub fn config_error(message: impl Into<String>) -> Self {
+        MirageError::Config(ConfigError::ParseError {
+            message: message.into(),
+        })
+    }
 }
 
 /// Result type alias for Mirage operations.

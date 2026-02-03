@@ -10,6 +10,10 @@ bind_address = "0.0.0.0"
 bind_port = 443
 # The address of the tunnel endpoint and base address of the address pool available to clients
 tunnel_network = "10.0.0.1/24"
+# Optional interface name to request for the TUN device
+# interface_name = "tun0"
+# Whether to isolate clients from each other (clients cannot ping each other)
+isolate_clients = true
 
 [authentication]
 # Path to the file containing user credentials
@@ -17,7 +21,7 @@ users_file = "examples/users"
 
 [connection]
 # The MTU used by the tunnel and the spawned TUN interface
-mtu = 1400
+mtu = 1280
 # Whether to reuse the socket (SO_REUSEADDR)
 reuse_socket = true
 

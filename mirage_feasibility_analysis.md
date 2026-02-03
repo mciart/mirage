@@ -222,6 +222,25 @@ sequenceDiagram
 
 需要解析 TLS ClientHello 的 SNI 和自定义扩展，Rust 有 `rustls` 的 `Acceptor` API 可用。
 
+### 2.5 Reality 与标准 TLS 共存 (双模运行)
+
+用户可能同时需要标准 TLS VPN (兼容旧设备/简单配置) 和 Reality (极致隐蔽)。Mirage 将支持**单端口并发运行**：
+
+**原理**：基于 SNI (Server Name Indication) 进行流量路由。
+
+```mermaid
+graph TD
+    A[流量进入 TCP 443] --> B{解析 ClientHello SNI}
+    B -->|SNI: vpn.myself.com| C[标准 TLS 模式<br>(加载 server.crt)]
+    B -->|SNI: www.microsoft.com| D{验证 Reality ShortId}
+    D -->|验证通过| E[Reality VPN 模式<br>(隐蔽隧道)]
+    D -->|验证失败| F[SNI 转发<br>(直连 www.microsoft.com)]
+    B -->|无 SNI / 其他| F
+```
+
+**配置方式**：
+配置文件支持同时开启两种模式，使用不同或相同的 SNI 区分。
+
 ---
 
 ## 三、阶段性实现路线图
@@ -270,6 +289,9 @@ quincy (QUIC)  →  mirage (TCP/TLS over BoringSSL)
   - 提取 SNI (Server Name Indication)
   - 提取 Session Ticket 或自定义扩展 (ShortId)
 - [ ] 实现 x25519 密钥验证机制
+- [ ] **实现双模共存与切换 (Standard TLS / Reality)**：
+  - 基于 SNI 判断进入标准模式还是 Reality 模式
+  - 支持配置文件开关
 - [ ] 实现双模式分流：
   ```rust
   match validate_client(&client_hello) {

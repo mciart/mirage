@@ -48,7 +48,11 @@ impl AuthServer {
     ///
     /// # Errors
     /// Returns `AuthError` variants for authentication failures
-    pub async fn handle_authentication<R, W>(&self, reader: R, writer: W) -> Result<(String, IpNet)>
+    pub async fn handle_authentication<R, W>(
+        &self,
+        reader: R,
+        writer: W,
+    ) -> Result<(String, IpNet, R, W)>
     where
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
@@ -57,7 +61,7 @@ impl AuthServer {
 
         let message = auth_stream.recv_message_timeout(self.auth_timeout).await?;
 
-        let auth_result = match message {
+        let (username, client_address) = match message {
             AuthMessage::Authenticate { payload } => {
                 let (username, client_address) =
                     self.authenticator.authenticate_user(payload).await?;
@@ -81,6 +85,7 @@ impl AuthServer {
             }
         };
 
-        Ok(auth_result)
+        let (reader, writer) = auth_stream.into_inner();
+        Ok((username, client_address, reader, writer))
     }
 }

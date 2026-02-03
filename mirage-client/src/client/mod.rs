@@ -165,10 +165,21 @@ impl MirageClient {
             connector_builder.set_verify(SslVerifyMode::NONE);
         } else {
             // Default secure configuration
-            // Note: In Phase 1 we might default to NONE if no CA is provided,
-            // but strict mode should require CA or system trust.
-            // For now, we follow the flag strictly.
             connector_builder.set_verify(SslVerifyMode::PEER);
+
+            // Load trusted CA certificates from files
+            for path in &self.config.authentication.trusted_certificate_paths {
+                connector_builder.set_ca_file(path)
+                    .map_err(|e| MirageError::config_error(format!("Failed to load CA file {:?}: {}", path, e)))?;
+            }
+
+            // Load trusted CA certificates from strings
+            for pem in &self.config.authentication.trusted_certificates {
+                let cert = boring::x509::X509::from_pem(pem.as_bytes())
+                    .map_err(|e| MirageError::config_error(format!("Failed to parse CA certificate: {}", e)))?;
+                connector_builder.cert_store_mut().add_cert(cert)
+                    .map_err(|e| MirageError::system(format!("Failed to add CA certificate to store: {}", e)))?;
+            }
         }
 
         let connector = connector_builder.build();

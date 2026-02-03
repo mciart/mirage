@@ -143,6 +143,7 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
     }
 
     /// Receives a packet from the stream.
+    #[allow(dead_code)]
     pub async fn recv_packet(&mut self) -> Result<BytesMut> {
         // Read length prefix
         let mut header = [0u8; FRAME_HEADER_SIZE];
@@ -179,6 +180,7 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
     }
 
     /// Sends a packet over the stream.
+    #[allow(dead_code)]
     pub async fn send_packet(&mut self, packet: &[u8]) -> Result<()> {
         if packet.len() > MAX_FRAME_SIZE {
             return Err(NetworkError::PacketError {
