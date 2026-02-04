@@ -252,7 +252,7 @@ users_file = "users"
 ### 开发路线图 (Roadmap)
 - [x] **Phase 1**: 基础 TCP/TLS 隧道开发 (已完成)
 - [x] **Phase 2**: 功能增强与伪装 (Reality 已完成)
-- [ ] **Phase 3**: 流量混淆与隐匿 (Padding & Timing)
+- [x] **Phase 3**: 流量混淆与隐匿 (Padding & Timing)
 - [ ] **Phase 4**: CDN 支持 (WebSocket, gRPC 等)
 
 ---
