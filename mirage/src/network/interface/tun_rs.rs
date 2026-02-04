@@ -285,9 +285,15 @@ fn reader_task(
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
         loop {
+            // MacOS reads PI header (4 bytes) even if we asked not to
+            #[cfg(target_os = "macos")]
+            let buffer_size = mtu + 4;
+            #[cfg(not(target_os = "macos"))]
+            let buffer_size = mtu;
+
             let mut packet_buf = unsafe {
                 // SAFETY: the data is written to before it resized and read
-                uninitialized_bytes_mut(mtu)
+                uninitialized_bytes_mut(buffer_size)
             };
 
             let size = interface
@@ -295,7 +301,16 @@ fn reader_task(
                 .await
                 .inspect_err(|e| error!("failed to receive packet: {}", e))?;
 
-            let packet = packet_buf.split_to(size).into();
+            // On macOS, strip the 4-byte PI header
+            let mut packet_data = packet_buf.split_to(size);
+            
+            #[cfg(target_os = "macos")]
+            if packet_data.len() >= 4 {
+                use bytes::Buf;
+                packet_data.advance(4);
+            }
+
+            let packet = packet_data.into();
 
             if reader_channel_tx.is_closed() {
                 break;
@@ -332,6 +347,27 @@ fn writer_task(
                 None => break,
             };
 
+            #[cfg(target_os = "macos")]
+            {
+                use bytes::{BufMut, BytesMut};
+                // Prepend PI header (4 bytes)
+                // AF_INET = 2, AF_INET6 = 30 on macOS
+                let mut buf = BytesMut::with_capacity(packet.len() + 4);
+                let ip_ver = packet[0] >> 4;
+                if ip_ver == 6 {
+                     buf.put_u32(30); // AF_INET6
+                } else {
+                     buf.put_u32(2); // AF_INET
+                }
+                buf.put_slice(&packet);
+                
+                interface
+                    .send(&buf)
+                    .await
+                    .inspect_err(|e| error!("failed to send packet: {}", e))?;
+            }
+
+            #[cfg(not(target_os = "macos"))]
             interface
                 .send(&packet)
                 .await
