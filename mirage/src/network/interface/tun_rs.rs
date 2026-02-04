@@ -303,7 +303,7 @@ fn reader_task(
 
             // On macOS, strip the 4-byte PI header
             let mut packet_data = packet_buf.split_to(size);
-            
+
             #[cfg(target_os = "macos")]
             if packet_data.len() >= 4 {
                 use bytes::Buf;
@@ -355,12 +355,12 @@ fn writer_task(
                 let mut buf = BytesMut::with_capacity(packet.len() + 4);
                 let ip_ver = packet[0] >> 4;
                 if ip_ver == 6 {
-                     buf.put_u32(30); // AF_INET6
+                    buf.put_u32(30); // AF_INET6
                 } else {
-                     buf.put_u32(2); // AF_INET
+                    buf.put_u32(2); // AF_INET
                 }
                 buf.put_slice(&packet);
-                
+
                 interface
                     .send(&buf)
                     .await
