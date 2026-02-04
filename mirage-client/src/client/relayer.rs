@@ -86,7 +86,8 @@ impl ClientRelayer {
         let framed_reader = mirage::transport::framed::FramedReader::new(reader);
 
         // Use non-blocking jitter sender
-        let framed_writer = mirage::transport::framed::FramedWriter::new(tokio::io::BufWriter::new(writer));
+        let framed_writer =
+            mirage::transport::framed::FramedWriter::new(tokio::io::BufWriter::new(writer));
         let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(1024);
 
         let mut tasks = FuturesUnordered::new();
