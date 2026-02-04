@@ -174,16 +174,14 @@ where
                 framed_writer.send_packet(&packet).await?;
 
                 // Randomly inject padding
-                if obfuscation.enabled {
-                    if rand::random::<f64>() < obfuscation.padding_probability {
-                        let padding_len = rand::random::<usize>()
-                            % (obfuscation.padding_max - obfuscation.padding_min + 1)
-                            + obfuscation.padding_min;
+                if obfuscation.enabled && rand::random::<f64>() < obfuscation.padding_probability {
+                    let padding_len = rand::random::<usize>()
+                        % (obfuscation.padding_max - obfuscation.padding_min + 1)
+                        + obfuscation.padding_min;
 
-                        use tracing::warn;
-                        if let Err(e) = framed_writer.send_padding(padding_len).await {
-                            warn!("Failed to send padding: {}", e);
-                        }
+                    use tracing::warn;
+                    if let Err(e) = framed_writer.send_padding(padding_len).await {
+                        warn!("Failed to send padding: {}", e);
                     }
                 }
             }

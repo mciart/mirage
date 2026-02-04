@@ -21,6 +21,7 @@ use tokio::sync::MutexGuard;
 use tracing::{debug, warn};
 
 /// Runs the packet relay for an authenticated client.
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 pub async fn run_connection_relay<R, W>(
     reader: R,
@@ -100,16 +101,14 @@ where
         // Send data using framed protocol
         writer_guard.send_packet(&data).await?;
 
-        // Randomly inject padding if enabled
-        if obfuscation.enabled {
-            if rand::random::<f64>() < obfuscation.padding_probability {
-                let padding_len = rand::random::<usize>()
-                    % (obfuscation.padding_max - obfuscation.padding_min + 1)
-                    + obfuscation.padding_min;
-
-                if let Err(e) = writer_guard.send_padding(padding_len).await {
-                    warn!("Failed to send padding: {}", e);
-                }
+        // Randomly inject padding
+        if obfuscation.enabled && rand::random::<f64>() < obfuscation.padding_probability {
+            let padding_len = rand::random::<usize>()
+                % (obfuscation.padding_max - obfuscation.padding_min + 1)
+                + obfuscation.padding_min;
+            
+            if let Err(e) = writer_guard.send_padding(padding_len).await {
+                warn!("Failed to send padding: {}", e);
             }
         }
     }
