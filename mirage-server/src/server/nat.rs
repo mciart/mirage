@@ -122,15 +122,16 @@ impl NatManager {
         );
     }
 
-    /// Add a rule and track it for cleanup (Cleanup is tricky without exact matching or ID)
-    /// For this version, we will just execute the command.
-    /// Real cleanup usually requires -D instead of -A/-I.
-    /// We can store the 'delete' command equivalent.
+    /// Add a rule and track it for cleanup
     fn add_rule(&mut self, cmd: &str, args: &[&str]) {
-        // Construct delete command: -I -> -D, -A -> -D
+        // Construct delete command: Find -I or -A and flip to -D
         let mut delete_args = args.to_vec();
-        if delete_args[0] == "-I" || delete_args[0] == "-A" {
-            delete_args[0] = "-D";
+        for arg in delete_args.iter_mut() {
+            if *arg == "-I" || *arg == "-A" {
+                *arg = "-D";
+                // Only replace the first occurrence (the action)
+                break;
+            }
         }
 
         // Run add command
