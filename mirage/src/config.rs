@@ -136,6 +136,65 @@ pub struct ConnectionConfig {
     /// Options: "reality", "tcp-tls"
     #[serde(default = "default_enabled_protocols")]
     pub enabled_protocols: Vec<String>,
+    /// Obfuscation configuration (padding, timing)
+    #[serde(default)]
+    pub obfuscation: ObfuscationConfig,
+}
+
+/// Traffic obfuscation configuration
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ObfuscationConfig {
+    /// Whether to enable traffic padding (default = true)
+    #[serde(default = "default_true_fn")]
+    pub enabled: bool,
+    /// Probability of sending a padding frame per packet (0.0 - 1.0, default = 0.05)
+    #[serde(default = "default_padding_probability")]
+    pub padding_probability: f64,
+    /// Minimum size of padding frame in bytes (default = 100)
+    #[serde(default = "default_padding_min")]
+    pub padding_min: usize,
+    /// Maximum size of padding frame in bytes (default = 1000)
+    #[serde(default = "default_padding_max")]
+    pub padding_max: usize,
+    /// Minimum timing jitter delay in milliseconds (default = 0)
+    #[serde(default = "default_jitter_min")]
+    pub jitter_min_ms: u64,
+    /// Maximum timing jitter delay in milliseconds (default = 20)
+    #[serde(default = "default_jitter_max")]
+    pub jitter_max_ms: u64,
+}
+
+impl Default for ObfuscationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            padding_probability: 0.05,
+            padding_min: 100,
+            padding_max: 1000,
+            jitter_min_ms: 0,
+            jitter_max_ms: 20,
+        }
+    }
+}
+
+fn default_padding_probability() -> f64 {
+    0.05
+}
+
+fn default_padding_min() -> usize {
+    100
+}
+
+fn default_padding_max() -> usize {
+    1000
+}
+
+fn default_jitter_min() -> u64 {
+    0
+}
+
+fn default_jitter_max() -> u64 {
+    20
 }
 
 /// Reality protocol configuration for SNI camouflage
@@ -228,6 +287,7 @@ impl Default for ConnectionConfig {
             tcp_nodelay: default_true_fn(),
             insecure: default_false_fn(),
             enabled_protocols: default_enabled_protocols(),
+            obfuscation: ObfuscationConfig::default(),
         }
     }
 }

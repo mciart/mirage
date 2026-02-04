@@ -158,8 +158,12 @@ impl MirageClient {
             Some(self.config.network.dns_servers.clone()),
         )?;
 
-        // Start relayer with the REUSED connection
-        let relayer = ClientRelayer::start(interface, reader, writer)?;
+        let relayer = ClientRelayer::start(
+            interface,
+            reader,
+            writer,
+            self.config.connection.obfuscation.clone(),
+        )?;
 
         // Wait for relayer to finish
         relayer.wait_for_shutdown().await?;

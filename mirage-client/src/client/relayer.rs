@@ -31,7 +31,12 @@ where
 {
     /// Creates a new instance of the client relayer and starts relaying packets between
     /// the TUN interface and the TCP/TLS connection.
-    pub fn start<R>(interface: Interface<impl InterfaceIO>, reader: R, writer: W) -> Result<Self>
+    pub fn start<R>(
+        interface: Interface<impl InterfaceIO>,
+        reader: R,
+        writer: W,
+        obfuscation: mirage::config::ObfuscationConfig,
+    ) -> Result<Self>
     where
         R: AsyncRead + Unpin + Send + 'static,
     {
@@ -45,6 +50,7 @@ where
             reader,
             writer.clone(),
             shutdown_rx,
+            obfuscation,
         ));
 
         Ok(Self {
@@ -79,15 +85,33 @@ where
         reader: R,
         writer: Arc<Mutex<W>>,
         mut shutdown_rx: broadcast::Receiver<()>,
+        obfuscation: mirage::config::ObfuscationConfig,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send + 'static,
     {
+        let framed_reader = mirage::transport::framed::FramedReader::new(reader);
+        // We need to wrap the writer in FramedWriter, but writer is already Arc<Mutex<W>>
+        // which makes it awkward. 
+        // Actually, ClientRelayer keeps `writer` as state.
+        // We should construct FramedWriter inside the task or wrap W in FramedWriter BEFORE putting in Arc.
+        // But ClientRelayer::start takes generic W.
+        // Let's modify `ClientRelayer` struct to hold `FramedWriter<W>` but that changes type signature.
+        // EASIER: Just wrap it inside the task logic, but we need to lock the mutex, get the guard (W), wraps it? No.
+        // We can't wrap a MutexGuard in FramedWriter that expects ownership or &mut.
+        // FramedWriter::new(writer) takes writer.
+        // If writer is Arc<Mutex<W>>, we can process outgoing traffic by locking, getting &mut W, wrap in temporary FramedWriter?
+        // No, FramedWriter keeps internal buffer state if needed? FramedWriter is stateless wrapper (just writes).
+        // Let's check FramedWriter definition. It holds `writer`.
+        // If we create a new FramedWriter for EVERY packet, it works IF FramedWriter has no state.
+        // FramedWriter has NO state (just methods).
+        // So we can do `FramedWriter::new(&mut *writer_guard).send_packet(...)`.
+        
         let mut tasks = FuturesUnordered::new();
 
         tasks.extend([
-            tokio::spawn(Self::process_inbound_traffic(reader, interface.clone())),
-            tokio::spawn(Self::process_outgoing_traffic(writer, interface.clone())),
+            tokio::spawn(Self::process_inbound_traffic(framed_reader, interface.clone())),
+            tokio::spawn(Self::process_outgoing_traffic(writer, interface.clone(), obfuscation)),
         ]);
 
         interface.configure()?;
@@ -114,6 +138,7 @@ where
     async fn process_outgoing_traffic(
         writer: Arc<Mutex<W>>,
         interface: Arc<Interface<impl InterfaceIO>>,
+        obfuscation: mirage::config::ObfuscationConfig,
     ) -> Result<()> {
         debug!("Started outgoing traffic task (interface -> TLS tunnel)");
 
@@ -122,19 +147,44 @@ where
 
             for packet in packets {
                 let mut writer_guard = writer.lock().await;
-                // Use length-prefixed framing
-                let len = packet.len() as u32;
-                use tokio::io::AsyncWriteExt;
-                writer_guard.write_all(&len.to_be_bytes()).await?;
-                writer_guard.write_all(&packet).await?;
-                writer_guard.flush().await?;
+
+                // Apply timing obfuscation (Jitter)
+                if obfuscation.enabled && obfuscation.jitter_max_ms > 0 {
+                    let jitter_ms = rand::random::<u64>()
+                        % (obfuscation.jitter_max_ms - obfuscation.jitter_min_ms + 1)
+                        + obfuscation.jitter_min_ms;
+                    
+                    if jitter_ms > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
+                    }
+                }
+
+                // FramedWriter is stateless, so we can wrap the mutable reference
+                let mut framed_writer = mirage::transport::framed::FramedWriter::new(&mut *writer_guard);
+                
+                // Send data
+                framed_writer.send_packet(&packet).await?;
+
+                // Randomly inject padding
+                if obfuscation.enabled {
+                    if rand::random::<f64>() < obfuscation.padding_probability {
+                        let padding_len = rand::random::<usize>() 
+                            % (obfuscation.padding_max - obfuscation.padding_min + 1)
+                            + obfuscation.padding_min;
+                        
+                        use tracing::warn;
+                        if let Err(e) = framed_writer.send_padding(padding_len).await {
+                            warn!("Failed to send padding: {}", e);
+                        }
+                    }
+                }
             }
         }
     }
 
     /// Handles incoming packets from the server and relays them to the TUN interface.
     async fn process_inbound_traffic<R>(
-        mut reader: R,
+        mut reader: mirage::transport::framed::FramedReader<R>,
         interface: Arc<Interface<impl InterfaceIO>>,
     ) -> Result<()>
     where
@@ -142,28 +192,16 @@ where
     {
         debug!("Started inbound traffic task (TLS tunnel -> interface)");
 
-        use tokio::io::AsyncReadExt;
-        let mut header = [0u8; 4];
-
         loop {
-            // Read length prefix
-            reader.read_exact(&mut header).await?;
-            let len = u32::from_be_bytes(header) as usize;
-
-            if len > 2048 {
-                return Err(MirageError::system(format!(
-                    "Packet too large: {} bytes",
-                    len
-                )));
+            // FramedReader handles V2 parsing (Length + Type)
+            match reader.recv_packet().await {
+                Ok(packet) => {
+                    interface
+                        .write_packet(bytes::Bytes::from(packet).into())
+                        .await?;
+                }
+                Err(e) => return Err(e),
             }
-
-            // Read packet data
-            let mut packet = vec![0u8; len];
-            reader.read_exact(&mut packet).await?;
-
-            interface
-                .write_packet(bytes::Bytes::from(packet).into())
-                .await?;
         }
     }
 }

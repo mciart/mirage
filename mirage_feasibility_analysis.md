@@ -336,15 +336,15 @@ quincy (QUIC)  →  mirage (TCP/TLS over BoringSSL)
 
 ---
 
-### Phase 3: 流量混淆与性能优化 (2 周) 🟡
+### Phase 3: 流量混淆与性能优化 (2 周) �
 
 **目标**：消除 TLS 长度/时序特征，优化 Tun 模式下的吞吐量
 
-- [ ] **动态 Record Padding**: 随机填充 TLS Record 长度，对抗长度指纹分析 (Length Fingerprinting)
-- [ ] **时序混淆 (Timing Obfuscation)**: 模拟浏览器的连接/传输时序，消除 VPN 特征
-- [ ] **零拷贝优化 (Zero-Copy Optimization)**: 
+- [x] **动态 Record Padding**: 随机填充 TLS Record 长度，对抗长度指纹分析 (Length Fingerprinting)
+- [x] **时序混淆 (Timing Obfuscation)**: 模拟浏览器的连接/传输时序，消除 VPN 特征
+- [x] **零拷贝优化 (Zero-Copy Optimization)**: 
   - 放弃 Tun 模式下极难实现的 "Splice" (直通)
-  - 转而优化应用层内存管理 (`BytesMut`), 减少内核/用户态拷贝开销
+  - [x] 转而优化应用层内存管理 (`BytesMut`), 减少内核/用户态拷贝开销
 
 **产出**：流量特征隐匿 ("像访问 HTTPS 网站")，吞吐量提升
 

@@ -49,6 +49,7 @@ tracing = { workspace = true }
 
 # Networking
 ipnet = { workspace = true }
+rand = { workspace = true }
 bytes = { workspace = true }
 
 # BoringSSL TLS

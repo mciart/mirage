@@ -3,6 +3,6 @@
 //! This module provides the core transport abstraction for Mirage,
 //! replacing QUIC with TCP/TLS using BoringSSL.
 
-mod framed;
+pub mod framed;
 
 pub use framed::FramedStream;

@@ -19,6 +19,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use mirage::config::ObfuscationConfig;
 use mirage::config::ServerConfig;
 use mirage::constants::{PACKET_BUFFER_SIZE, PACKET_CHANNEL_SIZE, TLS_ALPN_PROTOCOLS};
 use mirage::network::interface::{Interface, InterfaceIO};
@@ -172,6 +173,7 @@ impl MirageServer {
                     let connection_queues = self.connection_queues.clone();
                     let address_pool = self.address_pool.clone();
                     let acceptor = acceptor.clone();
+                    let obfuscation = self.config.connection.obfuscation.clone();
 
                     connection_tasks.push(tokio::spawn(async move {
                         match dispatcher.dispatch(tcp_stream).await {
@@ -192,6 +194,7 @@ impl MirageServer {
                                     ingress_queue,
                                     connection_queues,
                                     address_pool,
+                                    obfuscation.clone(),
                                 ).await
                             }
                             Ok(DispatchResult::Proxy(stream, target)) => {
@@ -228,6 +231,7 @@ impl MirageServer {
     }
 
     /// Handles a single client connection: auth + packet relay.
+    /// Handles a single client connection: auth + packet relay.
     async fn handle_client<S>(
         stream: SslStream<S>,
         remote_addr: SocketAddr,
@@ -235,6 +239,7 @@ impl MirageServer {
         ingress_queue: Sender<Packet>,
         connection_queues: ConnectionQueues,
         address_pool: Arc<AddressPool>,
+        obfuscation: ObfuscationConfig,
     ) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -281,6 +286,7 @@ impl MirageServer {
             client_address,
             connection_receiver,
             ingress_queue,
+            obfuscation.clone(),
         )
         .await;
 
