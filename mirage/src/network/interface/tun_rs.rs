@@ -301,13 +301,20 @@ fn reader_task(
                 .await
                 .inspect_err(|e| error!("failed to receive packet: {}", e))?;
 
-            // On macOS, strip the 4-byte PI header
+            // On macOS, heuristic PI header stripping
             let mut packet_data = packet_buf.split_to(size);
 
             #[cfg(target_os = "macos")]
             if packet_data.len() >= 4 {
-                use bytes::Buf;
-                packet_data.advance(4);
+                // Check IP version (high nibble of first byte)
+                // If 0, it's likely a PI header (00 00 00 02 or 02 00 00 00)
+                // IPv4 starts with 4 (0100), IPv6 with 6 (0110)
+                let first_byte = packet_data[0];
+                if first_byte >> 4 == 0 {
+                    use bytes::Buf;
+                    // Likely PI header, strip it
+                    packet_data.advance(4);
+                }
             }
 
             let packet = packet_data.into();
@@ -347,27 +354,8 @@ fn writer_task(
                 None => break,
             };
 
-            #[cfg(target_os = "macos")]
-            {
-                use bytes::{BufMut, BytesMut};
-                // Prepend PI header (4 bytes)
-                // AF_INET = 2, AF_INET6 = 30 on macOS
-                let mut buf = BytesMut::with_capacity(packet.len() + 4);
-                let ip_ver = packet[0] >> 4;
-                if ip_ver == 6 {
-                    buf.put_u32(30); // AF_INET6
-                } else {
-                    buf.put_u32(2); // AF_INET
-                }
-                buf.put_slice(&packet);
-
-                interface
-                    .send(&buf)
-                    .await
-                    .inspect_err(|e| error!("failed to send packet: {}", e))?;
-            }
-
-            #[cfg(not(target_os = "macos"))]
+            // Reverted PI prepending: assume symmetry with Reader.
+            // If Reader gives raw IP (mostly), Writer should take raw IP.
             interface
                 .send(&packet)
                 .await
