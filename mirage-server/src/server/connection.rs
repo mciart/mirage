@@ -40,7 +40,7 @@ where
         client_address.addr()
     );
 
-    let framed_reader = FramedReader::new(reader);
+    let framed_reader = FramedReader::new(tokio::io::BufReader::new(reader));
     let framed_writer = FramedWriter::new(tokio::io::BufWriter::new(writer));
 
     let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(1024);

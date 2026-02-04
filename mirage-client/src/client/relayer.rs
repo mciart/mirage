@@ -83,7 +83,8 @@ impl ClientRelayer {
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
-        let framed_reader = mirage::transport::framed::FramedReader::new(reader);
+        let framed_reader =
+            mirage::transport::framed::FramedReader::new(tokio::io::BufReader::new(reader));
 
         // Use non-blocking jitter sender
         let framed_writer =
