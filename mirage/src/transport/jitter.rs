@@ -21,8 +21,8 @@ where
 {
     tokio::spawn(async move {
         // Fast Path: If obfuscation is disabled or effectively zero, bypass queue overhead
-        let jitter_disabled = !config.enabled
-            || (config.jitter_max_ms == 0 && config.padding_probability <= 0.0);
+        let jitter_disabled =
+            !config.enabled || (config.jitter_max_ms == 0 && config.padding_probability <= 0.0);
 
         if jitter_disabled {
             while let Some(packet) = rx.recv().await {
