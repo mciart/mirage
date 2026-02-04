@@ -106,7 +106,7 @@ where
             let padding_len = rand::random::<usize>()
                 % (obfuscation.padding_max - obfuscation.padding_min + 1)
                 + obfuscation.padding_min;
-            
+
             if let Err(e) = writer_guard.send_padding(padding_len).await {
                 warn!("Failed to send padding: {}", e);
             }
