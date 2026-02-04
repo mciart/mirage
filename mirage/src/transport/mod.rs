@@ -4,5 +4,6 @@
 //! replacing QUIC with TCP/TLS using BoringSSL.
 
 pub mod framed;
+pub mod jitter;
 
 pub use framed::FramedStream;

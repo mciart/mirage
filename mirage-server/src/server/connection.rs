@@ -13,12 +13,9 @@ use mirage::transport::framed::{FramedReader, FramedWriter};
 use mirage::utils::tasks::abort_all;
 use mirage::{MirageError, Result};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::Mutex;
-use tokio::sync::MutexGuard;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Runs the packet relay for an authenticated client.
 #[allow(clippy::too_many_arguments)]
@@ -29,7 +26,7 @@ pub async fn run_connection_relay<R, W>(
     _remote_addr: SocketAddr,
     username: String,
     client_address: IpNet,
-    egress_queue: Receiver<Bytes>,
+    mut egress_queue: Receiver<Bytes>,
     ingress_queue: Sender<Packet>,
     obfuscation: ObfuscationConfig,
 ) -> Result<()>
@@ -45,18 +42,40 @@ where
 
     let framed_reader = FramedReader::new(reader);
     let framed_writer = FramedWriter::new(writer);
-    let writer_shared = Arc::new(Mutex::new(framed_writer));
+
+    let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(1024);
 
     let mut tasks = FuturesUnordered::new();
 
-    tasks.extend([
-        tokio::spawn(process_outgoing_data(
-            writer_shared.clone(),
-            egress_queue,
-            obfuscation,
-        )),
-        tokio::spawn(process_incoming_data(framed_reader, ingress_queue)),
-    ]);
+    // 1. Spawn Jitter Sender (The actual Writer)
+    // This handles sending packets + padding with non-blocking jitter
+    use mirage::transport::jitter::spawn_jitter_sender;
+    tasks.push(tokio::spawn(async move {
+        spawn_jitter_sender(jitter_rx, framed_writer, obfuscation)
+            .await
+            .map_err(|e| MirageError::system(format!("Jitter sender task failed: {}", e)))
+    }));
+
+    // 2. Spawn Egress Pump (Queue -> Jitter Actor)
+    // Converts Bytes to Packet and feeds the jitter sender
+    tasks.push(tokio::spawn(async move {
+        loop {
+            let data = match egress_queue.recv().await {
+                Some(d) => d,
+                None => break,
+            };
+            
+            let packet = Packet::from(data);
+            if jitter_tx.send(packet).await.is_err() {
+                // Jitter sender died
+                break;
+            }
+        }
+        Ok(())
+    }));
+
+    // 3. Spawn Incoming (Reader)
+    tasks.push(tokio::spawn(process_incoming_data(framed_reader, ingress_queue)));
 
     // Wait for either task to complete
     let result = tasks
@@ -68,50 +87,6 @@ where
     let _ = abort_all(tasks).await;
 
     result
-}
-
-/// Processes outgoing data and sends it to the TLS connection.
-async fn process_outgoing_data<W>(
-    writer: Arc<Mutex<FramedWriter<W>>>,
-    mut egress_queue: Receiver<Bytes>,
-    obfuscation: ObfuscationConfig,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    loop {
-        let data = egress_queue
-            .recv()
-            .await
-            .ok_or(MirageError::system("Egress queue has been closed"))?;
-
-        let mut writer_guard: MutexGuard<FramedWriter<W>> = writer.lock().await;
-
-        // Apply timing obfuscation (Jitter)
-        if obfuscation.enabled && obfuscation.jitter_max_ms > 0 {
-            let jitter_ms = rand::random::<u64>()
-                % (obfuscation.jitter_max_ms - obfuscation.jitter_min_ms + 1)
-                + obfuscation.jitter_min_ms;
-
-            if jitter_ms > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
-            }
-        }
-
-        // Send data using framed protocol
-        writer_guard.send_packet(&data).await?;
-
-        // Randomly inject padding
-        if obfuscation.enabled && rand::random::<f64>() < obfuscation.padding_probability {
-            let padding_len = rand::random::<usize>()
-                % (obfuscation.padding_max - obfuscation.padding_min + 1)
-                + obfuscation.padding_min;
-
-            if let Err(e) = writer_guard.send_padding(padding_len).await {
-                warn!("Failed to send padding: {}", e);
-            }
-        }
-    }
 }
 
 /// Processes incoming data and sends it to the TUN interface queue.

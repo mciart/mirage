@@ -12,26 +12,20 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::signal;
 use tokio::sync::broadcast;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
 /// Client relayer that handles packet forwarding between the TUN interface and the TCP/TLS tunnel.
 #[allow(dead_code)]
-pub struct ClientRelayer<W> {
-    /// Write half of the TLS stream for sending packets
-    writer: Arc<Mutex<W>>,
+pub struct ClientRelayer {
     relayer_task: JoinHandle<Result<()>>,
     shutdown_tx: broadcast::Sender<()>,
 }
 
-impl<W> ClientRelayer<W>
-where
-    W: AsyncWrite + Unpin + Send + 'static,
-{
+impl ClientRelayer {
     /// Creates a new instance of the client relayer and starts relaying packets between
     /// the TUN interface and the TCP/TLS connection.
-    pub fn start<R>(
+    pub fn start<R, W>(
         interface: Interface<impl InterfaceIO>,
         reader: R,
         writer: W,
@@ -39,22 +33,20 @@ where
     ) -> Result<Self>
     where
         R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
     {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let interface = Arc::new(interface);
 
-        let writer = Arc::new(Mutex::new(writer));
-
         let relayer_task = tokio::spawn(Self::relay_packets(
             interface.clone(),
             reader,
-            writer.clone(),
+            writer,
             shutdown_rx,
             obfuscation,
         ));
 
         Ok(Self {
-            writer,
             relayer_task,
             shutdown_tx,
         })
@@ -80,46 +72,44 @@ where
     }
 
     /// Relays packets between the TUN interface and the TCP/TLS tunnel.
-    async fn relay_packets<R>(
+    async fn relay_packets<R, W>(
         interface: Arc<Interface<impl InterfaceIO>>,
         reader: R,
-        writer: Arc<Mutex<W>>,
+        writer: W,
         mut shutdown_rx: broadcast::Receiver<()>,
         obfuscation: mirage::config::ObfuscationConfig,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
     {
         let framed_reader = mirage::transport::framed::FramedReader::new(reader);
-        // We need to wrap the writer in FramedWriter, but writer is already Arc<Mutex<W>>
-        // which makes it awkward.
-        // Actually, ClientRelayer keeps `writer` as state.
-        // We should construct FramedWriter inside the task or wrap W in FramedWriter BEFORE putting in Arc.
-        // But ClientRelayer::start takes generic W.
-        // Let's modify `ClientRelayer` struct to hold `FramedWriter<W>` but that changes type signature.
-        // EASIER: Just wrap it inside the task logic, but we need to lock the mutex, get the guard (W), wraps it? No.
-        // We can't wrap a MutexGuard in FramedWriter that expects ownership or &mut.
-        // FramedWriter::new(writer) takes writer.
-        // If writer is Arc<Mutex<W>>, we can process outgoing traffic by locking, getting &mut W, wrap in temporary FramedWriter?
-        // No, FramedWriter keeps internal buffer state if needed? FramedWriter is stateless wrapper (just writes).
-        // Let's check FramedWriter definition. It holds `writer`.
-        // If we create a new FramedWriter for EVERY packet, it works IF FramedWriter has no state.
-        // FramedWriter has NO state (just methods).
-        // So we can do `FramedWriter::new(&mut *writer_guard).send_packet(...)`.
+        
+        // Use non-blocking jitter sender
+        let framed_writer = mirage::transport::framed::FramedWriter::new(writer);
+        let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(1024);
 
         let mut tasks = FuturesUnordered::new();
 
-        tasks.extend([
-            tokio::spawn(Self::process_inbound_traffic(
-                framed_reader,
-                interface.clone(),
-            )),
-            tokio::spawn(Self::process_outgoing_traffic(
-                writer,
-                interface.clone(),
-                obfuscation,
-            )),
-        ]);
+        // 1. Spawn Jitter Sender (The actual Writer)
+        use mirage::transport::jitter::spawn_jitter_sender;
+        tasks.push(tokio::spawn(async move {
+            spawn_jitter_sender(jitter_rx, framed_writer, obfuscation)
+                .await
+                .map_err(|e| MirageError::system(format!("Jitter sender task failed: {}", e)))
+        }));
+
+        // 2. Spawn Inbound Task (TLS -> TUN)
+        tasks.push(tokio::spawn(Self::process_inbound_traffic(
+            framed_reader,
+            interface.clone(),
+        )));
+        
+        // 3. Spawn Outbound Pump (TUN -> Jitter Actor)
+        tasks.push(tokio::spawn(Self::process_outgoing_traffic_pump(
+            jitter_tx,
+            interface.clone(),
+        )));
 
         interface.configure()?;
 
@@ -141,48 +131,22 @@ where
         result
     }
 
-    /// Handles incoming packets from the TUN interface and relays them to the server.
-    async fn process_outgoing_traffic(
-        writer: Arc<Mutex<W>>,
+    /// Handles incoming packets from the TUN interface and pumps them to the Jitter Sender.
+    async fn process_outgoing_traffic_pump(
+        jitter_tx: tokio::sync::mpsc::Sender<mirage::network::packet::Packet>,
         interface: Arc<Interface<impl InterfaceIO>>,
-        obfuscation: mirage::config::ObfuscationConfig,
     ) -> Result<()> {
-        debug!("Started outgoing traffic task (interface -> TLS tunnel)");
+        debug!("Started outgoing traffic pump (interface -> Jitter Actor)");
 
         loop {
+            // Read packets from TUN
             let packets = interface.read_packets().await?;
 
             for packet in packets {
-                let mut writer_guard = writer.lock().await;
-
-                // Apply timing obfuscation (Jitter)
-                if obfuscation.enabled && obfuscation.jitter_max_ms > 0 {
-                    let jitter_ms = rand::random::<u64>()
-                        % (obfuscation.jitter_max_ms - obfuscation.jitter_min_ms + 1)
-                        + obfuscation.jitter_min_ms;
-
-                    if jitter_ms > 0 {
-                        tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
-                    }
-                }
-
-                // FramedWriter is stateless, so we can wrap the mutable reference
-                let mut framed_writer =
-                    mirage::transport::framed::FramedWriter::new(&mut *writer_guard);
-
-                // Send data
-                framed_writer.send_packet(&packet).await?;
-
-                // Randomly inject padding
-                if obfuscation.enabled && rand::random::<f64>() < obfuscation.padding_probability {
-                    let padding_len = rand::random::<usize>()
-                        % (obfuscation.padding_max - obfuscation.padding_min + 1)
-                        + obfuscation.padding_min;
-
-                    use tracing::warn;
-                    if let Err(e) = framed_writer.send_padding(padding_len).await {
-                        warn!("Failed to send padding: {}", e);
-                    }
+                // Pump to Jitter Actor (Non-blocking usually, unless 1024 buffer full)
+                if jitter_tx.send(packet).await.is_err() {
+                     // Receiver died
+                     return Ok(());
                 }
             }
         }
