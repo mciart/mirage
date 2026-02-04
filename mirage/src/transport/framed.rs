@@ -267,6 +267,27 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
         Ok(())
     }
 
+    /// Sends a data packet but does NOT flush the stream.
+    /// Useful for batching multiple packets. Caller MUST flush manually.
+    pub async fn send_packet_no_flush(&mut self, packet: &[u8]) -> Result<()> {
+        if packet.len() > MAX_FRAME_SIZE {
+            return Err(NetworkError::PacketError {
+                reason: format!("Packet too large: {} bytes", packet.len()),
+            }
+            .into());
+        }
+
+        let len = packet.len() as u32;
+        let mut header = [0u8; FRAME_HEADER_SIZE];
+        header[0..4].copy_from_slice(&len.to_be_bytes());
+        header[4] = FRAME_TYPE_DATA;
+
+        self.writer.write_all(&header).await?;
+        self.writer.write_all(packet).await?;
+
+        Ok(())
+    }
+
     /// Sends a padding packet.
     #[allow(dead_code)]
     pub async fn send_padding(&mut self, len: usize) -> Result<()> {
@@ -295,6 +316,12 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
 
         self.writer.flush().await?;
 
+        Ok(())
+    }
+
+    /// Flushes the underlying stream.
+    pub async fn flush(&mut self) -> Result<()> {
+        self.writer.flush().await?;
         Ok(())
     }
 }

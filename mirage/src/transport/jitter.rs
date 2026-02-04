@@ -26,8 +26,34 @@ where
 
         if jitter_disabled {
             while let Some(packet) = rx.recv().await {
-                if let Err(e) = writer.send_packet(&packet).await {
+                // Adaptive Batching:
+                // Send the first packet without flushing to buffer it.
+                if let Err(e) = writer.send_packet_no_flush(&packet).await {
                     error!("Failed to send packet (fast path): {}", e);
+                    break;
+                }
+
+                // Try to grab up to 15 more packets from the channel to batch together
+                // This reduces syscalls and TLS overhead significantly (16 packets -> 1 syscall)
+                let mut batched = 0;
+                while batched < 15 {
+                    match rx.try_recv() {
+                        Ok(pkt) => {
+                            if let Err(e) = writer.send_packet_no_flush(&pkt).await {
+                                error!("Failed to send batched packet: {}", e);
+                                // If write failed, we should probably stop?
+                                // But outer loop will catch next time. break inner.
+                                break;
+                            }
+                            batched += 1;
+                        }
+                        Err(_) => break, // Channel empty or closed
+                    }
+                }
+
+                // Flush the batch to the network
+                if let Err(e) = writer.flush().await {
+                    error!("Failed to flush batch: {}", e);
                     break;
                 }
             }
