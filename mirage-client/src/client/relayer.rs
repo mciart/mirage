@@ -86,20 +86,10 @@ impl ClientRelayer {
         let framed_reader =
             mirage::transport::framed::FramedReader::new(tokio::io::BufReader::new(reader));
 
-        // Use non-blocking jitter sender
         let framed_writer =
             mirage::transport::framed::FramedWriter::new(tokio::io::BufWriter::new(writer));
-        let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(1024);
 
         let mut tasks = FuturesUnordered::new();
-
-        // 1. Spawn Jitter Sender (The actual Writer)
-        use mirage::transport::jitter::spawn_jitter_sender;
-        tasks.push(tokio::spawn(async move {
-            spawn_jitter_sender(jitter_rx, framed_writer, obfuscation)
-                .await
-                .map_err(|e| MirageError::system(format!("Jitter sender task failed: {}", e)))
-        }));
 
         // 2. Spawn Inbound Task (TLS -> TUN)
         tasks.push(tokio::spawn(Self::process_inbound_traffic(
@@ -107,30 +97,92 @@ impl ClientRelayer {
             interface.clone(),
         )));
 
-        // 3. Spawn Outbound Pump (TUN -> Jitter Actor)
-        tasks.push(tokio::spawn(Self::process_outgoing_traffic_pump(
-            jitter_tx,
-            interface.clone(),
-        )));
+        // 3. Spawn Outbound Task
+        // Optimization: If Jitter is disabled, use Direct Pump to bypass Actor/Channel overhead.
+        let jitter_disabled = !obfuscation.enabled
+            || (obfuscation.jitter_max_ms == 0 && obfuscation.padding_probability <= 0.0);
+
+        if jitter_disabled {
+            tasks.push(tokio::spawn(Self::process_outgoing_traffic_direct(
+                framed_writer,
+                interface.clone(),
+            )));
+        } else {
+            // Use Jitter Actor
+            let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(1024);
+
+            use mirage::transport::jitter::spawn_jitter_sender;
+            tasks.push(tokio::spawn(async move {
+                spawn_jitter_sender(jitter_rx, framed_writer, obfuscation)
+                    .await
+                    .map_err(|e| MirageError::system(format!("Jitter sender task failed: {}", e)))
+            }));
+
+            tasks.push(tokio::spawn(Self::process_outgoing_traffic_pump(
+                jitter_tx,
+                interface.clone(),
+            )));
+        }
 
         interface.configure()?;
 
         let result = tokio::select! {
-            Some(task_result) = tasks.next() => task_result?,
-            _ = shutdown_rx.recv() => {
-                info!("Received shutdown signal, shutting down");
-                Ok(())
-            },
-            _ = signal::ctrl_c() => {
-                info!("Received shutdown signal, shutting down");
-                Ok(())
-            },
+             Some(task_result) = tasks.next() => task_result?,
+             _ = shutdown_rx.recv() => {
+                 info!("Received shutdown signal, shutting down");
+                 Ok(())
+             },
+             _ = signal::ctrl_c() => {
+                 info!("Received shutdown signal, shutting down");
+                 Ok(())
+             },
         };
 
         // Stop all running tasks
         let _ = abort_all(tasks).await;
 
         result
+    }
+
+    /// Direct Pump: TUN -> FramedWriter (Bypasses Jitter Actor)
+    async fn process_outgoing_traffic_direct<W>(
+        mut writer: mirage::transport::framed::FramedWriter<W>,
+        interface: Arc<Interface<impl InterfaceIO>>,
+    ) -> Result<()>
+    where
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        debug!("Started outgoing traffic DIRECT pump (interface -> Network)");
+
+        loop {
+            // Read packets from TUN (returns a batch usually)
+            let packets = interface.read_packets().await?;
+            let count = packets.len();
+
+            if count == 0 {
+                continue;
+            }
+
+            for (i, packet) in packets.into_iter().enumerate() {
+                // Determine if we should flush
+                // Flush on the last packet of the batch to minimize syscalls but ensure low latency
+                let is_last = i == count - 1;
+
+                if is_last {
+                    // This flushes via FramedWriter internal flush if we use send_packet
+                    // OR we use no_flush then flush.
+                    // FramedWriter::send_packet does flush.
+                    if let Err(e) = writer.send_packet(&packet).await {
+                        return Err(e); // Connection died
+                    }
+                } else {
+                    // buffer it
+                    if let Err(e) = writer.send_packet_no_flush(&packet).await {
+                        return Err(e);
+                    }
+                }
+            }
+        }
     }
 
     /// Handles incoming packets from the TUN interface and pumps them to the Jitter Sender.
@@ -141,13 +193,10 @@ impl ClientRelayer {
         debug!("Started outgoing traffic pump (interface -> Jitter Actor)");
 
         loop {
-            // Read packets from TUN
             let packets = interface.read_packets().await?;
 
             for packet in packets {
-                // Pump to Jitter Actor (Non-blocking usually, unless 1024 buffer full)
                 if jitter_tx.send(packet).await.is_err() {
-                    // Receiver died
                     return Ok(());
                 }
             }

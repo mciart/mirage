@@ -41,38 +41,74 @@ where
     );
 
     let framed_reader = FramedReader::new(tokio::io::BufReader::new(reader));
-    let framed_writer = FramedWriter::new(tokio::io::BufWriter::new(writer));
-
-    let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(1024);
+    let mut framed_writer = FramedWriter::new(tokio::io::BufWriter::new(writer));
 
     let mut tasks = FuturesUnordered::new();
 
-    // 1. Spawn Jitter Sender (The actual Writer)
-    // This handles sending packets + padding with non-blocking jitter
-    use mirage::transport::jitter::spawn_jitter_sender;
-    tasks.push(tokio::spawn(async move {
-        spawn_jitter_sender(jitter_rx, framed_writer, obfuscation)
-            .await
-            .map_err(|e| MirageError::system(format!("Jitter sender task failed: {}", e)))
-    }));
+    // 1. Spawn Outbound Task
+    // Optimization: If Jitter is disabled, use Direct Pump (egress_queue -> writer)
+    // bypassing the Jitter Actor overhead.
+    let jitter_disabled = !obfuscation.enabled
+        || (obfuscation.jitter_max_ms == 0 && obfuscation.padding_probability <= 0.0);
 
-    // 2. Spawn Egress Pump (Queue -> Jitter Actor)
-    // Converts Bytes to Packet and feeds the jitter sender
-    tasks.push(tokio::spawn(async move {
-        loop {
-            let data = match egress_queue.recv().await {
-                Some(d) => d,
-                None => break,
-            };
+    if jitter_disabled {
+        tasks.push(tokio::spawn(async move {
+            // Direct Pump with Adaptive Batching
+            while let Some(data) = egress_queue.recv().await {
+                // Send first packet (buffer it)
+                if let Err(e) = framed_writer.send_packet_no_flush(&data).await {
+                    return Err(MirageError::system(format!("Failed to send packet: {}", e)));
+                }
 
-            let packet = Packet::from(data);
-            if jitter_tx.send(packet).await.is_err() {
-                // Jitter sender died
-                break;
+                // Adaptive Batching: Try to drain more packets
+                let mut batched = 0;
+                while batched < 15 {
+                    match egress_queue.try_recv() {
+                        Ok(d) => {
+                            if let Err(e) = framed_writer.send_packet_no_flush(&d).await {
+                                return Err(MirageError::system(format!(
+                                    "Failed to send packet: {}",
+                                    e
+                                )));
+                            }
+                            batched += 1;
+                        }
+                        Err(_) => break,
+                    }
+                }
+
+                // Flush batch
+                if let Err(e) = framed_writer.flush().await {
+                    return Err(MirageError::system(format!("Failed to flush: {}", e)));
+                }
             }
-        }
-        Ok(())
-    }));
+            Ok(())
+        }));
+    } else {
+        // Use Jitter Actor
+        use mirage::transport::jitter::spawn_jitter_sender;
+        let packet_rx = {
+            // Convert Bytes queue to Packet queue for Jitter Actor
+            // This is an adapter task
+            let (tx, rx) = tokio::sync::mpsc::channel(1024);
+            tasks.push(tokio::spawn(async move {
+                while let Some(data) = egress_queue.recv().await {
+                    let packet = Packet::from(data);
+                    if tx.send(packet).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(())
+            }));
+            rx
+        };
+
+        tasks.push(tokio::spawn(async move {
+            spawn_jitter_sender(packet_rx, framed_writer, obfuscation)
+                .await
+                .map_err(|e| MirageError::system(format!("Jitter sender task failed: {}", e)))
+        }));
+    }
 
     // 3. Spawn Incoming (Reader)
     tasks.push(tokio::spawn(process_incoming_data(
