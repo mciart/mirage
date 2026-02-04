@@ -174,8 +174,8 @@ impl ClientRelayer {
                     // FramedWriter::send_packet does flush.
                     writer.send_packet(&packet).await?;
                 } else {
-                     // buffer it
-                     writer.send_packet_no_flush(&packet).await?;
+                    // buffer it
+                    writer.send_packet_no_flush(&packet).await?;
                 }
             }
         }
