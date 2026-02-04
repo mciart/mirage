@@ -172,14 +172,10 @@ impl ClientRelayer {
                     // This flushes via FramedWriter internal flush if we use send_packet
                     // OR we use no_flush then flush.
                     // FramedWriter::send_packet does flush.
-                    if let Err(e) = writer.send_packet(&packet).await {
-                        return Err(e); // Connection died
-                    }
+                    writer.send_packet(&packet).await?;
                 } else {
-                    // buffer it
-                    if let Err(e) = writer.send_packet_no_flush(&packet).await {
-                        return Err(e);
-                    }
+                     // buffer it
+                     writer.send_packet_no_flush(&packet).await?;
                 }
             }
         }
