@@ -163,20 +163,11 @@ impl ClientRelayer {
                 continue;
             }
 
-            for (i, packet) in packets.into_iter().enumerate() {
+            for packet in packets {
                 // Determine if we should flush
-                // Flush on the last packet of the batch to minimize syscalls but ensure low latency
-                let is_last = i == count - 1;
-
-                if is_last {
-                    // This flushes via FramedWriter internal flush if we use send_packet
-                    // OR we use no_flush then flush.
-                    // FramedWriter::send_packet does flush.
-                    writer.send_packet(&packet).await?;
-                } else {
-                    // buffer it
-                    writer.send_packet_no_flush(&packet).await?;
-                }
+                // WITHDRAWN OPTIMIZATION: Flush every packet to ensure minimum latency.
+                // Batching caused bufferbloat and TCP Stall.
+                writer.send_packet(&packet).await?;
             }
         }
     }

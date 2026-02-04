@@ -53,33 +53,11 @@ where
 
     if jitter_disabled {
         tasks.push(tokio::spawn(async move {
-            // Direct Pump with Adaptive Batching
+            // Direct Pump (No Adaptive Batching)
             while let Some(data) = egress_queue.recv().await {
-                // Send first packet (buffer it)
-                if let Err(e) = framed_writer.send_packet_no_flush(&data).await {
+                // Send immediately (Flushes)
+                if let Err(e) = framed_writer.send_packet(&data).await {
                     return Err(MirageError::system(format!("Failed to send packet: {}", e)));
-                }
-
-                // Adaptive Batching: Try to drain more packets
-                let mut batched = 0;
-                while batched < 15 {
-                    match egress_queue.try_recv() {
-                        Ok(d) => {
-                            if let Err(e) = framed_writer.send_packet_no_flush(&d).await {
-                                return Err(MirageError::system(format!(
-                                    "Failed to send packet: {}",
-                                    e
-                                )));
-                            }
-                            batched += 1;
-                        }
-                        Err(_) => break,
-                    }
-                }
-
-                // Flush batch
-                if let Err(e) = framed_writer.flush().await {
-                    return Err(MirageError::system(format!("Failed to flush: {}", e)));
                 }
             }
             Ok(())
