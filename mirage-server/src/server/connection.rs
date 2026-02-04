@@ -64,7 +64,7 @@ where
                 Some(d) => d,
                 None => break,
             };
-            
+
             let packet = Packet::from(data);
             if jitter_tx.send(packet).await.is_err() {
                 // Jitter sender died
@@ -75,7 +75,10 @@ where
     }));
 
     // 3. Spawn Incoming (Reader)
-    tasks.push(tokio::spawn(process_incoming_data(framed_reader, ingress_queue)));
+    tasks.push(tokio::spawn(process_incoming_data(
+        framed_reader,
+        ingress_queue,
+    )));
 
     // Wait for either task to complete
     let result = tasks

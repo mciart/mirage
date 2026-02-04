@@ -1,10 +1,10 @@
 use crate::config::ObfuscationConfig;
-use crate::transport::framed::FramedWriter;
 use crate::network::packet::Packet;
+use crate::transport::framed::FramedWriter;
 use std::collections::VecDeque;
+use std::marker::Unpin;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
-use std::marker::Unpin;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::Instant;
 use tracing::{error, warn};
@@ -23,10 +23,10 @@ where
         // Queue to hold packets waiting for their send time
         // Item: (Packet, TargetSendTime)
         let mut queue: VecDeque<(Packet, Instant)> = VecDeque::new();
-        
+
         // Track the previous packet's target time to ensure monotonic order
         let mut last_target_time = Instant::now();
-        
+
         loop {
             // Determine the deadline for the next packet
             let sleep_future = if let Some((_, target_time)) = queue.front() {
@@ -53,10 +53,10 @@ where
                             } else {
                                 0
                             };
-                            
+
                             let now = Instant::now();
                             let jitter = Duration::from_millis(jitter_ms as u64);
-                            
+
                             // Target Time = max(Now + Jitter, LastTargetTime)
                             // This ensures:
                             // 1. At least 'Jitter' delay from now.
@@ -66,7 +66,7 @@ where
                                 target = last_target_time;
                             }
                             last_target_time = target;
-                            
+
                             queue.push_back((packet, target));
                         }
                         None => {
@@ -85,8 +85,8 @@ where
                 }
 
                 // 2. Send packets when deadline reached
-                _ = async { 
-                    if let Some(s) = sleep_future { s.await } else { std::future::pending().await } 
+                _ = async {
+                    if let Some(s) = sleep_future { s.await } else { std::future::pending().await }
                 }, if !queue.is_empty() => {
                     // Timeout reached for the front packet
                     if let Some((packet, _)) = queue.pop_front() {
@@ -94,7 +94,7 @@ where
                              error!("Failed to send packet: {}", e);
                              break;
                         }
-                        
+
                         // Also handle Padding Opportunity here?
                         // Or handle in the main loop?
                         // If we move logic here, we need random padding logic.

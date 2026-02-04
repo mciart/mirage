@@ -84,7 +84,7 @@ impl ClientRelayer {
         W: AsyncWrite + Unpin + Send + 'static,
     {
         let framed_reader = mirage::transport::framed::FramedReader::new(reader);
-        
+
         // Use non-blocking jitter sender
         let framed_writer = mirage::transport::framed::FramedWriter::new(writer);
         let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(1024);
@@ -104,7 +104,7 @@ impl ClientRelayer {
             framed_reader,
             interface.clone(),
         )));
-        
+
         // 3. Spawn Outbound Pump (TUN -> Jitter Actor)
         tasks.push(tokio::spawn(Self::process_outgoing_traffic_pump(
             jitter_tx,
@@ -145,8 +145,8 @@ impl ClientRelayer {
             for packet in packets {
                 // Pump to Jitter Actor (Non-blocking usually, unless 1024 buffer full)
                 if jitter_tx.send(packet).await.is_err() {
-                     // Receiver died
-                     return Ok(());
+                    // Receiver died
+                    return Ok(());
                 }
             }
         }
