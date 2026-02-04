@@ -285,11 +285,8 @@ fn reader_task(
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
         loop {
-            // MacOS reads PI header (4 bytes) even if we asked not to
-            #[cfg(target_os = "macos")]
+            // Ensure buffer can hold potential 4-byte PI header
             let buffer_size = mtu + 4;
-            #[cfg(not(target_os = "macos"))]
-            let buffer_size = mtu;
 
             let mut packet_buf = unsafe {
                 // SAFETY: the data is written to before it resized and read
@@ -301,10 +298,9 @@ fn reader_task(
                 .await
                 .inspect_err(|e| error!("failed to receive packet: {}", e))?;
 
-            // On macOS, heuristic PI header stripping
+            // Heuristic PI header stripping (works for macOS/BSD/etc)
             let mut packet_data = packet_buf.split_to(size);
 
-            #[cfg(target_os = "macos")]
             if packet_data.len() >= 4 {
                 // Check IP version (high nibble of first byte)
                 // If 0, it's likely a PI header (00 00 00 02 or 02 00 00 00)
@@ -312,7 +308,7 @@ fn reader_task(
                 let first_byte = packet_data[0];
                 if first_byte >> 4 == 0 {
                     use bytes::Buf;
-                    // Likely PI header, strip it
+                    debug!("Detected PI header, stripping 4 bytes");
                     packet_data.advance(4);
                 }
             }
