@@ -20,6 +20,21 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
+        // Fast Path: If obfuscation is disabled or effectively zero, bypass queue overhead
+        let jitter_disabled = !config.enabled
+            || (config.jitter_max_ms == 0 && config.padding_probability <= 0.0);
+
+        if jitter_disabled {
+            while let Some(packet) = rx.recv().await {
+                if let Err(e) = writer.send_packet(&packet).await {
+                    error!("Failed to send packet (fast path): {}", e);
+                    break;
+                }
+            }
+            return;
+        }
+
+        // Slow Path: Jitter Queue
         // Queue to hold packets waiting for their send time
         // Item: (Packet, TargetSendTime)
         let mut queue: VecDeque<(Packet, Instant)> = VecDeque::new();
