@@ -81,12 +81,12 @@ where
         header[4] = FRAME_TYPE_PADDING;
 
         self.stream.write_all(&header).await?;
-        
+
         // Generate and send random padding
         let mut padding = vec![0u8; len];
         rand::thread_rng().fill_bytes(&mut padding);
         self.stream.write_all(&padding).await?;
-        
+
         self.stream.flush().await?;
 
         Ok(())
@@ -200,7 +200,7 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
             // Read packet data
             self.read_buffer.clear();
             self.read_buffer.reserve(len);
-            
+
             // Use take adapter to read exactly len bytes without over-reading
             // and use read_buf to avoid initializing memory
             use tokio::io::AsyncReadExt;
@@ -237,7 +237,7 @@ pub struct FramedWriter<W> {
 impl<W: AsyncWrite + Unpin> FramedWriter<W> {
     /// Creates a new FramedWriter.
     pub fn new(writer: W) -> Self {
-        Self { 
+        Self {
             writer,
             padding_buffer: Vec::with_capacity(1024),
         }
@@ -283,16 +283,16 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
         header[4] = FRAME_TYPE_PADDING;
 
         self.writer.write_all(&header).await?;
-        
+
         // Random padding (reuse buffer)
         self.padding_buffer.clear();
-        // Resize zeroes, but since we overwrite with random soon, it's fine. 
+        // Resize zeroes, but since we overwrite with random soon, it's fine.
         // Zeroing is cheap compared to allocation.
-        self.padding_buffer.resize(len, 0); 
+        self.padding_buffer.resize(len, 0);
         rand::thread_rng().fill_bytes(&mut self.padding_buffer);
-        
+
         self.writer.write_all(&self.padding_buffer).await?;
-        
+
         self.writer.flush().await?;
 
         Ok(())

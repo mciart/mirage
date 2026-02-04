@@ -92,7 +92,7 @@ where
     {
         let framed_reader = mirage::transport::framed::FramedReader::new(reader);
         // We need to wrap the writer in FramedWriter, but writer is already Arc<Mutex<W>>
-        // which makes it awkward. 
+        // which makes it awkward.
         // Actually, ClientRelayer keeps `writer` as state.
         // We should construct FramedWriter inside the task or wrap W in FramedWriter BEFORE putting in Arc.
         // But ClientRelayer::start takes generic W.
@@ -106,12 +106,19 @@ where
         // If we create a new FramedWriter for EVERY packet, it works IF FramedWriter has no state.
         // FramedWriter has NO state (just methods).
         // So we can do `FramedWriter::new(&mut *writer_guard).send_packet(...)`.
-        
+
         let mut tasks = FuturesUnordered::new();
 
         tasks.extend([
-            tokio::spawn(Self::process_inbound_traffic(framed_reader, interface.clone())),
-            tokio::spawn(Self::process_outgoing_traffic(writer, interface.clone(), obfuscation)),
+            tokio::spawn(Self::process_inbound_traffic(
+                framed_reader,
+                interface.clone(),
+            )),
+            tokio::spawn(Self::process_outgoing_traffic(
+                writer,
+                interface.clone(),
+                obfuscation,
+            )),
         ]);
 
         interface.configure()?;
@@ -153,25 +160,26 @@ where
                     let jitter_ms = rand::random::<u64>()
                         % (obfuscation.jitter_max_ms - obfuscation.jitter_min_ms + 1)
                         + obfuscation.jitter_min_ms;
-                    
+
                     if jitter_ms > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
                     }
                 }
 
                 // FramedWriter is stateless, so we can wrap the mutable reference
-                let mut framed_writer = mirage::transport::framed::FramedWriter::new(&mut *writer_guard);
-                
+                let mut framed_writer =
+                    mirage::transport::framed::FramedWriter::new(&mut *writer_guard);
+
                 // Send data
                 framed_writer.send_packet(&packet).await?;
 
                 // Randomly inject padding
                 if obfuscation.enabled {
                     if rand::random::<f64>() < obfuscation.padding_probability {
-                        let padding_len = rand::random::<usize>() 
+                        let padding_len = rand::random::<usize>()
                             % (obfuscation.padding_max - obfuscation.padding_min + 1)
                             + obfuscation.padding_min;
-                        
+
                         use tracing::warn;
                         if let Err(e) = framed_writer.send_padding(padding_len).await {
                             warn!("Failed to send padding: {}", e);

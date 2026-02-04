@@ -91,7 +91,7 @@ where
             let jitter_ms = rand::random::<u64>()
                 % (obfuscation.jitter_max_ms - obfuscation.jitter_min_ms + 1)
                 + obfuscation.jitter_min_ms;
-            
+
             if jitter_ms > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
             }
@@ -106,7 +106,7 @@ where
                 let padding_len = rand::random::<usize>()
                     % (obfuscation.padding_max - obfuscation.padding_min + 1)
                     + obfuscation.padding_min;
-                
+
                 if let Err(e) = writer_guard.send_padding(padding_len).await {
                     warn!("Failed to send padding: {}", e);
                 }
