@@ -3,7 +3,6 @@ name: Publish release / Test Build
 on:
   release:
     types: [created]
-  # 允许手动触发测试打包
   workflow_dispatch:
     inputs:
       version_tag:
@@ -14,7 +13,6 @@ on:
 jobs:
   publish-crate:
     name: Publish crate
-    # [重要] 只有正式 Release 时才发布 crate，手动测试时跳过
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     environment: release
@@ -31,7 +29,6 @@ jobs:
         id: auth
         name: Authenticate to crates.io (trusted publishing)
       - name: Verify all crates can be published (dry-run)
-        # 注意：这里假设您的测试包名为 mirage-tests，如果 Cargo.toml 里没改名，可能需要改回 quincy-tests
         run: cargo publish --locked --workspace --exclude mirage-tests --dry-run
       - name: Publish crates to crates.io
         run: cargo publish --locked --workspace --exclude mirage-tests
@@ -45,6 +42,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         name: Checkout repository
+      
+      # [修复] 安装 Clang 解决 bindgen 报错
+      - name: Install build dependencies
+        run: |
+          yum install -y clang llvm-devel perl-core openssl-devel
+
       - uses: dtolnay/rust-toolchain@stable
         name: Set up toolchain
       - uses: Swatinem/rust-cache@v2
@@ -53,12 +56,10 @@ jobs:
         run: |
           cargo build --release --workspace --features jemalloc
           mkdir -p release
-          # 修正为 mirage 名称
           cp target/release/mirage-client release/
           cp target/release/mirage-server release/
           cp target/release/mirage-users release/
           cp target/release/mirage-client-gui release/
-          # 如果有 daemon 也复制
           if [ -f "target/release/mirage-client-daemon" ]; then
             cp target/release/mirage-client-daemon release/
           fi
@@ -95,7 +96,6 @@ jobs:
         run: |
           mkdir -p release
           cp target/release/* release/
-          # 使用输入的 tag 或 git tag
           TAG_NAME="${{ github.event.inputs.version_tag }}"
           if [ -z "$TAG_NAME" ]; then TAG_NAME="${{ github.ref_name }}"; fi
           tar zcf mirage-${TAG_NAME}-linux-x86_64.tar.gz -C release .
@@ -116,12 +116,10 @@ jobs:
           mkdir -p artifacts
           TAG_NAME="${{ github.event.inputs.version_tag }}"
           if [ -z "$TAG_NAME" ]; then TAG_NAME="${{ github.ref_name }}"; fi
-          
           mv mirage-*.tar.gz artifacts/ || true
           mv target/release/*.deb artifacts/mirage-${TAG_NAME}-linux-x86_64.deb || true
           mv target/release/*.AppImage artifacts/mirage-${TAG_NAME}-linux-x86_64.AppImage || true
       
-      # [新增] 上传测试产物
       - uses: actions/upload-artifact@v4
         name: Upload Test Packages
         with:
@@ -140,6 +138,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         name: Checkout repository
+      
+      # [修复] 补充 macOS 依赖
+      - name: Install dependencies
+        run: brew install nasm
+
       - uses: dtolnay/rust-toolchain@stable
         name: Set up toolchain
       - uses: Swatinem/rust-cache@v2
