@@ -4,13 +4,6 @@
 [![Documentation](https://docs.rs/mirage/badge.svg)](https://docs.rs/mirage/)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENCE)
 
-> [!WARNING]
-> **🚧 项目开发中 (Work in Progress) 🚧**
->
-> Mirage 目前处于 **Phase 3 (流量混淆与性能优化)** 开发阶段，核心功能已趋于稳定。
-> 我们已经实现了 **加权拟态轮廓 (Weighted Traffic Mimicry)** 和 **应用层心跳 (Heartbeat)**，大幅提升了抗检测能力。
-> 详情请查阅 [Mirage 可行性分析](./mirage_feasibility_analysis.md)。
-
 > **Mirage** 是一款基于 Rust 开发的下一代 VPN 客户端和服务端，旨在提供极致的隐蔽性和性能。
 > 它从原本的 QUIC 架构迁移到了 **TCP/TLS**，集成 **BoringSSL** 以完美模拟 Chrome 指纹，并采用 **Reality** 协议思想进行主动伪装。
 
@@ -20,7 +13,7 @@
 
 ## 核心特性 (Features)
 
-基于最新的[理论分析](./mirage_feasibility_analysis.md)，Mirage 具备以下独有优势：
+基于最新的[理论分析](./docs/mirage_feasibility_analysis.md)，Mirage 具备以下独有优势：
 
 ### 1. 完美的 TLS 指纹伪装 🎭
 Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chrome 同源的 **BoringSSL** 库。
@@ -250,7 +243,7 @@ users_file = "users"
 
 ## 附录：Feasibility Analysis (可行性分析)
 
-详情请参阅项目中的 [mirage_feasibility_analysis.md](./mirage_feasibility_analysis.md) 文档，其中详细阐述了从 QUIC 迁移到 TCP/TLS 的技术决策过程和路线图。
+详情请参阅项目中的 [理论分析](./docs/mirage_feasibility_analysis.md) 文档，其中详细阐述了从 QUIC 迁移到 TCP/TLS 的技术决策过程和路线图。
 
 ### 开发路线图 (Roadmap)
 - [x] **Phase 1**: 基础 TCP/TLS 隧道开发 (已完成)
