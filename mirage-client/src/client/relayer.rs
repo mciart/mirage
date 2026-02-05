@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn, debug}; // 确保 debug 被引入
+use tracing::{debug, error, info, warn}; // 确保 debug 被引入
 
 use bytes::{Bytes, BytesMut};
 use prism::device::PrismDevice;
@@ -134,7 +134,7 @@ impl ClientRelayer {
             blind_relay_rx,
             config.clone(),
             server_ip,
-            tun_tx_to_stack, 
+            tun_tx_to_stack,
         )));
 
         if let Some(res) = tasks.next().await {
@@ -189,8 +189,14 @@ impl ClientRelayer {
                             use tokio::io::AsyncReadExt;
                             let mut buf = [0u8; 8192];
                             while let Ok(n) = remote_reader.read(&mut buf).await {
-                                if n == 0 { break; }
-                                if local_tx.send(Bytes::copy_from_slice(&buf[..n])).await.is_err() {
+                                if n == 0 {
+                                    break;
+                                }
+                                if local_tx
+                                    .send(Bytes::copy_from_slice(&buf[..n]))
+                                    .await
+                                    .is_err()
+                                {
                                     break;
                                 }
                             }
@@ -221,16 +227,16 @@ impl ClientRelayer {
             // [修复] 移除下划线，使用这些变量
             let config = config.clone();
             let tun_tx = tun_tx.clone();
-            
+
             tokio::spawn(async move {
                 // 简单的调试日志，证明 UDP 正在工作
                 debug!("Blind Relay: Forwarding {} bytes", pkt.len());
-                
+
                 // 建立新的隧道用于转发此包
                 match Self::establish_tunnel(&config, server_ip).await {
                     Ok((mut r, mut w)) => {
                         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                        
+
                         // 1. 发送 UDP/ICMP 包 (通过 TLS 封装)
                         if w.write_all(&pkt).await.is_ok() {
                             // 2. 等待回包 (带超时)
@@ -293,13 +299,20 @@ impl ClientRelayer {
         if let Some(token) = config.reality.short_ids.first() {
             alpn.push(token.as_bytes().to_vec());
         }
-        let alpn_wire = alpn.iter().flat_map(|p| { let mut v = vec![p.len() as u8]; v.extend_from_slice(p); v }).collect::<Vec<_>>();
+        let alpn_wire = alpn
+            .iter()
+            .flat_map(|p| {
+                let mut v = vec![p.len() as u8];
+                v.extend_from_slice(p);
+                v
+            })
+            .collect::<Vec<_>>();
         builder.set_alpn_protos(&alpn_wire).unwrap();
 
         let connector = builder.build();
         let ssl_config = connector.configure().unwrap();
         let sni = &config.reality.target_sni;
-        
+
         let tls_stream = tokio_boring::connect(ssl_config, sni, tcp_stream)
             .await
             .map_err(|e| MirageError::connection_failed(format!("TLS: {}", e)))?;
