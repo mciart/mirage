@@ -105,14 +105,14 @@ impl ClientDaemon {
         // 2. 启动客户端任务 (Spawn task)
         let client_task = tokio::spawn(async move {
             let result = client.start::<TunRsInterface>(Some(tx)).await;
-            
+
             // Client stopped (or failed)
             let mut state_guard = state_clone.lock().await;
             state_guard.is_running = false;
             state_guard.start_time = None;
             state_guard.client_address = None;
             state_guard.server_address = None;
-            
+
             result
         });
 
