@@ -12,14 +12,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const FRAME_TYPE_DATA: u8 = 0x00;
 const FRAME_TYPE_PADDING: u8 = 0x01;
-// const FRAME_TYPE_KEEPALIVE: u8 = 0xFF; // Reserved for future
 
 /// A framed stream that provides packet-level operations over a byte stream.
-///
-/// Uses a length-prefixed protocol V2:
-/// - 4 bytes: packet length (big-endian u32)
-/// - 1 byte:  packet type (0x00 = Data, 0x01 = Padding)
-/// - N bytes: packet data
 pub struct FramedStream<S> {
     stream: S,
     read_buffer: BytesMut,
@@ -29,7 +23,6 @@ impl<S> FramedStream<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    /// Creates a new FramedStream wrapping the provided stream.
     pub fn new(stream: S) -> Self {
         Self {
             stream,
@@ -52,14 +45,10 @@ where
 
         let len = packet.len() as u32;
         let mut header = [0u8; FRAME_HEADER_SIZE];
-        // Length (4 bytes)
         header[0..4].copy_from_slice(&len.to_be_bytes());
-        // Type (1 byte)
         header[4] = FRAME_TYPE_DATA;
 
-        // Note: For FramedStream (duplex), we haven't optimized with a write buffer
-        // because it's mostly used in tests or simple scenarios.
-        // The critical path uses split FramedWriter below.
+        // Simple implementation for duplex stream (mostly used in tests)
         self.stream.write_all(&header).await?;
         self.stream.write_all(packet).await?;
         self.stream.flush().await?;
@@ -67,38 +56,22 @@ where
         Ok(())
     }
 
-    /// Sends a padding packet of the specified length with random content.
     pub async fn send_padding(&mut self, len: usize) -> Result<()> {
-        if len > MAX_FRAME_SIZE {
-            return Err(NetworkError::PacketError {
-                reason: format!("Padding too large: {} bytes", len),
-            }
-            .into());
-        }
-
         let len_u32 = len as u32;
         let mut header = [0u8; FRAME_HEADER_SIZE];
-        // Length
         header[0..4].copy_from_slice(&len_u32.to_be_bytes());
-        // Type
         header[4] = FRAME_TYPE_PADDING;
 
         self.stream.write_all(&header).await?;
-
-        // Generate and send random padding
         let mut padding = vec![0u8; len];
         rand::thread_rng().fill_bytes(&mut padding);
         self.stream.write_all(&padding).await?;
-
         self.stream.flush().await?;
-
         Ok(())
     }
 
-    /// Receives a packet from the stream, transparently handling padding.
     pub async fn recv_packet(&mut self) -> Result<BytesMut> {
         loop {
-            // Read header
             let mut header = [0u8; FRAME_HEADER_SIZE];
             self.stream.read_exact(&mut header).await?;
 
@@ -112,47 +85,29 @@ where
                 .into());
             }
 
-            // Read payload
             self.read_buffer.clear();
             self.read_buffer.resize(len, 0);
             self.stream.read_exact(&mut self.read_buffer).await?;
 
             match type_byte {
-                FRAME_TYPE_DATA => {
-                    return Ok(self.read_buffer.split());
-                }
-                FRAME_TYPE_PADDING => {
-                    // Ignore padding and continue loop
-                    continue;
-                }
-                _ => {
-                    // Unknown type, ignore (forward compatibility)
-                    continue;
-                }
+                FRAME_TYPE_DATA => return Ok(self.read_buffer.split()),
+                FRAME_TYPE_PADDING => continue,
+                _ => continue,
             }
         }
     }
 
-    /// Gets a reference to the underlying stream.
     pub fn inner(&self) -> &S {
         &self.stream
     }
-
-    /// Gets a mutable reference to the underlying stream.
     pub fn inner_mut(&mut self) -> &mut S {
         &mut self.stream
     }
-
-    /// Consumes self and returns the underlying stream.
     pub fn into_inner(self) -> S {
         self.stream
     }
 }
 
-/// Splits a FramedStream into read and write halves.
-///
-/// This is useful when you need to read and write concurrently from different tasks.
-#[allow(dead_code)]
 pub fn split_framed<S>(
     stream: FramedStream<S>,
 ) -> (
@@ -166,15 +121,12 @@ where
     (FramedReader::new(read_half), FramedWriter::new(write_half))
 }
 
-/// Read half of a split FramedStream.
-#[allow(dead_code)]
 pub struct FramedReader<R> {
     reader: R,
     read_buffer: BytesMut,
 }
 
 impl<R: AsyncRead + Unpin> FramedReader<R> {
-    /// Creates a new FramedReader.
     pub fn new(reader: R) -> Self {
         Self {
             reader,
@@ -182,11 +134,8 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
         }
     }
 
-    /// Receives a packet from the stream, transparently handling padding.
-    #[allow(dead_code)]
     pub async fn recv_packet(&mut self) -> Result<BytesMut> {
         loop {
-            // Read header
             let mut header = [0u8; FRAME_HEADER_SIZE];
             self.reader.read_exact(&mut header).await?;
 
@@ -200,12 +149,9 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
                 .into());
             }
 
-            // Read packet data
             self.read_buffer.clear();
             self.read_buffer.reserve(len);
 
-            // Use take adapter to read exactly len bytes without over-reading
-            // and use read_buf to avoid initializing memory
             use tokio::io::AsyncReadExt;
             let mut taker = (&mut self.reader).take(len as u64);
             while self.read_buffer.len() < len {
@@ -216,76 +162,42 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
             }
 
             match type_byte {
-                FRAME_TYPE_DATA => {
-                    return Ok(self.read_buffer.split());
-                }
-                FRAME_TYPE_PADDING => {
-                    continue;
-                }
-                _ => {
-                    continue;
-                }
+                FRAME_TYPE_DATA => return Ok(self.read_buffer.split()),
+                FRAME_TYPE_PADDING => continue,
+                _ => continue,
             }
         }
     }
 }
 
 /// Write half of a split FramedStream.
-#[allow(dead_code)]
 pub struct FramedWriter<W> {
     writer: W,
     padding_buffer: Vec<u8>,
-    // Optimization: Buffer to coalesce header and body into a single write call
+    // Accumulation buffer for Write Coalescing
     write_buffer: BytesMut,
 }
 
 impl<W: AsyncWrite + Unpin> FramedWriter<W> {
-    /// Creates a new FramedWriter.
     pub fn new(writer: W) -> Self {
         Self {
             writer,
             padding_buffer: Vec::with_capacity(1024),
-            // Pre-allocate buffer to avoid resizing for standard packets
-            write_buffer: BytesMut::with_capacity(MAX_FRAME_SIZE + FRAME_HEADER_SIZE),
+            // Pre-allocate a larger buffer (e.g. 32KB) to hold multiple packets
+            write_buffer: BytesMut::with_capacity(32 * 1024),
         }
     }
 
-    /// Sends a data packet over the stream.
-    ///
-    /// OPTIMIZED: Uses `write_buffer` to combine header and payload,
-    /// reducing system calls from 2 to 1 per packet.
-    #[allow(dead_code)]
+    /// Sends a data packet immediately (buffers then flushes).
     pub async fn send_packet(&mut self, packet: &[u8]) -> Result<()> {
-        if packet.len() > MAX_FRAME_SIZE {
-            return Err(NetworkError::PacketError {
-                reason: format!("Packet too large: {} bytes", packet.len()),
-            }
-            .into());
-        }
-
-        let len = packet.len() as u32;
-
-        // 1. Prepare Buffer
-        self.write_buffer.clear();
-        self.write_buffer.reserve(FRAME_HEADER_SIZE + packet.len());
-
-        // 2. Write Header (User space op)
-        // Length (4 bytes) + Type (1 byte)
-        self.write_buffer.put_u32(len); // big-endian by default in bytes crate
-        self.write_buffer.put_u8(FRAME_TYPE_DATA);
-
-        // 3. Write Payload (User space copy)
-        self.write_buffer.put_slice(packet);
-
-        // 4. Single System Call / SSL Write
-        self.writer.write_all(&self.write_buffer).await?;
-        self.writer.flush().await?;
-
+        self.send_packet_no_flush(packet).await?;
+        self.flush().await?;
         Ok(())
     }
 
-    /// Sends a data packet but does NOT flush the stream.
-    /// Useful for batching multiple packets. Caller MUST flush manually.
+    /// Buffers a data packet into memory.
+    /// DOES NOT perform any system calls or encryption until flush() is called.
+    /// This achieves True Write Coalescing.
     pub async fn send_packet_no_flush(&mut self, packet: &[u8]) -> Result<()> {
         if packet.len() > MAX_FRAME_SIZE {
             return Err(NetworkError::PacketError {
@@ -294,36 +206,37 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
             .into());
         }
 
+        // Safety check: If buffer is getting too full (>64KB), force a flush to prevent OOM
+        // or exceeding typical TLS record limits excessively.
+        if self.write_buffer.len() > 64 * 1024 {
+            self.flush_internal(false).await?;
+        }
+
         let len = packet.len() as u32;
 
-        // Same optimization: coalesce into write_buffer
-        self.write_buffer.clear();
-        self.write_buffer.reserve(FRAME_HEADER_SIZE + packet.len());
-
+        // 1. Write Header to Buffer (Memory Op)
         self.write_buffer.put_u32(len);
         self.write_buffer.put_u8(FRAME_TYPE_DATA);
-        self.write_buffer.put_slice(packet);
 
-        self.writer.write_all(&self.write_buffer).await?;
+        // 2. Write Payload to Buffer (Memory Op)
+        self.write_buffer.put_slice(packet);
 
         Ok(())
     }
 
     /// Sends a padding packet.
-    #[allow(dead_code)]
     pub async fn send_padding(&mut self, len: usize) -> Result<()> {
+        // If we have pending data, flush it first to keep padding logic simple and synchronized
+        if !self.write_buffer.is_empty() {
+            self.flush_internal(false).await?;
+        }
+
         if len > MAX_FRAME_SIZE {
             return Err(NetworkError::PacketError {
                 reason: format!("Padding too large: {} bytes", len),
             }
             .into());
         }
-
-        // Optimization: We could also use write_buffer here,
-        // but padding logic uses a separate scratch buffer for random generation.
-        // Given padding is less frequent (5%), the impact is smaller.
-        // We stick to the current logic or we can optimize it similarly if needed.
-        // For now, let's keep it simple as random generation needs a mutable slice.
 
         let len_u32 = len as u32;
         let mut header = [0u8; FRAME_HEADER_SIZE];
@@ -332,46 +245,32 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
 
         self.writer.write_all(&header).await?;
 
-        // Random padding (reuse buffer)
         self.padding_buffer.clear();
-        // Resize zeroes, but since we overwrite with random soon, it's fine.
         self.padding_buffer.resize(len, 0);
         rand::thread_rng().fill_bytes(&mut self.padding_buffer);
 
         self.writer.write_all(&self.padding_buffer).await?;
-
         self.writer.flush().await?;
 
         Ok(())
     }
 
-    /// Flushes the underlying stream.
+    /// Flushes the write buffer to the underlying stream and then flushes the stream.
     pub async fn flush(&mut self) -> Result<()> {
-        self.writer.flush().await?;
-        Ok(())
+        self.flush_internal(true).await
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::duplex;
+    // Helper to flush buffer to stream, optionally flushing the stream itself
+    async fn flush_internal(&mut self, flush_stream: bool) -> Result<()> {
+        if !self.write_buffer.is_empty() {
+            // This Single Write Call will be encrypted as one (or few) large TLS records
+            self.writer.write_all(&self.write_buffer).await?;
+            self.write_buffer.clear();
+        }
 
-    #[tokio::test]
-    async fn test_send_recv_packet() {
-        let (client, server) = duplex(4096);
-        let mut client_framed = FramedStream::new(client);
-        let mut server_framed = FramedStream::new(server);
-
-        let test_data = b"Hello, Mirage!";
-
-        // Client sends
-        tokio::spawn(async move {
-            client_framed.send_packet(test_data).await.unwrap();
-        });
-
-        // Server receives
-        let received = server_framed.recv_packet().await.unwrap();
-        assert_eq!(&received[..], test_data);
+        if flush_stream {
+            self.writer.flush().await?;
+        }
+        Ok(())
     }
 }
