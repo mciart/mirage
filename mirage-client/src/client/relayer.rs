@@ -289,7 +289,7 @@ impl ClientRelayer {
     // TODO: This function is replaced by Prism logic and should be removed or adapted.
     // However, the user didn't explicitly ask to remove `process_inbound_traffic` but `run_stack_architecture` replaces the main loop.
     // We also need to add `control_loop` and `control_loop_blind`.
-    
+
     #[allow(dead_code)]
     async fn control_loop(
         mut rx: mpsc::Receiver<prism::stack::TunnelRequest>,
