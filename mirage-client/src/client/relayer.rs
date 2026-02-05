@@ -83,9 +83,9 @@ impl ClientRelayer {
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
+        // Removed BufReader/BufWriter wrappers to avoid double buffering and latency
         let framed_reader =
             mirage::transport::framed::FramedReader::new(tokio::io::BufReader::new(reader));
-
         let framed_writer = mirage::transport::framed::FramedWriter::new(writer);
 
         let mut tasks = FuturesUnordered::new();
@@ -97,7 +97,6 @@ impl ClientRelayer {
         )));
 
         // 3. Spawn Outbound Task
-        // Optimization: If Jitter is disabled, use Direct Pump to bypass Actor/Channel overhead.
         let jitter_disabled = !obfuscation.enabled
             || (obfuscation.jitter_max_ms == 0 && obfuscation.padding_probability <= 0.0);
 
@@ -137,7 +136,6 @@ impl ClientRelayer {
              },
         };
 
-        // Stop all running tasks
         let _ = abort_all(tasks).await;
 
         result
@@ -162,12 +160,15 @@ impl ClientRelayer {
                 continue;
             }
 
+            // OPTIMIZATION: Batch Flushing
+            // Instead of flushing every packet (which kills throughput),
+            // we write all packets in the batch to the buffer, then flush ONCE.
             for packet in packets {
-                // Determine if we should flush
-                // WITHDRAWN OPTIMIZATION: Flush every packet to ensure minimum latency.
-                // Batching caused bufferbloat and TCP Stall.
-                writer.send_packet(&packet).await?;
+                writer.send_packet_no_flush(&packet).await?;
             }
+
+            // Flush the entire batch at once
+            writer.flush().await?;
         }
     }
 
@@ -200,7 +201,6 @@ impl ClientRelayer {
         debug!("Started inbound traffic task (TLS tunnel -> interface)");
 
         loop {
-            // FramedReader handles V2 parsing (Length + Type)
             match reader.recv_packet().await {
                 Ok(packet) => {
                     interface
