@@ -127,32 +127,30 @@ where
 
                         // [核心修改] 流量整形 (Traffic Shaping)
                         // 使用加权分布替代均匀随机，模拟真实 HTTPS 特征
-                        if config.enabled && config.padding_probability > 0.0 {
-                             if rand::thread_rng().gen_bool(config.padding_probability) {
-                                 // 生成 0-99 的随机数来决定包的大小类型
-                                 let profile = rand::thread_rng().gen_range(0..100);
+                        if config.enabled && config.padding_probability > 0.0 && rand::thread_rng().gen_bool(config.padding_probability) {
+                             // 生成 0-99 的随机数来决定包的大小类型
+                             let profile = rand::thread_rng().gen_range(0..100);
 
-                                 let raw_len = if profile < 60 {
-                                     // 60% 概率：模拟 "控制帧/ACK" (40-100 Bytes)
-                                     // 像 TLS Alerts, HTTP/2 WindowUpdates
-                                     rand::thread_rng().gen_range(40..=100)
-                                 } else if profile < 90 {
-                                     // 30% 概率：模拟 "Headers/元数据" (250-600 Bytes)
-                                     // 像 HTTP Headers, TLS Handshake fragments
-                                     rand::thread_rng().gen_range(250..=600)
-                                 } else {
-                                     // 10% 概率：模拟 "数据切片" (800-1200 Bytes)
-                                     // 像图片加载的数据块
-                                     rand::thread_rng().gen_range(800..=1200)
-                                 };
+                             let raw_len = if profile < 60 {
+                                 // 60% 概率：模拟 "控制帧/ACK" (40-100 Bytes)
+                                 // 像 TLS Alerts, HTTP/2 WindowUpdates
+                                 rand::thread_rng().gen_range(40..=100)
+                             } else if profile < 90 {
+                                 // 30% 概率：模拟 "Headers/元数据" (250-600 Bytes)
+                                 // 像 HTTP Headers, TLS Handshake fragments
+                                 rand::thread_rng().gen_range(250..=600)
+                             } else {
+                                 // 10% 概率：模拟 "数据切片" (800-1200 Bytes)
+                                 // 像图片加载的数据块
+                                 rand::thread_rng().gen_range(800..=1200)
+                             };
 
-                                 // 仍然遵守配置的最大值限制以防 MTU 溢出，
-                                 // 但我们允许它小于 config.padding_min (因为小包才更像真实的 ACK)
-                                 let final_len = raw_len.min(config.padding_max).max(1);
+                             // 仍然遵守配置的最大值限制以防 MTU 溢出，
+                             // 但我们允许它小于 config.padding_min (因为小包才更像真实的 ACK)
+                             let final_len = raw_len.min(config.padding_max).max(1);
 
-                                 if let Err(e) = writer.send_padding(final_len).await {
-                                     warn!("Failed to send padding: {}", e);
-                                 }
+                             if let Err(e) = writer.send_padding(final_len).await {
+                                 warn!("Failed to send padding: {}", e);
                              }
                         }
                     }
