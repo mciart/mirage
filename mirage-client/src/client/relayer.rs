@@ -6,7 +6,7 @@
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use mirage::network::interface::{Interface, InterfaceIO};
-use mirage::utils::tasks::abort_all;
+// use mirage::utils::tasks::abort_all;
 use mirage::{MirageError, Result};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -84,7 +84,7 @@ impl ClientRelayer {
 
     /// Relays packets between the TUN interface and the TCP/TLS tunnel.
     async fn relay_packets<R, W>(
-        interface: Arc<Interface<impl InterfaceIO>>,
+        _interface: Arc<Interface<impl InterfaceIO>>,
         _reader: R,
         _writer: W,
         _shutdown_rx: broadcast::Receiver<()>,
@@ -141,6 +141,7 @@ impl ClientRelayer {
     }
 
     /// Relays packets between the TUN interface and the TCP/TLS tunnel using Prism Stack.
+    #[allow(dead_code)]
     async fn bridge_reader(
         interface: Arc<Interface<impl InterfaceIO>>,
         tx: mpsc::Sender<BytesMut>,
@@ -163,6 +164,7 @@ impl ClientRelayer {
         }
     }
 
+    #[allow(dead_code)]
     async fn run_stack_architecture(
         interface: Arc<Interface<impl InterfaceIO>>,
         config: ClientConfig,
@@ -287,7 +289,8 @@ impl ClientRelayer {
     // TODO: This function is replaced by Prism logic and should be removed or adapted.
     // However, the user didn't explicitly ask to remove `process_inbound_traffic` but `run_stack_architecture` replaces the main loop.
     // We also need to add `control_loop` and `control_loop_blind`.
-
+    
+    #[allow(dead_code)]
     async fn control_loop(
         mut rx: mpsc::Receiver<prism::stack::TunnelRequest>,
         config: ClientConfig,
@@ -313,6 +316,7 @@ impl ClientRelayer {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn control_loop_blind(
         // mut rx: mpsc::Receiver<prism::stack::UdpRequest>, // Changed back to UdpRequest as BlindRelayRequest was also not found. Need to check Prism source if possible or use generic/dynamically typed approach if necessary, but strong typing is required.
         // Wait, if UdpRequest was not found, and BlindRelayRequest was not found.
@@ -368,6 +372,7 @@ impl ClientRelayer {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn process_inbound_traffic<R>(
         mut reader: mirage::transport::framed::FramedReader<R>,
         interface: Arc<Interface<impl InterfaceIO>>,
