@@ -41,7 +41,7 @@ where
     );
 
     let framed_reader = FramedReader::new(tokio::io::BufReader::new(reader));
-    let mut framed_writer = FramedWriter::new(tokio::io::BufWriter::new(writer));
+    let mut framed_writer = FramedWriter::new(writer);
 
     let mut tasks = FuturesUnordered::new();
 

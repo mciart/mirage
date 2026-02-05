@@ -86,8 +86,7 @@ impl ClientRelayer {
         let framed_reader =
             mirage::transport::framed::FramedReader::new(tokio::io::BufReader::new(reader));
 
-        let framed_writer =
-            mirage::transport::framed::FramedWriter::new(tokio::io::BufWriter::new(writer));
+        let framed_writer = mirage::transport::framed::FramedWriter::new(writer);
 
         let mut tasks = FuturesUnordered::new();
 
