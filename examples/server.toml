@@ -24,7 +24,9 @@ users_file = "examples/users"
 
 [connection]
 # 隧道和生成的 TUN 接口使用的 MTU
-mtu = 1280
+mtu = 1420
+# 开启 NODELAY
+tcp_nodelay = true
 # 是否复用套接字 (SO_REUSEADDR)
 reuse_socket = true
 
@@ -32,16 +34,16 @@ reuse_socket = true
 # 是否启用流量混淆 (默认: true)
 enabled = true
 # 发送随机填充包的概率 (0.0-1.0, 默认: 0.05)
+# 配合加权拟态轮廓 (Weighted Traffic Mimicry)，这会触发 60% 小包 / 30% 中包 / 10% 大包的分布
 padding_probability = 0.05
-# 随机填充包的最小长度 (字节, 默认: 100)
-padding_min = 100
-# 随机填充包的最大长度 (字节, 默认: 1000)
-padding_max = 1000
-# 设置 0~20ms 波动，不设置则不启用时序混淆（Xray也没启用时序混淆）
-# 时序混淆：最小随机延迟 (毫秒, 默认: 0)
+# 随机填充包的最小长度 (字节, 默认: 40)
+padding_min = 40
+# 随机填充包的最大长度 (字节, 默认: 1200)
+padding_max = 1200
+# Jitter (抖动) 延迟范围 (毫秒)
+# 模拟网络自然波动，打乱时序特征
 jitter_min_ms = 0
-# 时序混淆：最大随机延迟 (毫秒, 推荐: 20)
-jitter_max_ms = 0
+jitter_max_ms = 20
 
 [reality]
 # 伪装的目标域名 (SNI) -> 建议选择大厂域名
