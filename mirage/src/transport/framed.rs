@@ -6,7 +6,7 @@
 
 use crate::constants::{FRAME_HEADER_SIZE, MAX_FRAME_SIZE};
 use crate::error::{NetworkError, Result};
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use rand::RngCore;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -57,6 +57,9 @@ where
         // Type (1 byte)
         header[4] = FRAME_TYPE_DATA;
 
+        // Note: For FramedStream (duplex), we haven't optimized with a write buffer
+        // because it's mostly used in tests or simple scenarios.
+        // The critical path uses split FramedWriter below.
         self.stream.write_all(&header).await?;
         self.stream.write_all(packet).await?;
         self.stream.flush().await?;
@@ -232,6 +235,8 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
 pub struct FramedWriter<W> {
     writer: W,
     padding_buffer: Vec<u8>,
+    // Optimization: Buffer to coalesce header and body into a single write call
+    write_buffer: BytesMut,
 }
 
 impl<W: AsyncWrite + Unpin> FramedWriter<W> {
@@ -240,10 +245,15 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
         Self {
             writer,
             padding_buffer: Vec::with_capacity(1024),
+            // Pre-allocate buffer to avoid resizing for standard packets
+            write_buffer: BytesMut::with_capacity(MAX_FRAME_SIZE + FRAME_HEADER_SIZE),
         }
     }
 
     /// Sends a data packet over the stream.
+    ///
+    /// OPTIMIZED: Uses `write_buffer` to combine header and payload,
+    /// reducing system calls from 2 to 1 per packet.
     #[allow(dead_code)]
     pub async fn send_packet(&mut self, packet: &[u8]) -> Result<()> {
         if packet.len() > MAX_FRAME_SIZE {
@@ -254,14 +264,21 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
         }
 
         let len = packet.len() as u32;
-        let mut header = [0u8; FRAME_HEADER_SIZE];
-        // Length
-        header[0..4].copy_from_slice(&len.to_be_bytes());
-        // Type
-        header[4] = FRAME_TYPE_DATA;
 
-        self.writer.write_all(&header).await?;
-        self.writer.write_all(packet).await?;
+        // 1. Prepare Buffer
+        self.write_buffer.clear();
+        self.write_buffer.reserve(FRAME_HEADER_SIZE + packet.len());
+
+        // 2. Write Header (User space op)
+        // Length (4 bytes) + Type (1 byte)
+        self.write_buffer.put_u32(len); // big-endian by default in bytes crate
+        self.write_buffer.put_u8(FRAME_TYPE_DATA);
+
+        // 3. Write Payload (User space copy)
+        self.write_buffer.put_slice(packet);
+
+        // 4. Single System Call / SSL Write
+        self.writer.write_all(&self.write_buffer).await?;
         self.writer.flush().await?;
 
         Ok(())
@@ -278,12 +295,16 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
         }
 
         let len = packet.len() as u32;
-        let mut header = [0u8; FRAME_HEADER_SIZE];
-        header[0..4].copy_from_slice(&len.to_be_bytes());
-        header[4] = FRAME_TYPE_DATA;
 
-        self.writer.write_all(&header).await?;
-        self.writer.write_all(packet).await?;
+        // Same optimization: coalesce into write_buffer
+        self.write_buffer.clear();
+        self.write_buffer.reserve(FRAME_HEADER_SIZE + packet.len());
+
+        self.write_buffer.put_u32(len);
+        self.write_buffer.put_u8(FRAME_TYPE_DATA);
+        self.write_buffer.put_slice(packet);
+
+        self.writer.write_all(&self.write_buffer).await?;
 
         Ok(())
     }
@@ -298,6 +319,12 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
             .into());
         }
 
+        // Optimization: We could also use write_buffer here,
+        // but padding logic uses a separate scratch buffer for random generation.
+        // Given padding is less frequent (5%), the impact is smaller.
+        // We stick to the current logic or we can optimize it similarly if needed.
+        // For now, let's keep it simple as random generation needs a mutable slice.
+
         let len_u32 = len as u32;
         let mut header = [0u8; FRAME_HEADER_SIZE];
         header[0..4].copy_from_slice(&len_u32.to_be_bytes());
@@ -308,7 +335,6 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
         // Random padding (reuse buffer)
         self.padding_buffer.clear();
         // Resize zeroes, but since we overwrite with random soon, it's fine.
-        // Zeroing is cheap compared to allocation.
         self.padding_buffer.resize(len, 0);
         rand::thread_rng().fill_bytes(&mut self.padding_buffer);
 
