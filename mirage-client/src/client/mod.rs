@@ -21,6 +21,8 @@ use ipnet::IpNet;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
+use tokio::sync::oneshot;
+
 use crate::client::relayer::ClientRelayer;
 use tracing::{debug, info, warn};
 
@@ -44,8 +46,11 @@ impl MirageClient {
         }
     }
 
-    /// Connects to the Mirage server and starts the workers for this instance of the Mirage client.
-    pub async fn start<I: InterfaceIO>(&mut self) -> Result<()> {
+    /// Connects to the Mirage server...
+    pub async fn start<I: InterfaceIO>(
+        &mut self,
+        connection_event_tx: Option<oneshot::Sender<()>>,
+    ) -> Result<()> {
         // Connect to server via TCP/TLS
         let (tls_stream, remote_addr) = self.connect_to_server().await?;
 
@@ -165,7 +170,12 @@ impl MirageClient {
             self.config.connection.obfuscation.clone(),
         )?;
 
-        // Wait for relayer to finish
+        // [新增] 在阻塞等待之前，发送“连接成功”信号！
+        if let Some(tx) = connection_event_tx {
+            let _ = tx.send(());
+        }
+
+        // Wait for relayer to finish (这里会阻塞直到断开)
         relayer.wait_for_shutdown().await?;
 
         Ok(())

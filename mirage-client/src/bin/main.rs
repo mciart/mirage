@@ -41,5 +41,5 @@ async fn run_client() -> Result<()> {
 
     let mut client = MirageClient::new(config);
     // start() blocks until the connection is closed or shutdown signal received
-    client.start::<TunRsInterface>().await
+    client.start::<TunRsInterface>(None).await
 }

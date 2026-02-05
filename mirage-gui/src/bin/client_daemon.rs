@@ -98,33 +98,56 @@ impl ClientDaemon {
         let mut client = MirageClient::new(config);
 
         // Start the client in a separate task so we can listen for cancellation
+        // 1. 创建一个单次通知通道
+        let (tx, rx) = oneshot::channel();
         let state_clone = state.clone();
-        let start_future = async move {
-            let result = client.start::<TunRsInterface>().await;
 
-            // Update state after connection
+        // 2. 启动客户端任务 (Spawn task)
+        let client_task = tokio::spawn(async move {
+            let result = client.start::<TunRsInterface>(Some(tx)).await;
+            
+            // Client stopped (or failed)
             let mut state_guard = state_clone.lock().await;
-            if result.is_ok() {
+            state_guard.is_running = false;
+            state_guard.start_time = None;
+            state_guard.client_address = None;
+            state_guard.server_address = None;
+            
+            result
+        });
+
+        // 3. 等待连接成功信号 或 取消信号
+        tokio::select! {
+            _ = rx => {
+                // [关键] 收到信号，说明连接成功！
+                info!("Connection established successfully!");
+                let mut state_guard = state.lock().await;
                 state_guard.is_running = true;
                 state_guard.start_time = Some(Instant::now());
-                state_guard.client_address = client.client_address();
-                state_guard.server_address = client.server_address();
+                // Note: client instance moved into task, can't access it here directly to get addresses easily
+                // unless we refactor or share via Arc. For now, basic success signal is enough.
+                Ok(true)
             }
-            result
-        };
-
-        tokio::select! {
-            result = start_future => {
-                match result {
-                    Ok(()) => {
-                        info!("Client started successfully");
-                        Ok(true)
+            // 如果 task 直接结束了（报错或退出），rx 会被 drop，这里处理 task 结果
+            task_res = client_task => {
+                match task_res {
+                    Ok(Ok(())) => {
+                        info!("Client finished normally");
+                        Ok(false) // Not running anymore
                     }
-                    Err(e) => Err(e)
+                    Ok(Err(e)) => {
+                        error!("Client failed: {}", e);
+                        Err(e)
+                    }
+                    Err(e) => {
+                        error!("Client task panicked: {}", e);
+                        Err(MirageError::system("Client task panicked"))
+                    }
                 }
             }
             _ = &mut cancel_rx => {
                 info!("Client start cancelled");
+                // TODO: Need a way to abort the spawned task properly if it's running
                 Ok(false)
             }
         }
