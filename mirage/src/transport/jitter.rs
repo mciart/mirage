@@ -46,12 +46,10 @@ where
         // Track the previous packet's target time to ensure monotonic order
         let mut last_target_time = Instant::now();
 
-        // [新增] 初始化随机数生成器
-        let mut rng = rand::thread_rng();
-
         // [新增] 心跳计时器初始化：10s - 30s 随机间隔
         // 只有当这么长时间没有真实数据包发送时，才会触发心跳
-        let mut next_heartbeat = Instant::now() + Duration::from_secs(rng.gen_range(10..=30));
+        let mut next_heartbeat =
+            Instant::now() + Duration::from_secs(rand::thread_rng().gen_range(10..=30));
 
         loop {
             // Determine the deadline for the next packet
@@ -72,13 +70,13 @@ where
                         Some(packet) => {
                             // [新增] 活跃检测：收到真实数据，重置心跳计时器
                             // 避免在全速下载/上传时插入多余的心跳包
-                            next_heartbeat = Instant::now() + Duration::from_secs(rng.gen_range(10..=30));
+                            next_heartbeat = Instant::now() + Duration::from_secs(rand::thread_rng().gen_range(10..=30));
 
                             // Calculate Jitter
                             let jitter_ms = if config.enabled {
                                 let range = config.jitter_max_ms - config.jitter_min_ms;
                                 if range > 0 {
-                                    rng.gen_range(config.jitter_min_ms..=config.jitter_max_ms)
+                                    rand::thread_rng().gen_range(config.jitter_min_ms..=config.jitter_max_ms)
                                 } else {
                                     config.jitter_min_ms
                                 }
@@ -130,22 +128,22 @@ where
                         // [核心修改] 流量整形 (Traffic Shaping)
                         // 使用加权分布替代均匀随机，模拟真实 HTTPS 特征
                         if config.enabled && config.padding_probability > 0.0 {
-                             if rng.gen_bool(config.padding_probability) {
+                             if rand::thread_rng().gen_bool(config.padding_probability) {
                                  // 生成 0-99 的随机数来决定包的大小类型
-                                 let profile = rng.gen_range(0..100);
+                                 let profile = rand::thread_rng().gen_range(0..100);
 
                                  let raw_len = if profile < 60 {
                                      // 60% 概率：模拟 "控制帧/ACK" (40-100 Bytes)
                                      // 像 TLS Alerts, HTTP/2 WindowUpdates
-                                     rng.gen_range(40..=100)
+                                     rand::thread_rng().gen_range(40..=100)
                                  } else if profile < 90 {
                                      // 30% 概率：模拟 "Headers/元数据" (250-600 Bytes)
                                      // 像 HTTP Headers, TLS Handshake fragments
-                                     rng.gen_range(250..=600)
+                                     rand::thread_rng().gen_range(250..=600)
                                  } else {
                                      // 10% 概率：模拟 "数据切片" (800-1200 Bytes)
                                      // 像图片加载的数据块
-                                     rng.gen_range(800..=1200)
+                                     rand::thread_rng().gen_range(800..=1200)
                                  };
 
                                  // 仍然遵守配置的最大值限制以防 MTU 溢出，
@@ -164,14 +162,14 @@ where
                 // 当长时间没有数据交互时触发，模拟长连接保活
                 _ = heartbeat_future => {
                     // 发送一个 40-80 字节的小包，伪装成 TCP ACK 或 Keep-Alive
-                    let pad_len = rng.gen_range(40..80);
+                    let pad_len = rand::thread_rng().gen_range(40..80);
 
                     if let Err(e) = writer.send_padding(pad_len).await {
                         warn!("Failed to send heartbeat padding: {}", e);
                     }
 
                     // 重新安排下一次心跳
-                    next_heartbeat = Instant::now() + Duration::from_secs(rng.gen_range(10..=30));
+                    next_heartbeat = Instant::now() + Duration::from_secs(rand::thread_rng().gen_range(10..=30));
                 }
             }
         }
