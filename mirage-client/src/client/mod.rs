@@ -147,10 +147,21 @@ impl MirageClient {
         self.client_address = Some(client_address);
         self.server_address = Some(server_address);
 
+        // [新增] 认证成功后，我们不再需要这条 TCP 连接了
+        // 因为 Prism 会自己建立连接。
+        // 我们只需要利用这次认证获取到的 IP 配置信息来创建 TUN。
+
+        // Let's drop the initial stream to free resources
+        // (read_half, write_half are consumed by auth_client.authenticate above)
+        // auth_client returns (reader, writer) which are the authenticated streams.
+        // We drop them here.
+        drop(reader);
+        drop(writer);
+
         let interface: Interface<I> = Interface::create(
             client_address,
             client_address_v6,
-            self.config.connection.mtu,
+            65535, // <--- ⚠️ 强制修改为 65535 (开启 Software GSO)
             Some(server_address.addr()),
             server_address_v6.map(|n| n.addr()),
             self.config.network.interface_name.clone(),
@@ -158,12 +169,11 @@ impl MirageClient {
             Some(self.config.network.dns_servers.clone()),
         )?;
 
-        let relayer = ClientRelayer::start(
+        // [修改] 启动 Prism Relayer
+        let relayer = ClientRelayer::start_prism(
             interface,
-            reader,
-            writer,
-            self.config.connection.obfuscation.clone(),
-        )?;
+            self.config.clone(),
+        ).await?;
 
         // Wait for relayer to finish
         relayer.wait_for_shutdown().await?;
