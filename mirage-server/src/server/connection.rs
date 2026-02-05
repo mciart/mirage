@@ -52,23 +52,25 @@ where
 
     if jitter_disabled {
         tasks.push(tokio::spawn(async move {
-            // Optimized Direct Pump with Batch Flushing
+            // [优化] 智能批量发送 (Smart Batching)
             while let Some(data) = egress_queue.recv().await {
-                // 1. Write the first packet
+                // 1. 至少先发一个包
                 if let Err(e) = framed_writer.send_packet_no_flush(&data).await {
                     return Err(MirageError::system(format!("Failed to send packet: {}", e)));
                 }
 
-                // 2. Try to grab more packets from the queue if available (Batching)
-                // This prevents flushing for every single packet if the queue is busy
+                // 2. 尝试获取更多包，但增加两个限制条件：
+                //    a. 数量不超过 16 个（防止饿死）
+                //    b. 总大小不超过 8KB（防止 Bufferbloat 导致延迟抖动）
+                let mut current_batch_size = data.len();
                 let mut count = 0;
-                let max_batch = 16; // Reasonable batch size
-                loop {
-                    if count >= max_batch {
-                        break;
-                    }
+                let max_batch_count = 16;
+                let max_batch_bytes = 8192; // 8KB Threshold
+
+                while count < max_batch_count && current_batch_size < max_batch_bytes {
                     match egress_queue.try_recv() {
                         Ok(more_data) => {
+                            current_batch_size += more_data.len();
                             if let Err(e) = framed_writer.send_packet_no_flush(&more_data).await {
                                 return Err(MirageError::system(format!(
                                     "Failed to send packet: {}",
@@ -77,11 +79,11 @@ where
                             }
                             count += 1;
                         }
-                        Err(_) => break, // Empty or closed
+                        Err(_) => break, // 队列空了，立即跳出
                     }
                 }
 
-                // 3. Flush the batch
+                // 3. 立即 Flush，不让数据在内存里过夜
                 if let Err(e) = framed_writer.flush().await {
                     return Err(MirageError::system(format!("Failed to flush: {}", e)));
                 }

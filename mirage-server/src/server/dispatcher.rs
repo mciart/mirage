@@ -31,6 +31,12 @@ impl TlsDispatcher {
 
     /// Inspects the initial bytes of a TCP stream to decide how to route it.
     pub async fn dispatch(&self, mut stream: TcpStream) -> Result<DispatchResult> {
+        // [新增] 强制开启 TCP_NODELAY，这对降低延迟至关重要
+        // 否则在 Buffer 模式下，小包（如 Ping）会被 OS 卡住等待合并
+        if let Err(e) = stream.set_nodelay(true) {
+            warn!("Failed to set TCP_NODELAY on incoming connection: {}", e);
+        }
+
         let mut buf = Vec::with_capacity(4096);
         let mut temp_buf = [0u8; 1024];
 
