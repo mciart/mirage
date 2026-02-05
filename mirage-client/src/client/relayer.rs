@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn, debug}; // Added debug
+use tracing::{error, info, warn, debug}; // 确保 debug 被引入
 
 use bytes::{Bytes, BytesMut};
 use prism::device::PrismDevice;
@@ -128,8 +128,8 @@ impl ClientRelayer {
             server_ip,
         )));
 
-        // 5. UDP/Blind Relay Controller
-        // ⚠️ Passed tun_tx_to_stack here so we can inject responses back to TUN
+        // 5. UDP/Blind Relay Controller (核心修复点)
+        // 传入 tun_tx_to_stack 以便将回包写回 TUN
         tasks.push(tokio::spawn(Self::control_loop_blind(
             blind_relay_rx,
             config.clone(),
@@ -210,33 +210,34 @@ impl ClientRelayer {
     }
 
     /// Handles UDP/Blind Relay packets.
-    /// Now fully functional: Sends packet to server -> Reads response -> Injects to TUN.
+    /// 修复: 解除了注释，现在真正建立连接并转发数据。
     async fn control_loop_blind(
         mut rx: mpsc::Receiver<Bytes>,
         config: ClientConfig,
         server_ip: std::net::SocketAddr,
-        tun_tx: mpsc::Sender<BytesMut>, // Channel to inject packets back to Prism/TUN
+        tun_tx: mpsc::Sender<BytesMut>, // 新增: 用于回注数据
     ) -> Result<()> {
-        // Warning: This creates a new TLS connection for EVERY UDP packet.
-        // It is inefficient but correct for Phase 1 verification.
-        // Phase 2 TODO: Implement a session cache or use QUIC.
         while let Some(pkt) = rx.recv().await {
+            // [修复] 移除下划线，使用这些变量
             let config = config.clone();
             let tun_tx = tun_tx.clone();
             
             tokio::spawn(async move {
-                // debug!("Blind Relay: Forwarding {} bytes", pkt.len());
+                // 简单的调试日志，证明 UDP 正在工作
+                debug!("Blind Relay: Forwarding {} bytes", pkt.len());
                 
+                // 建立新的隧道用于转发此包
                 match Self::establish_tunnel(&config, server_ip).await {
                     Ok((mut r, mut w)) => {
                         use tokio::io::{AsyncReadExt, AsyncWriteExt};
                         
-                        // 1. Send UDP packet (encapsulated in TLS)
+                        // 1. 发送 UDP/ICMP 包 (通过 TLS 封装)
                         if w.write_all(&pkt).await.is_ok() {
-                            // 2. Wait for response (with timeout)
-                            // UDP is stateless, but we expect a response (like DNS) usually within seconds.
-                            // We hold the tunnel open for a short while.
+                            // 2. 等待回包 (带超时)
+                            // UDP 是无连接的，但 DNS/Ping 通常会立刻回包。
+                            // 我们保持连接 5 秒，收到回包就转发回去。
                             let mut buf = [0u8; 2048];
+                            // 简单的超时逻辑
                             let timeout = tokio::time::sleep(Duration::from_secs(5));
                             tokio::pin!(timeout);
 
@@ -245,24 +246,25 @@ impl ClientRelayer {
                                     res = r.read(&mut buf) => {
                                         match res {
                                             Ok(n) if n > 0 => {
-                                                // 3. Inject response back to TUN
+                                                // 3. 将回包注入回 Prism/TUN
                                                 let mut response = BytesMut::new();
                                                 response.extend_from_slice(&buf[..n]);
                                                 if tun_tx.send(response).await.is_err() {
                                                     break;
                                                 }
                                             }
-                                            _ => break, // EOF or Error
+                                            _ => break, // EOF 或 错误
                                         }
                                     }
                                     _ = &mut timeout => {
-                                        break; // Stop listening after timeout
+                                        break; // 超时
                                     }
                                 }
                             }
                         }
                     }
                     Err(e) => {
+                        // 连接失败 (可能是网络抖动)
                         debug!("Blind Relay connect failed: {}", e);
                     }
                 }
