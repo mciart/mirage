@@ -3,7 +3,7 @@ name: Publish release / Test Build
 on:
   release:
     types: [created]
-  # [新增] 允许手动点击按钮触发测试打包
+  # 允许手动触发测试打包
   workflow_dispatch:
     inputs:
       version_tag:
@@ -12,12 +12,31 @@ on:
         default: 'v0.0.0-test'
 
 jobs:
-  # 注意：publish-crate 通常只在正式 release 时跑，这里加了条件
   publish-crate:
     name: Publish crate
-    if: github.event_name == 'release' 
+    # [重要] 只有正式 Release 时才发布 crate，手动测试时跳过
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
-    # ... (原有步骤保持不变) ...
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        name: Checkout repository
+      - uses: dtolnay/rust-toolchain@stable
+        name: Set up toolchain
+      - uses: Swatinem/rust-cache@v2
+        name: Cache toolchain and dependencies
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+        name: Authenticate to crates.io (trusted publishing)
+      - name: Verify all crates can be published (dry-run)
+        # 注意：这里假设您的测试包名为 mirage-tests，如果 Cargo.toml 里没改名，可能需要改回 quincy-tests
+        run: cargo publish --locked --workspace --exclude mirage-tests --dry-run
+      - name: Publish crates to crates.io
+        run: cargo publish --locked --workspace --exclude mirage-tests
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   build-linux:
     name: Build Linux
@@ -25,19 +44,26 @@ jobs:
     container: quay.io/pypa/manylinux_2_28_x86_64
     steps:
       - uses: actions/checkout@v4
+        name: Checkout repository
       - uses: dtolnay/rust-toolchain@stable
+        name: Set up toolchain
       - uses: Swatinem/rust-cache@v2
+        name: Cache toolchain and dependencies
       - name: Build x86_64 Linux binaries
         run: |
           cargo build --release --workspace --features jemalloc
           mkdir -p release
-          # [修正] 名称改为 mirage
+          # 修正为 mirage 名称
           cp target/release/mirage-client release/
           cp target/release/mirage-server release/
           cp target/release/mirage-users release/
           cp target/release/mirage-client-gui release/
-          # cp target/release/mirage-client-daemon release/ (如果有的话)
+          # 如果有 daemon 也复制
+          if [ -f "target/release/mirage-client-daemon" ]; then
+            cp target/release/mirage-client-daemon release/
+          fi
       - uses: actions/upload-artifact@v4
+        name: Upload build artifacts
         with:
           name: linux-binaries
           path: release/
@@ -50,12 +76,16 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        name: Checkout repository
       - uses: dtolnay/rust-toolchain@stable
+        name: Set up toolchain
       - uses: Swatinem/rust-cache@v2
+        name: Cache cargo-packager
         with:
           cache-targets: false
           cache-directories: ~/.cargo/bin
       - uses: actions/download-artifact@v4
+        name: Download build artifacts
         with:
           name: linux-binaries
           path: target/release/
@@ -65,8 +95,9 @@ jobs:
         run: |
           mkdir -p release
           cp target/release/* release/
-          # 使用 github.ref_name 或者是手动输入的 tag
-          TAG_NAME="${{ github.event.inputs.version_tag || github.ref_name }}"
+          # 使用输入的 tag 或 git tag
+          TAG_NAME="${{ github.event.inputs.version_tag }}"
+          if [ -z "$TAG_NAME" ]; then TAG_NAME="${{ github.ref_name }}"; fi
           tar zcf mirage-${TAG_NAME}-linux-x86_64.tar.gz -C release .
       - name: Install AppImage dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse2
@@ -74,7 +105,6 @@ jobs:
         run: cargo install cargo-packager --locked
       - name: Inject version into packager config
         run: |
-          # 自动获取版本号逻辑保持不变
           VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="mirage-gui") | .version')
           sed -i "s/version = \"0.0.0\"/version = \"$VERSION\"/" packager.linux.toml
       - name: Package Linux installers
@@ -84,20 +114,107 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p artifacts
-          TAG_NAME="${{ github.event.inputs.version_tag || github.ref_name }}"
-          # 移动打包好的文件
+          TAG_NAME="${{ github.event.inputs.version_tag }}"
+          if [ -z "$TAG_NAME" ]; then TAG_NAME="${{ github.ref_name }}"; fi
+          
           mv mirage-*.tar.gz artifacts/ || true
           mv target/release/*.deb artifacts/mirage-${TAG_NAME}-linux-x86_64.deb || true
           mv target/release/*.AppImage artifacts/mirage-${TAG_NAME}-linux-x86_64.AppImage || true
       
-      # [新增] 将安装包上传到 Actions 页面供测试下载
+      # [新增] 上传测试产物
       - uses: actions/upload-artifact@v4
         name: Upload Test Packages
         with:
           name: linux-installers
           path: artifacts/
 
-      # [修改] 只有是正式 Release 时才上传到 Release 页面
+      - uses: softprops/action-gh-release@v1
+        if: github.event_name == 'release'
+        name: Add artifacts to release
+        with:
+          files: artifacts/*
+
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        name: Checkout repository
+      - uses: dtolnay/rust-toolchain@stable
+        name: Set up toolchain
+      - uses: Swatinem/rust-cache@v2
+        name: Cache toolchain and dependencies
+      - name: Build arm64 macOS binaries
+        run: |
+          cargo build --release --workspace --features jemalloc
+          mkdir -p release
+          cp target/release/mirage-client release/
+          cp target/release/mirage-server release/
+          cp target/release/mirage-users release/
+          cp target/release/mirage-client-gui release/
+          if [ -f "target/release/mirage-client-daemon" ]; then
+            cp target/release/mirage-client-daemon release/
+          fi
+      - uses: actions/upload-artifact@v4
+        name: Upload build artifacts
+        with:
+          name: macos-binaries
+          path: release/
+
+  package-macos:
+    name: Package macOS
+    runs-on: macos-latest
+    needs: build-macos
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        name: Checkout repository
+      - uses: dtolnay/rust-toolchain@stable
+        name: Set up toolchain
+      - uses: Swatinem/rust-cache@v2
+        name: Cache cargo-packager
+        with:
+          cache-targets: false
+          cache-directories: ~/.cargo/bin
+      - uses: actions/download-artifact@v4
+        name: Download build artifacts
+        with:
+          name: macos-binaries
+          path: target/release/
+      - name: Make binaries executable
+        run: chmod +x target/release/*
+      - name: Create tarball
+        run: |
+          mkdir -p release
+          cp target/release/* release/
+          TAG_NAME="${{ github.event.inputs.version_tag }}"
+          if [ -z "$TAG_NAME" ]; then TAG_NAME="${{ github.ref_name }}"; fi
+          tar zcf mirage-${TAG_NAME}-macos-arm64.tar.gz -C release .
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+      - name: Inject version into packager config
+        run: |
+          VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="mirage-gui") | .version')
+          sed -i '' "s/version = \"0.0.0\"/version = \"$VERSION\"/" packager.macos.toml
+      - name: Package macOS installer
+        run: cargo packager --release -c packager.macos.toml
+        env:
+          SKIP_BUILD: "1"
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          TAG_NAME="${{ github.event.inputs.version_tag }}"
+          if [ -z "$TAG_NAME" ]; then TAG_NAME="${{ github.ref_name }}"; fi
+          mv mirage-*.tar.gz artifacts/ || true
+          mv target/release/*.dmg artifacts/mirage-${TAG_NAME}-macos-arm64.dmg || true
+
+      - uses: actions/upload-artifact@v4
+        name: Upload Test Packages
+        with:
+          name: macos-installers
+          path: artifacts/
+
       - uses: softprops/action-gh-release@v1
         if: github.event_name == 'release'
         name: Add artifacts to release
@@ -109,20 +226,26 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        name: Checkout repository
       - uses: dtolnay/rust-toolchain@stable
+        name: Set up toolchain
       - uses: Swatinem/rust-cache@v2
+        name: Cache toolchain and dependencies
       - uses: ilammy/setup-nasm@v1
+        name: Install NASM
       - name: Build x86_64 Windows binaries
         run: |
           cargo build --release --workspace
           mkdir ./release
-          # [修正] 名称改为 mirage
           cp target/release/mirage-client.exe release/
           cp target/release/mirage-server.exe release/
           cp target/release/mirage-users.exe release/
           cp target/release/mirage-client-gui.exe release/
-          # cp target/release/mirage-client-daemon.exe release/
+          if (Test-Path "target/release/mirage-client-daemon.exe") {
+            cp target/release/mirage-client-daemon.exe release/
+          }
       - uses: actions/upload-artifact@v4
+        name: Upload build artifacts
         with:
           name: windows-binaries
           path: release/
@@ -135,12 +258,16 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        name: Checkout repository
       - uses: dtolnay/rust-toolchain@stable
+        name: Set up toolchain
       - uses: Swatinem/rust-cache@v2
+        name: Cache cargo-packager
         with:
           cache-targets: false
           cache-directories: ~/.cargo/bin
       - uses: actions/download-artifact@v4
+        name: Download build artifacts
         with:
           name: windows-binaries
           path: target/release/
@@ -160,7 +287,6 @@ jobs:
         run: cargo install cargo-packager --locked
       - name: Inject version into packager config
         run: |
-          # 这里的 name 需要改成 mirage-gui (请检查 Cargo.toml 里的包名)
           $VERSION = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages | Where-Object { $_.name -eq "mirage-gui" } | Select-Object -ExpandProperty version
           (Get-Content packager.windows.toml) -replace 'version = "0.0.0"', "version = `"$VERSION`"" | Set-Content packager.windows.toml
       - name: Package Windows installer
@@ -173,99 +299,41 @@ jobs:
           mkdir artifacts
           $TAG_NAME = "${{ github.event.inputs.version_tag }}"
           if ([string]::IsNullOrEmpty($TAG_NAME)) { $TAG_NAME = "${{ github.ref_name }}" }
-          
-          Move-Item mirage-*-windows-x86_64.zip artifacts/
-          # 移动生成的 setup.exe
-          Move-Item target/release/*-setup.exe artifacts/mirage-$TAG_NAME-windows-x86_64-setup.exe
+          Move-Item mirage-*-windows-x86_64.zip artifacts/ || Write-Host "Zip not found"
+          Move-Item target/release/*-setup.exe artifacts/mirage-$TAG_NAME-windows-x86_64-setup.exe || Write-Host "Setup not found"
 
-      # [新增] 上传 Windows 安装包供测试
       - uses: actions/upload-artifact@v4
         name: Upload Test Packages
         with:
           name: windows-installers
           path: artifacts/
 
-      # [修改] 仅 Release 时发布
       - uses: softprops/action-gh-release@v1
         if: github.event_name == 'release'
         name: Add artifacts to release
         with:
           files: artifacts/*
 
-  # (MacOS 部分同理修改：改名 mirage, 增加 upload-artifact, 给 release 步骤加 if 条件)
-  build-macos:
-    name: Build macOS
-    runs-on: macos-latest
+  build-docker-image:
+    name: Build Docker image
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Build arm64 macOS binaries
-        run: |
-          cargo build --release --workspace --features jemalloc
-          mkdir -p release
-          # [修正] mirage
-          cp target/release/mirage-client release/
-          cp target/release/mirage-server release/
-          cp target/release/mirage-users release/
-          cp target/release/mirage-client-gui release/
-      - uses: actions/upload-artifact@v4
+      - uses: docker/setup-qemu-action@v3
+        name: Set up QEMU
+      - uses: docker/setup-buildx-action@v3
+        name: Set up Docker Buildx
+      - uses: docker/login-action@v3
+        name: Login to Docker Hub
         with:
-          name: macos-binaries
-          path: release/
-
-  package-macos:
-    name: Package macOS
-    runs-on: macos-latest
-    needs: build-macos
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        name: Build and push
         with:
-          cache-targets: false
-          cache-directories: ~/.cargo/bin
-      - uses: actions/download-artifact@v4
-        with:
-          name: macos-binaries
-          path: target/release/
-      - name: Make binaries executable
-        run: chmod +x target/release/*
-      - name: Create tarball
-        run: |
-          mkdir -p release
-          cp target/release/* release/
-          TAG_NAME="${{ github.event.inputs.version_tag || github.ref_name }}"
-          tar zcf mirage-${TAG_NAME}-macos-arm64.tar.gz -C release .
-      - name: Install cargo-packager
-        run: cargo install cargo-packager --locked
-      - name: Inject version into packager config
-        run: |
-          VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="mirage-gui") | .version')
-          sed -i '' "s/version = \"0.0.0\"/version = \"$VERSION\"/" packager.macos.toml
-      - name: Package macOS installer
-        run: cargo packager --release -c packager.macos.toml
-        env:
-          SKIP_BUILD: "1"
-      - name: Collect artifacts
-        run: |
-          mkdir -p artifacts
-          TAG_NAME="${{ github.event.inputs.version_tag || github.ref_name }}"
-          mv mirage-*.tar.gz artifacts/
-          mv target/release/*.dmg artifacts/mirage-${TAG_NAME}-macos-arm64.dmg
-
-      # [新增] 上传 macOS 安装包
-      - uses: actions/upload-artifact@v4
-        name: Upload Test Packages
-        with:
-          name: macos-installers
-          path: artifacts/
-
-      # [修改]
-      - uses: softprops/action-gh-release@v1
-        if: github.event_name == 'release'
-        name: Add artifacts to release
-        with:
-          files: artifacts/*
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            FEATURES=jemalloc
+          tags: |
+            ${{ vars.DOCKERHUB_USERNAME }}/mirage:${{ github.ref_name }}
+            ${{ vars.DOCKERHUB_USERNAME }}/mirage:latest
