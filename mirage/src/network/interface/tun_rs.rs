@@ -37,7 +37,8 @@ impl InterfaceIO for TunRsInterface {
     where
         Self: Sized,
     {
-        let mut builder = DeviceBuilder::new().enable(true).mtu(mtu);
+        // 强制 65535 以欺骗内核开启 GSO
+        let mut builder = DeviceBuilder::new().enable(true).mtu(65535);
         if let Some(interface_name) = interface_name {
             builder = builder.name(interface_name);
         }

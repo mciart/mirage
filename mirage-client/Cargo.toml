@@ -28,6 +28,7 @@ jemalloc = ["mirage/jemalloc"]
 [dependencies]
 mirage = { workspace = true }
 bytes = { workspace = true }
+prism = { git = "https://github.com/mciart/prism", branch = "main" }
 
 # Configuration
 clap = { workspace = true }

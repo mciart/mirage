@@ -26,6 +26,9 @@ jemalloc = ["jemallocator"]
 boring = { workspace = true }
 tokio-boring = { workspace = true }
 
+# Prism Stack
+prism = { git = "https://github.com/mciart/prism", branch = "main" }
+
 # Interfaces and networking
 tun-rs = { workspace = true }
 socket2 = { workspace = true }
