@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn}; // Removed unused 'debug'
+use tracing::{error, info, warn};
 
 use bytes::{Bytes, BytesMut};
 use prism::device::PrismDevice;
@@ -190,7 +190,6 @@ impl ClientRelayer {
                         }
 
                         // 3. Pipe Data
-                        // Fix: Removed 'mut' from local_tx as send() is &self
                         let (local_tx, mut local_rx) = (req.tx, req.rx);
 
                         // Upstream: Client -> Server
@@ -239,14 +238,15 @@ impl ClientRelayer {
     /// Handles UDP/Blind Relay packets.
     async fn control_loop_blind(
         mut rx: mpsc::Receiver<Bytes>,
-        _config: ClientConfig, // Fix: Prefixed with _
+        _config: ClientConfig,            // Fix: Prefixed with _
         _server_ip: std::net::SocketAddr, // Fix: Prefixed with _
     ) -> Result<()> {
         // For Phase 1, we implement a simple fire-and-forget logger or basic tunnel
         // Since setting up a TLS tunnel for *every* UDP packet is slow, we just log for now
         // to verify integration.
         // TODO: Implement persistent UDP tunnel or QUIC.
-        while let Some(_pkt) = rx.recv().await { // Fix: Prefixed with _
+        while let Some(_pkt) = rx.recv().await {
+            // Fix: Prefixed with _
             // Uncomment to debug UDP traffic
             // debug!("Blind Relay: Dropping UDP packet len={}", pkt.len());
 
