@@ -42,7 +42,7 @@ async fn test_failed_auth(mut client_config: ClientConfig, server_config: Server
     let server = MirageServer::new(server_config).unwrap();
 
     tokio::spawn(async move { server.run::<ServerInterface>().await });
-    assert!(client.start::<ClientInterface>().await.is_err());
+    assert!(client.start::<ClientInterface>(None).await.is_err());
 
     assert!(logs_contain("Failed to authenticate client"));
 }

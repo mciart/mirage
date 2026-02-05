@@ -56,8 +56,8 @@ async fn test_client_communication(client_config: ClientConfig, mut server_confi
     let ip_client_b = Ipv4Addr::new(10, 0, 0, 3);
 
     tokio::spawn(async move { server.run::<ServerInterface>().await.unwrap() });
-    client_a.start::<ClientAInterface>().await.unwrap();
-    client_b.start::<ClientBInterface>().await.unwrap();
+    client_a.start::<ClientAInterface>(None).await.unwrap();
+    client_b.start::<ClientBInterface>(None).await.unwrap();
 
     // Test client A -> client B
     let test_packet = dummy_packet(ip_client_a, ip_client_b);
