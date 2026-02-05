@@ -170,10 +170,7 @@ impl MirageClient {
         )?;
 
         // [修改] 启动 Prism Relayer
-        let relayer = ClientRelayer::start_prism(
-            interface,
-            self.config.clone(),
-        ).await?;
+        let relayer = ClientRelayer::start_prism(interface, self.config.clone()).await?;
 
         // Wait for relayer to finish
         relayer.wait_for_shutdown().await?;
