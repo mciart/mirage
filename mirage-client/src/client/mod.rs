@@ -34,9 +34,6 @@ pub struct MirageClient {
 
 impl MirageClient {
     /// Creates a new instance of a Mirage client.
-    ///
-    /// ### Arguments
-    /// - `client_config` - the configuration for the client
     pub fn new(config: ClientConfig) -> Self {
         Self {
             config,
@@ -46,7 +43,6 @@ impl MirageClient {
     }
 
     /// Connects to the Mirage server...
-    /// [修改] 签名变更：接收一个可选的 shutdown_signal Future
     pub async fn start<I: InterfaceIO, F>(&mut self, shutdown_signal: Option<F>) -> Result<()>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -59,7 +55,8 @@ impl MirageClient {
         let mut _route_guard: Option<ExclusionRouteGuard> = None;
         let default_interface_placeholder = "auto";
 
-        if let Ok(target) = get_gateway_for(server_ip).await {
+        // [修复] 移除 .await，因为底层的 windows.rs 是同步的
+        if let Ok(target) = get_gateway_for(server_ip) {
             match &target {
                 RouteTarget::Gateway(gw) => {
                     info!(
@@ -68,8 +65,9 @@ impl MirageClient {
                     );
                     let mask = if server_ip.is_ipv4() { 32 } else { 128 };
                     if let Ok(server_net) = IpNet::new(server_ip, mask) {
+                        // [修复] 移除 .await
                         if let Err(e) =
-                            add_routes(&[server_net], &target, default_interface_placeholder).await
+                            add_routes(&[server_net], &target, default_interface_placeholder)
                         {
                             warn!(
                                 "Failed to add exclusion route for server (loop risk): {}",
@@ -92,7 +90,8 @@ impl MirageClient {
                     );
                     let mask = if server_ip.is_ipv4() { 32 } else { 128 };
                     if let Ok(server_net) = IpNet::new(server_ip, mask) {
-                        if let Err(e) = add_routes(&[server_net], &target, iface).await {
+                        // [修复] 移除 .await
+                        if let Err(e) = add_routes(&[server_net], &target, iface) {
                             warn!(
                                 "Failed to add exclusion route on interface {}: {}",
                                 iface, e
@@ -158,13 +157,11 @@ impl MirageClient {
             self.config.connection.obfuscation.clone(),
         )?;
 
-        // [修改] 等待退出信号或 Relayer 结束
         if let Some(signal) = shutdown_signal {
             tokio::select! {
                 res = relayer.wait_for_shutdown() => res?,
                 _ = signal => {
                     info!("Shutdown signal received, closing connection...");
-                    // 这里退出后，Interface 会被 Drop，触发路由清理
                 }
             }
         } else {
