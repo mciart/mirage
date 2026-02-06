@@ -90,8 +90,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     }
 
     route_row.Metric = 0;
-    // 使用 transmute 强行赋值，无需导入 NL_ROUTE_PROTOCOL 类型
-    // 3 = MIB_IPPROTO_NETMGMT
+    // Protocol = 3 (MIB_IPPROTO_NETMGMT)
     route_row.Protocol = unsafe { std::mem::transmute(3i32) };
     route_row.ValidLifetime = 0xffffffff;
     route_row.PreferredLifetime = 0xffffffff;
@@ -100,7 +99,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
     if let Err(e) = result {
         // 5010 = ERROR_OBJECT_ALREADY_EXISTS
-        if e.code() == HRESULT::from_win32(WIN32_ERROR(5010).0) {
+        if e.code() == HRESULT::from_win32(5010) {
             debug!("Route already exists, skipping.");
             return Ok(());
         }
@@ -136,7 +135,8 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
     let result = unsafe { DeleteIpForwardEntry2(&route_row) };
 
     if let Err(e) = result {
-        if e.code() != HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0) {
+        // 2 = ERROR_FILE_NOT_FOUND
+        if e.code() != HRESULT::from_win32(2) {
             warn!("Failed to delete route {}: {}", network, e);
         }
     }
@@ -148,13 +148,13 @@ pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
-    // [修正] 直接传递指针，不使用 Option
+    // [修正] 使用 Some() 包裹裸指针
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
-            std::ptr::null(),       // SourceAddress: NULL
-            &dest_addr as *const _, // DestinationAddress: Ptr
+            None,                         // SourceAddress
+            Some(&dest_addr as *const _), // DestinationAddress
             0,
             &mut best_route,
             &mut best_src_addr,
@@ -240,13 +240,13 @@ fn get_best_interface_index_for_gateway(gateway: IpAddr) -> Result<u32> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
-    // [修正] 直接传递指针
+    // [修正] 使用 Some() 包裹裸指针
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
-            std::ptr::null(),
-            &dest_addr as *const _,
+            None,
+            Some(&dest_addr as *const _),
             0,
             &mut best_route,
             &mut best_src_addr,
