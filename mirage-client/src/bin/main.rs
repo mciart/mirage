@@ -7,7 +7,7 @@ use mirage::network::interface::tun_rs::TunRsInterface;
 use mirage::utils::tracing::log_subscriber;
 use mirage::Result;
 use mirage_client::client::MirageClient;
-use tracing::error;
+use tracing::{error, info};
 
 #[derive(Parser)]
 #[command(name = "mirage")]
@@ -40,6 +40,67 @@ async fn run_client() -> Result<()> {
     tracing::subscriber::set_global_default(log_subscriber(&config.log.level))?;
 
     let mut client = MirageClient::new(config);
-    // start() blocks until the connection is closed or shutdown signal received
-    client.start::<TunRsInterface>(None).await
+
+    // [改进] 传入自定义的信号监听器，包含对 Windows 关闭窗口事件的处理
+    client
+        .start::<TunRsInterface>(Some(shutdown_signal()))
+        .await
+}
+
+/// 监听多种退出信号：Ctrl+C, 窗口关闭(Windows), 终止信号(Linux/Mac)
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(windows)]
+    {
+        // 监听点击 CMD 窗口 "X" 关闭的事件
+        let ctrl_close = async {
+            match tokio::signal::windows::ctrl_close() {
+                Ok(mut stream) => stream.recv().await,
+                Err(_) => std::future::pending::<Option<()>>().await,
+            }
+        };
+
+        // 监听系统注销/关机事件
+        let ctrl_shutdown = async {
+            match tokio::signal::windows::ctrl_shutdown() {
+                Ok(mut stream) => stream.recv().await,
+                Err(_) => std::future::pending::<Option<()>>().await,
+            }
+        };
+
+        // 监听 Ctrl+Break
+        let ctrl_break = async {
+            match tokio::signal::windows::ctrl_break() {
+                Ok(mut stream) => stream.recv().await,
+                Err(_) => std::future::pending::<Option<()>>().await,
+            }
+        };
+
+        tokio::select! {
+            _ = ctrl_c => { info!("Received Ctrl+C, shutting down..."); },
+            _ = ctrl_close => { info!("Window closed (Ctrl+Close), cleaning up..."); },
+            _ = ctrl_shutdown => { info!("System shutting down, cleaning up..."); },
+            _ = ctrl_break => { info!("Received Ctrl+Break, cleaning up..."); },
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let terminate = async {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut stream) => stream.recv().await,
+                Err(_) => std::future::pending::<Option<()>>().await,
+            }
+        };
+
+        tokio::select! {
+            _ = ctrl_c => { info!("Received Ctrl+C, shutting down..."); },
+            _ = terminate => { info!("Received SIGTERM, shutting down..."); },
+        }
+    }
 }
