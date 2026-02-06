@@ -1,76 +1,75 @@
 [package]
 name = "mirage"
-version = "0.1.0"
-edition = "2021"
+description = "Reality-based VPN with XTLS-Vision - Core library"
+readme = "../README.md"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "mirage"
+path = "src/lib.rs"
+
+[features]
+default = []
+offload = []
+jemalloc = ["jemallocator"]
+debug = [] # 为了稳妥，加上 debug
 
 [dependencies]
-# Async runtime
-tokio = { version = "1.32", features = ["full"] }
-tokio-util = { version = "0.7", features = ["codec", "net"] }
-futures = "0.3"
+# BoringSSL TLS (Chrome fingerprint)
+boring = { workspace = true }
+tokio-boring = { workspace = true }
 
-# Networking
-bytes = "1.5"
-thiserror = "1.0"
-anyhow = "1.0"
-socket2 = "0.5"
-ipnet = "2.9"
-dns-parser = "0.8"
-hickory-resolver = { version = "0.24", features = ["tokio-runtime"] }
+# Interfaces and networking
+tun-rs = { workspace = true }
+socket2 = { workspace = true }
+bytes = { workspace = true }
+ipnet = { workspace = true }
 
-# TLS & Crypto
-rustls = { version = "0.21", features = ["dangerous_configuration"] }
-tokio-rustls = "0.24"
-x509-parser = "0.15"
-rcgen = "0.11"
-ring = "0.17"
-sha2 = "0.10"
-hmac = "0.12"
-chacha20poly1305 = "0.10"
-rand = "0.8"
-base64 = "0.21"
-webpki = "0.22"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-tracing-appender = "0.2"
+# Tokio
+tokio = { workspace = true }
+dashmap = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
 
 # Configuration
-serde = { version = "1.0", features = ["derive"] }
-serde_derive = "1.0"
-toml = "0.8"
-config = "0.13"
-dirs = "5.0"
+figment = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Cryptography (for Reality x25519)
+x25519-dalek = { workspace = true }
+rand = { workspace = true }
+
+# Tracing/Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+nu-ansi-term = { workspace = true }
 
 # Utils
-parking_lot = "0.12"
-ctrlc = "3.4"
-socket2-ext = "0.1" 
+thiserror = { workspace = true }
 
-# Allocator (Optional)
-jemallocator = { version = "0.5", optional = true }
+# Alloc
+[target.'cfg(unix)'.dependencies]
+jemallocator = { workspace = true, optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-tun = { version = "0.6", features = ["async"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-tun = { version = "0.6", features = ["async"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-# [关键修复] Windows API 保持 0.52
+# WinTun & Windows Native
+[target.'cfg(windows)'.dependencies]
+wintun-bindings = { workspace = true }
+# [新增] Windows API 依赖 (手动指定版本，因为 workspace 里通常没有这个)
 windows = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
 ] }
-# [关键修复] 改为继承 workspace，解决版本冲突
-wintun-bindings = { workspace = true }
 
-# [关键修复] 补全所有缺失的 features
-[features]
-default = []
-jemalloc = ["dep:jemallocator"]
-offload = [] 
-debug = []
+[dev-dependencies]
+tempfile = "3"
