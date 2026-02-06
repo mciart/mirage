@@ -117,7 +117,7 @@ macro_rules! interface_impl {
 
             /// Returns the MTU (Maximum Transmission Unit) of the interface.
             fn mtu(&self) -> u16 {
-                1400
+                1420
             }
 
             /// Returns the name of the interface.

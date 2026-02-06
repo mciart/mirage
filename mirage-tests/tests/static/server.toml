@@ -9,7 +9,7 @@ bind_port = 55155
 users_file = "tests/static/users"
 
 [connection]
-mtu = 1400
+mtu = 1420
 
 [log]
 level = "info"

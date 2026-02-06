@@ -15,7 +15,7 @@ trusted_certificate_paths = ["some/cert/path/server_cert.pem"]
 
 [connection]
 # The MTU used by the QUIC tunnel and the spawned TUN interface
-mtu = 1400
+mtu = 1420
 
 [network]
 routes = [
