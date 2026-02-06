@@ -10,15 +10,9 @@ use tracing::{debug, info, warn};
 use windows::core::{HRESULT, PCWSTR};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, WIN32_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
-    ConvertInterfaceAliasToLuid,
-    ConvertInterfaceLuidToAlias, // [修正] 这里是正确的位置
-    ConvertInterfaceLuidToIndex,
-    CreateIpForwardEntry2,
-    DeleteIpForwardEntry2,
-    GetBestRoute2,
-    InitializeIpForwardEntry,
+    ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToAlias, ConvertInterfaceLuidToIndex,
+    CreateIpForwardEntry2, DeleteIpForwardEntry2, GetBestRoute2, InitializeIpForwardEntry,
     MIB_IPFORWARD_ROW2,
-    NL_ROUTE_PROTOCOL,
 };
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, IN6_ADDR, IN_ADDR, SOCKADDR_INET};
@@ -100,8 +94,12 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
     // 4. 设置其他参数
     route_row.Metric = 0;
-    // 使用 RouteProtocolNetMgmt (3)
-    route_row.Protocol = NL_ROUTE_PROTOCOL(3);
+
+    // [技巧] 绕过 NL_ROUTE_PROTOCOL 导入问题
+    // Protocol 字段通常是 i32 类型 (enum)，值 3 代表 MIB_IPPROTO_NETMGMT (Static)
+    // 我们使用 transmute 强制赋值
+    route_row.Protocol = unsafe { std::mem::transmute(3i32) };
+
     route_row.ValidLifetime = 0xffffffff;
     route_row.PreferredLifetime = 0xffffffff;
 
@@ -110,7 +108,8 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
     if let Err(e) = result {
         // ERROR_OBJECT_ALREADY_EXISTS = 5010
-        if e.code() == HRESULT::from_win32(WIN32_ERROR(5010).0) {
+        if e.code() == HRESULT::from_win32(5010) {
+            // WIN32_ERROR(5010)
             debug!("Route already exists, skipping.");
             return Ok(());
         }
@@ -159,14 +158,13 @@ pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
-    // [修正] 显式转换引用为裸指针 Option<*const T>
-    // GetBestRoute2(InterfaceLuid, InterfaceIndex, SourceAddress, DestinationAddress, ...)
+    // [修复] 参数 4 (DestinationAddress) 必须是 *const T，不能是 Option
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
-            None,                         // SourceAddress
-            Some(&dest_addr as *const _), // DestinationAddress
+            None,                   // SourceAddress (Optional)
+            &dest_addr as *const _, // DestinationAddress (Required)
             0,
             &mut best_route,
             &mut best_src_addr,
@@ -252,13 +250,13 @@ fn get_best_interface_index_for_gateway(gateway: IpAddr) -> Result<u32> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
-    // [修正] 显式转换
+    // [修复] 指针传递
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
             None,
-            Some(&dest_addr as *const _),
+            &dest_addr as *const _,
             0,
             &mut best_route,
             &mut best_src_addr,
