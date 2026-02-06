@@ -33,7 +33,6 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     {
         // Linux 策略: 使用 'replace' 原子操作
         let mut cmd = Command::new("ip");
-        // [修复] 使用链式 arg 调用，避免数组类型不匹配 (Error 49)
         cmd.arg("route").arg("replace").arg(network.to_string());
 
         match target {
@@ -121,13 +120,11 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
 }
 
 fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &str) -> Result<()> {
-    // 使用 target 打印日志，消除 "unused variable" 警告
     debug!("Deleting route: {} via {:?}", network, target);
 
     #[cfg(target_os = "linux")]
     {
         let mut cmd = Command::new("ip");
-        // [修复] 链式调用
         cmd.arg("route").arg("del").arg(network.to_string());
 
         let _ = cmd.output();
@@ -181,7 +178,9 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
     #[cfg(target_os = "linux")]
     {
         let output = Command::new("ip")
-            .args(["route", "get", &target.to_string()])
+            .arg("route")
+            .arg("get")
+            .arg(target.to_string())
             .output()
             .map_err(|e| RouteError::PlatformError {
                 message: e.to_string(),
@@ -208,12 +207,21 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
 
     #[cfg(target_os = "macos")]
     {
-        let output = Command::new("route")
-            .args(["-n", "get", &target.to_string()])
-            .output()
-            .map_err(|e| RouteError::PlatformError {
-                message: e.to_string(),
-            })?;
+        let mut cmd = Command::new("route");
+        cmd.args(["-n", "get"]);
+
+        // [关键修复] 必须显式指定地址族，否则 route get IPv6 会报错 "bad address"
+        if target.is_ipv6() {
+            cmd.arg("-inet6");
+        } else {
+            cmd.arg("-inet");
+        }
+
+        cmd.arg(target.to_string());
+
+        let output = cmd.output().map_err(|e| RouteError::PlatformError {
+            message: e.to_string(),
+        })?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -228,13 +236,11 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() > 1 {
                         // [关键修复] 去除 IPv6 的 Scope ID (例如 fe80::1%en0 -> fe80::1)
-                        // 否则 parse::<IpAddr> 会失败
                         let ip_str = parts[1].split('%').next().unwrap_or(parts[1]);
 
                         if let Ok(ip) = ip_str.parse::<IpAddr>() {
                             return Ok(RouteTarget::Gateway(ip));
                         } else {
-                            // 使用全名 tracing::warn! 避免 unused import
                             tracing::warn!(
                                 "Found gateway string '{}' but failed to parse as IP.",
                                 parts[1]
