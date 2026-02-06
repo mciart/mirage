@@ -8,7 +8,6 @@ use tracing::{debug, info, warn};
 
 // 引入 Windows API
 use windows::core::{HRESULT, PCWSTR};
-use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToAlias, ConvertInterfaceLuidToIndex,
     CreateIpForwardEntry2, DeleteIpForwardEntry2, FreeMibTable, GetBestRoute2, GetIpForwardTable2,
@@ -41,7 +40,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         network, target, interface_name
     );
 
-    // [强力清理] 先扫描并删除所有冲突的旧路由
+    // [强力清理] 先扫描并删除所有冲突的旧路由，防止幽灵路由阻碍
     if let Err(e) = remove_conflicting_routes(network) {
         warn!(
             "Failed to clean up potential ghost routes for {}: {}",
@@ -58,8 +57,8 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         RouteTarget::Gateway(gw_ip) => {
             route_row.NextHop = ip_to_sockaddr(*gw_ip);
 
-            // [核心修复] 优先级翻转：优先使用指定的接口名 (tun0)，而不是让 Windows 自动推断
-            // 只有当接口名为 "auto" 或者查找失败时，才回退到 get_best_interface_index_for_gateway
+            // [核心逻辑] 优先使用明确的接口名 (如 "tun0") 查找索引
+            // 只有当名字无效时，才回退到自动网关查找（防止 Windows 错误地选到物理网卡）
             let mut interface_index_found = false;
 
             if interface_name != "auto" {
@@ -122,7 +121,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     }
 
     route_row.Metric = 0;
-    // Protocol = 3 (MIB_IPPROTO_NETMGMT)
+    // Protocol = 3 (MIB_IPPROTO_NETMGMT) - 静态路由
     route_row.Protocol = unsafe { std::mem::transmute(3i32) };
     route_row.ValidLifetime = 0xffffffff;
     route_row.PreferredLifetime = 0xffffffff;
@@ -131,6 +130,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
     if let Err(e) = result {
         if e.code() == HRESULT::from_win32(5010) {
+            // 5010 = ERROR_OBJECT_ALREADY_EXISTS
             warn!(
                 "Route {} already exists on interface {}. Skipping.",
                 network, route_row.InterfaceIndex
@@ -152,6 +152,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 }
 
 fn delete_route(network: &IpNet, _target: &RouteTarget, _interface_name: &str) -> Result<()> {
+    // 统一使用强力清理逻辑，确保删得干净
     remove_conflicting_routes(network).map_err(|e| {
         RouteError::PlatformError {
             message: format!("Delete failed: {}", e),
@@ -160,7 +161,7 @@ fn delete_route(network: &IpNet, _target: &RouteTarget, _interface_name: &str) -
     })
 }
 
-/// 扫描路由表并删除所有匹配特定目标的路由
+/// [辅助] 扫描路由表并删除所有匹配特定目标的路由
 fn remove_conflicting_routes(network: &IpNet) -> Result<()> {
     let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
 
