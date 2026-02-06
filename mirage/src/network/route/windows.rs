@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 
 // 引入 Windows API
 use windows::core::{HRESULT, PCWSTR};
-use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, WIN32_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToAlias, ConvertInterfaceLuidToIndex,
     CreateIpForwardEntry2, DeleteIpForwardEntry2, GetBestRoute2, InitializeIpForwardEntry,
@@ -95,12 +95,17 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     route_row.ValidLifetime = 0xffffffff;
     route_row.PreferredLifetime = 0xffffffff;
 
+    // [关键修改] 先删后加：强制清除残留的旧路由
+    // 我们忽略删除错误（比如路由本来就不存在），目的是确保干净
+    unsafe { DeleteIpForwardEntry2(&route_row) };
+
     let result = unsafe { CreateIpForwardEntry2(&route_row) };
 
     if let Err(e) = result {
-        // 5010 = ERROR_OBJECT_ALREADY_EXISTS
+        // 如果删除了还报已存在，那就真的是有问题了
         if e.code() == HRESULT::from_win32(5010) {
-            debug!("Route already exists, skipping.");
+            // ERROR_OBJECT_ALREADY_EXISTS
+            debug!("Route already exists after deletion attempt, skipping.");
             return Ok(());
         }
         return Err(RouteError::AddFailed {
@@ -148,13 +153,12 @@ pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
-    // [修正] DestinationAddress 直接传指针，不使用 Option
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
             None,                   // SourceAddress
-            &dest_addr as *const _, // DestinationAddress (Required)
+            &dest_addr as *const _, // DestinationAddress
             0,
             &mut best_route,
             &mut best_src_addr,
@@ -240,7 +244,6 @@ fn get_best_interface_index_for_gateway(gateway: IpAddr) -> Result<u32> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
-    // [修正] 直接传指针
     let result = unsafe {
         GetBestRoute2(
             None,
