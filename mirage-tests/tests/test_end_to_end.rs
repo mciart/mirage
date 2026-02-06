@@ -44,7 +44,12 @@ async fn test_end_to_end_communication(client_config: ClientConfig, server_confi
     let ip_client = Ipv4Addr::new(10, 0, 0, 2);
 
     tokio::spawn(async move { server.run::<ServerInterface>().await.unwrap() });
-    client.start::<ClientInterface>(None).await.unwrap();
+
+    // [修复] 添加 std::future::Pending<()>
+    client
+        .start::<ClientInterface, std::future::Pending<()>>(None)
+        .await
+        .unwrap();
 
     // Test client -> server
     let test_packet = dummy_packet(ip_client, ip_server);
