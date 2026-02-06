@@ -3,7 +3,8 @@ use crate::Result;
 use ipnet::IpNet;
 use std::net::IpAddr;
 use std::process::Command;
-use tracing::{debug, info, warn};
+// [修复 1] 移除了未使用的 warn
+use tracing::{debug, info};
 
 use super::RouteTarget;
 
@@ -33,7 +34,6 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     {
         // Linux 策略: 使用 'replace' 而不是 'add'。
         // 'replace' 是原子的：如果路由不存在则添加，如果存在则修改。
-        // 这完美解决了 "Ghost Routes" 问题，也不需要先删后加。
         let mut cmd = Command::new("ip");
         cmd.args(["route", "replace", &network.to_string()]);
 
@@ -66,8 +66,6 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     #[cfg(target_os = "macos")]
     {
         // macOS 策略: 先尝试删除 (忽略错误)，再添加。
-        // macOS 的 route add 如果已存在会报错，所以必须先清理。
-
         // 1. 尝试删除旧路由 (Ignore errors)
         let _ = delete_route_impl(network, target, interface_name);
 
@@ -78,13 +76,11 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
         match target {
             RouteTarget::Gateway(gw) => {
-                // route add -net 1.2.3.4/24 10.0.0.1
                 cmd.arg("-net");
                 cmd.arg(network.to_string());
                 cmd.arg(gw.to_string());
             }
             RouteTarget::Interface(_) => {
-                // route add -net 1.2.3.4/24 -interface tun0
                 cmd.arg("-net");
                 cmd.arg(network.to_string());
                 cmd.arg("-interface");
@@ -98,7 +94,6 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // 某些情况下路由可能已经由系统自动添加了 (比如直连路由)，如果是这种情况可以忽略
             if !stderr.contains("File exists") {
                 return Err(RouteError::AddFailed {
                     destination: network.to_string(),
@@ -121,16 +116,17 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
 }
 
 fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &str) -> Result<()> {
-    debug!("Deleting route: {}", network);
+    // [修复 2] 在这里使用了 target 变量打印日志，消除了 unused variable 警告
+    // 同时也方便我们在所有平台上调试
+    debug!("Deleting route: {} via {:?}", network, target);
 
     #[cfg(target_os = "linux")]
     {
         let mut cmd = Command::new("ip");
         cmd.args(["route", "del", &network.to_string()]);
-
-        // Linux 删除时不需要太详细，只要目标匹配即可
-        // 但为了精确，如果知道 dev 可以加上，不过通常 ip route del x.x.x.x/x 就够了
-        let _ = cmd.output(); // Ignore result, usually fine
+        // Linux 删除时通常只要目标匹配即可，target 参数在这里虽然不是必须的，
+        // 但我们在上面打印了它，编译器就不会报错了。
+        let _ = cmd.output();
     }
 
     #[cfg(target_os = "macos")]
@@ -145,7 +141,6 @@ fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &st
                 cmd.arg(gw.to_string());
             }
             RouteTarget::Interface(_) => {
-                // macOS 删除时如果之前是用 -interface 加的，最好也指明，或者直接删 net
                 cmd.arg("-net");
                 cmd.arg(network.to_string());
             }
@@ -156,24 +151,7 @@ fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &st
     Ok(())
 }
 
-/// [Posix] 获取去往特定 IP 的路由目标
-/// 在 Linux/macOS 上，我们通常依赖系统路由表查找，
-/// 但这里为了简化，我们通常假设：如果不是直连，就走默认网关。
-///
-/// 实际上 mirage 在非 Windows 平台通常通过读取 /proc/net/route (Linux)
-/// 或 netstat (macOS) 来找网关。
-/// 这里我们需要一个简化的实现，或者保留之前的实现。
 pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
-    // 这里是一个难点：不引入额外 crate (如 default-net) 很难跨平台获取默认网关。
-    // 作为一个临时的稳健方案，我们可以尝试 ping 或者 connect 来探测（不推荐）。
-
-    // 更好的方案是：在 Linux/macOS 上，我们暂时返回一个 "Interface(auto)"，
-    // 让上层逻辑决定（mirage 的 TunRsInterface 创建时如果不传 gateway，
-    // 在 Linux 上会自动处理，但在 macOS 上可能需要显式 gateway）。
-
-    // 既然我们要全平台稳健，建议使用 `default-net` 库（如果项目里有）。
-    // 如果没有，我们先尝试用 ip route get (Linux) 或 route get (macOS) 命令来获取。
-
     get_gateway_by_exec(target)
 }
 
@@ -200,7 +178,7 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            // 格式: 1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.2 uid 1000
+            // 格式: 1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.2 ...
             if let Some(via_pos) = stdout.find("via") {
                 let parts: Vec<&str> = stdout[via_pos..].split_whitespace().collect();
                 if parts.len() > 1 {
@@ -209,7 +187,7 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
                     }
                 }
             }
-            // 如果是直连 (没有 via)
+            // 直连 (没有 via)
             if let Some(dev_pos) = stdout.find("dev") {
                 let parts: Vec<&str> = stdout[dev_pos..].split_whitespace().collect();
                 if parts.len() > 1 {
@@ -244,10 +222,6 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
                 if line.starts_with("interface:") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() > 1 {
-                        // macOS 有时只返回 interface (直连)
-                        // 我们可以先记录下来，如果没找到 gateway 就返回 interface
-                        // 但通常有 interface 就会有 gateway (如果是外网)
-                        // 如果是内网直连，返回 interface 也是对的
                         return Ok(RouteTarget::Interface(parts[1].to_string()));
                     }
                 }
