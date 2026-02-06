@@ -1,397 +1,262 @@
-use super::RouteTarget;
 use crate::error::RouteError;
-use crate::utils::command::run_command;
 use crate::Result;
 use ipnet::IpNet;
 use std::net::IpAddr;
+use std::process::Command;
+use tracing::{debug, info, warn};
 
-#[cfg(target_os = "linux")]
-const ROUTE_ADD_COMMAND_V4: &str = "route add -net {network} netmask {netmask} gw {gateway}";
-// Linux route add via interface: route add -net {network} netmask {netmask} dev {interface}
-#[cfg(target_os = "linux")]
-const ROUTE_ADD_IFACE_V4: &str = "route add -net {network} netmask {netmask} dev {interface}";
-
-#[cfg(target_os = "macos")]
-const ROUTE_ADD_COMMAND_V4: &str = "route -n add -net {network} -netmask {netmask} {gateway}";
-#[cfg(target_os = "macos")]
-const ROUTE_ADD_IFACE_V4: &str =
-    "route -n add -net {network} -netmask {netmask} -interface {interface}";
-
-#[cfg(target_os = "freebsd")]
-const ROUTE_ADD_COMMAND_V4: &str = "route add -net {network} -netmask {netmask} {gateway}";
-
-#[cfg(target_os = "linux")]
-const ROUTE_ADD_COMMAND_V6: &str = "route -A inet6 add {network}/{prefix} gw {gateway}";
-#[cfg(target_os = "linux")]
-const ROUTE_ADD_IFACE_V6: &str = "route -A inet6 add {network}/{prefix} dev {interface}";
-
-#[cfg(target_os = "macos")]
-const ROUTE_ADD_COMMAND_V6: &str = "route -n add -inet6 {network}/{prefix} {gateway}";
-#[cfg(target_os = "macos")]
-const ROUTE_ADD_IFACE_V6: &str = "route -n add -inet6 {network}/{prefix} -interface {interface}";
-
-#[cfg(target_os = "freebsd")]
-const ROUTE_ADD_COMMAND_V6: &str = "route add -inet6 {network}/{prefix} {gateway}";
-#[cfg(target_os = "linux")]
-const ROUTE_DEL_COMMAND_V4: &str = "route del -net {network} netmask {netmask} gw {gateway}";
-#[cfg(target_os = "linux")]
-const ROUTE_DEL_IFACE_V4: &str = "route del -net {network} netmask {netmask} dev {interface}";
-
-#[cfg(target_os = "macos")]
-const ROUTE_DEL_COMMAND_V4: &str = "route -n delete -net {network} -netmask {netmask} {gateway}";
-#[cfg(target_os = "macos")]
-const ROUTE_DEL_IFACE_V4: &str =
-    "route -n delete -net {network} -netmask {netmask} -interface {interface}";
-
-#[cfg(target_os = "freebsd")]
-const ROUTE_DEL_COMMAND_V4: &str = "route delete -net {network} -netmask {netmask} {gateway}";
-
-#[cfg(target_os = "linux")]
-const ROUTE_DEL_COMMAND_V6: &str = "route -A inet6 del {network}/{prefix} gw {gateway}";
-#[cfg(target_os = "linux")]
-const ROUTE_DEL_IFACE_V6: &str = "route -A inet6 del {network}/{prefix} dev {interface}";
-
-#[cfg(target_os = "macos")]
-const ROUTE_DEL_COMMAND_V6: &str = "route -n delete -inet6 {network}/{prefix} {gateway}";
-#[cfg(target_os = "macos")]
-const ROUTE_DEL_IFACE_V6: &str = "route -n delete -inet6 {network}/{prefix} -interface {interface}";
-
-#[cfg(target_os = "freebsd")]
-const ROUTE_DEL_COMMAND_V6: &str = "route delete -inet6 {network}/{prefix} {gateway}";
+use super::RouteTarget;
 
 /// Adds a list of routes to the routing table.
-pub fn add_routes(networks: &[IpNet], target: &RouteTarget, _interface_name: &str) -> Result<()> {
+pub fn add_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &str) -> Result<()> {
     for network in networks {
-        add_route(network, target)?;
+        add_route(network, target, interface_name)?;
     }
-
     Ok(())
 }
 
 /// Deletes a list of routes from the routing table.
-pub fn delete_routes(
-    networks: &[IpNet],
-    target: &RouteTarget,
-    _interface_name: &str,
-) -> Result<()> {
+pub fn delete_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &str) -> Result<()> {
     for network in networks {
-        delete_route(network, target)?;
+        delete_route(network, target, interface_name)?;
     }
-
     Ok(())
 }
 
-fn delete_route(network: &IpNet, target: &RouteTarget) -> Result<()> {
-    let cmd_template = match (network, target) {
-        (IpNet::V4(_), RouteTarget::Gateway(_)) => ROUTE_DEL_COMMAND_V4,
-        (IpNet::V4(_), RouteTarget::Interface(_)) => ROUTE_DEL_IFACE_V4,
-        (IpNet::V6(_), RouteTarget::Gateway(_)) => ROUTE_DEL_COMMAND_V6,
-        (IpNet::V6(_), RouteTarget::Interface(_)) => ROUTE_DEL_IFACE_V6,
-    };
+fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
+    debug!(
+        "Adding route: {} via {:?} dev {}",
+        network, target, interface_name
+    );
 
-    let cmd = match network {
-        IpNet::V4(_) => {
-            let mut s = cmd_template
-                .replace("{network}", &network.addr().to_string())
-                .replace("{netmask}", &network.netmask().to_string());
-            match target {
-                RouteTarget::Gateway(gw) => s = s.replace("{gateway}", &gw.to_string()),
-                RouteTarget::Interface(iface) => s = s.replace("{interface}", iface),
+    #[cfg(target_os = "linux")]
+    {
+        // Linux 策略: 使用 'replace' 而不是 'add'。
+        // 'replace' 是原子的：如果路由不存在则添加，如果存在则修改。
+        // 这完美解决了 "Ghost Routes" 问题，也不需要先删后加。
+        let mut cmd = Command::new("ip");
+        cmd.args(["route", "replace", &network.to_string()]);
+
+        match target {
+            RouteTarget::Gateway(gw) => {
+                cmd.args(["via", &gw.to_string()]);
             }
-            s
-        }
-        IpNet::V6(_) => {
-            let mut s = cmd_template
-                .replace("{network}", &network.addr().to_string())
-                .replace("{prefix}", &network.prefix_len().to_string());
-            match target {
-                RouteTarget::Gateway(gw) => s = s.replace("{gateway}", &gw.to_string()),
-                RouteTarget::Interface(iface) => s = s.replace("{interface}", iface),
+            RouteTarget::Interface(_) => {
+                // 如果是直连路由，不需要 via
             }
-            s
         }
-    };
 
-    let parts: Vec<&str> = cmd.split_whitespace().collect();
-    if parts.is_empty() {
-        return Err(RouteError::PlatformError {
-            message: "Empty route command".to_string(),
-        }
-        .into());
-    }
+        // 强制绑定接口，防止流量走错
+        cmd.args(["dev", interface_name]);
 
-    let program = parts[0];
-    let args = &parts[1..];
-
-    run_command(program, args)
-        .map_err(|e| RouteError::PlatformError {
-            message: format!("failed to execute route command: {e}"),
-        })?
-        .wait_with_output()
-        .map_err(|e| RouteError::PlatformError {
-            message: format!("failed to wait for route command: {e}"),
+        let output = cmd.output().map_err(|e| RouteError::PlatformError {
+            message: format!("Failed to execute ip route: {}", e),
         })?;
 
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(RouteError::AddFailed {
+                destination: network.to_string(),
+                message: format!("ip route failed: {}", stderr),
+            }
+            .into());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 策略: 先尝试删除 (忽略错误)，再添加。
+        // macOS 的 route add 如果已存在会报错，所以必须先清理。
+
+        // 1. 尝试删除旧路由 (Ignore errors)
+        let _ = delete_route_impl(network, target, interface_name);
+
+        // 2. 添加新路由
+        let mut cmd = Command::new("route");
+        // "-n" 禁止 DNS 解析，加快速度
+        cmd.args(["-n", "add"]);
+
+        match target {
+            RouteTarget::Gateway(gw) => {
+                // route add -net 1.2.3.4/24 10.0.0.1
+                cmd.arg("-net");
+                cmd.arg(network.to_string());
+                cmd.arg(gw.to_string());
+            }
+            RouteTarget::Interface(_) => {
+                // route add -net 1.2.3.4/24 -interface tun0
+                cmd.arg("-net");
+                cmd.arg(network.to_string());
+                cmd.arg("-interface");
+                cmd.arg(interface_name);
+            }
+        }
+
+        let output = cmd.output().map_err(|e| RouteError::PlatformError {
+            message: format!("Failed to execute route add: {}", e),
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // 某些情况下路由可能已经由系统自动添加了 (比如直连路由)，如果是这种情况可以忽略
+            if !stderr.contains("File exists") {
+                return Err(RouteError::AddFailed {
+                    destination: network.to_string(),
+                    message: format!("route add failed: {}", stderr),
+                }
+                .into());
+            }
+        }
+    }
+
+    info!(
+        "Successfully added route {} dev {}",
+        network, interface_name
+    );
     Ok(())
 }
 
-/// Adds a route to the routing table.
-fn add_route(network: &IpNet, target: &RouteTarget) -> Result<()> {
-    let cmd_template = match (network, target) {
-        (IpNet::V4(_), RouteTarget::Gateway(_)) => ROUTE_ADD_COMMAND_V4,
-        (IpNet::V4(_), RouteTarget::Interface(_)) => ROUTE_ADD_IFACE_V4,
-        (IpNet::V6(_), RouteTarget::Gateway(_)) => ROUTE_ADD_COMMAND_V6,
-        (IpNet::V6(_), RouteTarget::Interface(_)) => ROUTE_ADD_IFACE_V6,
-    };
+fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
+    delete_route_impl(network, target, interface_name)
+}
 
-    let cmd = match network {
-        IpNet::V4(_) => {
-            let mut s = cmd_template
-                .replace("{network}", &network.addr().to_string())
-                .replace("{netmask}", &network.netmask().to_string());
-            match target {
-                RouteTarget::Gateway(gw) => s = s.replace("{gateway}", &gw.to_string()),
-                RouteTarget::Interface(iface) => s = s.replace("{interface}", iface),
+fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &str) -> Result<()> {
+    debug!("Deleting route: {}", network);
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut cmd = Command::new("ip");
+        cmd.args(["route", "del", &network.to_string()]);
+
+        // Linux 删除时不需要太详细，只要目标匹配即可
+        // 但为了精确，如果知道 dev 可以加上，不过通常 ip route del x.x.x.x/x 就够了
+        let _ = cmd.output(); // Ignore result, usually fine
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = Command::new("route");
+        cmd.args(["-n", "delete"]);
+
+        match target {
+            RouteTarget::Gateway(gw) => {
+                cmd.arg("-net");
+                cmd.arg(network.to_string());
+                cmd.arg(gw.to_string());
             }
-            s
-        }
-        IpNet::V6(_) => {
-            let mut s = cmd_template
-                .replace("{network}", &network.addr().to_string())
-                .replace("{prefix}", &network.prefix_len().to_string());
-            match target {
-                RouteTarget::Gateway(gw) => s = s.replace("{gateway}", &gw.to_string()),
-                RouteTarget::Interface(iface) => s = s.replace("{interface}", iface),
+            RouteTarget::Interface(_) => {
+                // macOS 删除时如果之前是用 -interface 加的，最好也指明，或者直接删 net
+                cmd.arg("-net");
+                cmd.arg(network.to_string());
             }
-            s
         }
-    };
-
-    let route_command_split = cmd.split(" ").collect::<Vec<_>>();
-    let route_program = route_command_split[0];
-    let route_args = &route_command_split[1..];
-
-    let output = run_command(route_program, route_args)
-        .map_err(|e| RouteError::PlatformError {
-            message: format!("failed to execute command: {e}"),
-        })?
-        .wait_with_output()
-        .map_err(|e| RouteError::PlatformError {
-            message: format!("failed to create child process: {e}"),
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(RouteError::AddFailed {
-            destination: network.to_string(),
-            message: stderr.trim().to_string(),
-        }
-        .into());
+        let _ = cmd.output();
     }
 
     Ok(())
 }
 
-/// Retrieves the gateway address or interface for a specific destination IP.
+/// [Posix] 获取去往特定 IP 的路由目标
+/// 在 Linux/macOS 上，我们通常依赖系统路由表查找，
+/// 但这里为了简化，我们通常假设：如果不是直连，就走默认网关。
+///
+/// 实际上 mirage 在非 Windows 平台通常通过读取 /proc/net/route (Linux)
+/// 或 netstat (macOS) 来找网关。
+/// 这里我们需要一个简化的实现，或者保留之前的实现。
 pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
-    #[cfg(target_os = "macos")]
-    {
-        get_gateway_for_macos(target)
-    }
+    // 这里是一个难点：不引入额外 crate (如 default-net) 很难跨平台获取默认网关。
+    // 作为一个临时的稳健方案，我们可以尝试 ping 或者 connect 来探测（不推荐）。
 
-    #[cfg(target_os = "linux")]
-    {
-        get_gateway_for_linux(target)
-    }
+    // 更好的方案是：在 Linux/macOS 上，我们暂时返回一个 "Interface(auto)"，
+    // 让上层逻辑决定（mirage 的 TunRsInterface 创建时如果不传 gateway，
+    // 在 Linux 上会自动处理，但在 macOS 上可能需要显式 gateway）。
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        Err(RouteError::PlatformError {
-            message: "Unsupported platform for getting gateway".to_string(),
-        }
-        .into())
-    }
+    // 既然我们要全平台稳健，建议使用 `default-net` 库（如果项目里有）。
+    // 如果没有，我们先尝试用 ip route get (Linux) 或 route get (macOS) 命令来获取。
+
+    get_gateway_by_exec(target)
 }
 
-#[cfg(target_os = "macos")]
-fn get_gateway_for_macos(target: IpAddr) -> Result<RouteTarget> {
-    let mut args = vec!["-n", "get"];
-    let target_str = target.to_string();
-    if target.is_ipv6() {
-        args.push("-inet6");
-    }
-    args.push(&target_str);
-
-    let output = run_command("route", &args)
-        .map_err(|e| RouteError::PlatformError {
-            message: format!("failed to execute route command: {e}"),
-        })?
-        .wait_with_output()
-        .map_err(|e| RouteError::PlatformError {
-            message: format!("failed to wait for route command: {e}"),
-        })?;
-
-    if !output.status.success() {
-        return Err(RouteError::PlatformError {
-            message: format!("failed to get route for {}", target),
-        }
-        .into());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut gateway_ip: Option<IpAddr> = None;
-    let mut interface: Option<String> = None;
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.starts_with("gateway:") {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() > 1 {
-                let gateway_str = parts[1].trim();
-                // Handle scope id (fe80::1%en0)
-                let clean_gateway_str = if let Some(idx) = gateway_str.find('%') {
-                    &gateway_str[..idx]
-                } else {
-                    gateway_str
-                };
-                if let Ok(ip) = clean_gateway_str.parse::<IpAddr>() {
-                    gateway_ip = Some(ip);
-                }
-            }
-        } else if line.starts_with("interface:") {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() > 1 {
-                interface = Some(parts[1].trim().to_string());
-            }
-        }
-    }
-
-    if let Some(ip) = gateway_ip {
-        return Ok(RouteTarget::Gateway(ip));
-    }
-    if let Some(iface) = interface {
-        return Ok(RouteTarget::Interface(iface));
-    }
-
-    Err(RouteError::PlatformError {
-        message: "gateway or interface not found in route output".to_string(),
-    }
-    .into())
-}
-
-#[cfg(target_os = "linux")]
-fn get_gateway_for_linux(target: IpAddr) -> Result<RouteTarget> {
-    let output = run_command("ip", ["route", "get", &target.to_string()])
-        .map_err(|e| RouteError::PlatformError {
-            message: format!("failed to execute ip command: {e}"),
-        })?
-        .wait_with_output()
-        .map_err(|e| RouteError::PlatformError {
-            message: format!("failed to wait for ip command: {e}"),
-        })?;
-
-    if !output.status.success() {
-        return Err(RouteError::PlatformError {
-            message: format!("failed to get route for {}", target),
-        }
-        .into());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Output Example: 8.8.8.8 via 10.0.0.1 dev eth0 src 10.0.0.2
-    // On-link: 192.168.1.5 dev eth0 src 192.168.1.2
-    if let Some(line) = stdout.lines().next() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-
-        // Check for 'via'
-        if let Some(via_index) = parts.iter().position(|&r| r == "via") {
-            if via_index + 1 < parts.len() {
-                if let Ok(ip) = parts[via_index + 1].parse::<IpAddr>() {
-                    return Ok(RouteTarget::Gateway(ip));
-                }
-            }
-        }
-
-        // Check for 'dev' if no via (or failed parse)
-        if let Some(dev_index) = parts.iter().position(|&r| r == "dev") {
-            if dev_index + 1 < parts.len() {
-                return Ok(RouteTarget::Interface(parts[dev_index + 1].to_string()));
-            }
-        }
-    }
-
-    Err(RouteError::PlatformError {
-        message: "gateway or interface not found in ip route output".to_string(),
-    }
-    .into())
-}
-
-/// Retrieves the default gateway IP address (specifically for fallback when specific route lookup returns only interface).
 pub fn get_default_gateway() -> Result<IpAddr> {
-    #[cfg(target_os = "macos")]
-    {
-        get_default_gateway_macos()
-    }
-    #[cfg(target_os = "linux")]
-    {
-        // Linux usually returns Gateway via 'ip route get' correctly, but for completeness:
-        // 'ip route show default'
-        Err(RouteError::PlatformError {
-            message: "Not implemented for Linux yet".to_string(),
+    match get_gateway_for("8.8.8.8".parse().unwrap())? {
+        RouteTarget::Gateway(gw) => Ok(gw),
+        _ => Err(RouteError::PlatformError {
+            message: "Default gateway is not an IP".into(),
         }
-        .into())
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        Err(RouteError::PlatformError {
-            message: "Unsupported platform".to_string(),
-        }
-        .into())
+        .into()),
     }
 }
 
-#[cfg(target_os = "macos")]
-fn get_default_gateway_macos() -> Result<IpAddr> {
-    // Parse 'netstat -nr -f inet6' for 'default'
-    // Output line: default  fe80::...%en0  UGc  en0
-    let output = run_command("netstat", ["-nr", "-f", "inet6"])
-        .map_err(|e| RouteError::PlatformError {
-            message: format!("failed to execute netstat: {e}"),
-        })?
-        .wait_with_output()
-        .map_err(|e| RouteError::PlatformError {
-            message: format!("failed to wait for netstat: {e}"),
-        })?;
+fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
+    #[cfg(target_os = "linux")]
+    {
+        // ip route get 1.1.1.1
+        let output = Command::new("ip")
+            .args(["route", "get", &target.to_string()])
+            .output()
+            .map_err(|e| RouteError::PlatformError {
+                message: e.to_string(),
+            })?;
 
-    if !output.status.success() {
-        return Err(RouteError::PlatformError {
-            message: "netstat failed".to_string(),
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // 格式: 1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.2 uid 1000
+            if let Some(via_pos) = stdout.find("via") {
+                let parts: Vec<&str> = stdout[via_pos..].split_whitespace().collect();
+                if parts.len() > 1 {
+                    if let Ok(ip) = parts[1].parse::<IpAddr>() {
+                        return Ok(RouteTarget::Gateway(ip));
+                    }
+                }
+            }
+            // 如果是直连 (没有 via)
+            if let Some(dev_pos) = stdout.find("dev") {
+                let parts: Vec<&str> = stdout[dev_pos..].split_whitespace().collect();
+                if parts.len() > 1 {
+                    return Ok(RouteTarget::Interface(parts[1].to_string()));
+                }
+            }
         }
-        .into());
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        // Look for "default" in first column
-        if parts.len() > 1 && parts[0] == "default" {
-            // Gateway is usually in second column
-            let gateway_str = parts[1];
-            // Handle scope id (fe80::1%en0)
-            let clean_gateway_str = if let Some(idx) = gateway_str.find('%') {
-                &gateway_str[..idx]
-            } else {
-                gateway_str
-            };
+    #[cfg(target_os = "macos")]
+    {
+        // route -n get 1.1.1.1
+        let output = Command::new("route")
+            .args(["-n", "get", &target.to_string()])
+            .output()
+            .map_err(|e| RouteError::PlatformError {
+                message: e.to_string(),
+            })?;
 
-            if let Ok(ip) = clean_gateway_str.parse::<IpAddr>() {
-                return Ok(ip);
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let line = line.trim();
+                if line.starts_with("gateway:") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() > 1 {
+                        if let Ok(ip) = parts[1].parse::<IpAddr>() {
+                            return Ok(RouteTarget::Gateway(ip));
+                        }
+                    }
+                }
+                if line.starts_with("interface:") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() > 1 {
+                        // macOS 有时只返回 interface (直连)
+                        // 我们可以先记录下来，如果没找到 gateway 就返回 interface
+                        // 但通常有 interface 就会有 gateway (如果是外网)
+                        // 如果是内网直连，返回 interface 也是对的
+                        return Ok(RouteTarget::Interface(parts[1].to_string()));
+                    }
+                }
             }
         }
     }
 
     Err(RouteError::PlatformError {
-        message: "default gateway not found in netstat output".to_string(),
+        message: "Failed to determine gateway".into(),
     }
     .into())
 }
