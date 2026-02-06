@@ -3,7 +3,6 @@ use crate::Result;
 use ipnet::IpNet;
 use std::net::IpAddr;
 use std::process::Command;
-// [修复 1] 移除了未使用的 warn
 use tracing::{debug, info};
 
 use super::RouteTarget;
@@ -32,8 +31,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
     #[cfg(target_os = "linux")]
     {
-        // Linux 策略: 使用 'replace' 而不是 'add'。
-        // 'replace' 是原子的：如果路由不存在则添加，如果存在则修改。
+        // Linux 策略: 使用 'replace' 原子操作
         let mut cmd = Command::new("ip");
         cmd.args(["route", "replace", &network.to_string()]);
 
@@ -42,11 +40,11 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
                 cmd.args(["via", &gw.to_string()]);
             }
             RouteTarget::Interface(_) => {
-                // 如果是直连路由，不需要 via
+                // 直连路由不需要 via
             }
         }
 
-        // 强制绑定接口，防止流量走错
+        // 强制绑定接口
         cmd.args(["dev", interface_name]);
 
         let output = cmd.output().map_err(|e| RouteError::PlatformError {
@@ -65,24 +63,31 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
     #[cfg(target_os = "macos")]
     {
-        // macOS 策略: 先尝试删除 (忽略错误)，再添加。
-        // 1. 尝试删除旧路由 (Ignore errors)
+        // macOS 策略: 先删后加
         let _ = delete_route_impl(network, target, interface_name);
 
-        // 2. 添加新路由
         let mut cmd = Command::new("route");
-        // "-n" 禁止 DNS 解析，加快速度
         cmd.args(["-n", "add"]);
+
+        // [修复关键] 根据 IP 版本选择参数
+        // IPv4 使用 "-net"
+        // IPv6 使用 "-inet6" (防止 "bad address" 错误)
+        match network {
+            IpNet::V4(_) => {
+                cmd.arg("-net");
+            }
+            IpNet::V6(_) => {
+                cmd.arg("-inet6");
+            }
+        }
+
+        cmd.arg(network.to_string());
 
         match target {
             RouteTarget::Gateway(gw) => {
-                cmd.arg("-net");
-                cmd.arg(network.to_string());
                 cmd.arg(gw.to_string());
             }
             RouteTarget::Interface(_) => {
-                cmd.arg("-net");
-                cmd.arg(network.to_string());
                 cmd.arg("-interface");
                 cmd.arg(interface_name);
             }
@@ -94,6 +99,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            // 忽略 "File exists" 错误
             if !stderr.contains("File exists") {
                 return Err(RouteError::AddFailed {
                     destination: network.to_string(),
@@ -116,16 +122,12 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
 }
 
 fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &str) -> Result<()> {
-    // [修复 2] 在这里使用了 target 变量打印日志，消除了 unused variable 警告
-    // 同时也方便我们在所有平台上调试
     debug!("Deleting route: {} via {:?}", network, target);
 
     #[cfg(target_os = "linux")]
     {
         let mut cmd = Command::new("ip");
         cmd.args(["route", "del", &network.to_string()]);
-        // Linux 删除时通常只要目标匹配即可，target 参数在这里虽然不是必须的，
-        // 但我们在上面打印了它，编译器就不会报错了。
         let _ = cmd.output();
     }
 
@@ -134,15 +136,24 @@ fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &st
         let mut cmd = Command::new("route");
         cmd.args(["-n", "delete"]);
 
+        // [修复关键] 删除时同样需要区分参数
+        match network {
+            IpNet::V4(_) => {
+                cmd.arg("-net");
+            }
+            IpNet::V6(_) => {
+                cmd.arg("-inet6");
+            }
+        }
+
+        cmd.arg(network.to_string());
+
         match target {
             RouteTarget::Gateway(gw) => {
-                cmd.arg("-net");
-                cmd.arg(network.to_string());
                 cmd.arg(gw.to_string());
             }
             RouteTarget::Interface(_) => {
-                cmd.arg("-net");
-                cmd.arg(network.to_string());
+                // 删除时不需要指定接口，只要目标匹配即可
             }
         }
         let _ = cmd.output();
@@ -168,7 +179,6 @@ pub fn get_default_gateway() -> Result<IpAddr> {
 fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
     #[cfg(target_os = "linux")]
     {
-        // ip route get 1.1.1.1
         let output = Command::new("ip")
             .args(["route", "get", &target.to_string()])
             .output()
@@ -178,7 +188,6 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            // 格式: 1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.2 ...
             if let Some(via_pos) = stdout.find("via") {
                 let parts: Vec<&str> = stdout[via_pos..].split_whitespace().collect();
                 if parts.len() > 1 {
@@ -187,7 +196,6 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
                     }
                 }
             }
-            // 直连 (没有 via)
             if let Some(dev_pos) = stdout.find("dev") {
                 let parts: Vec<&str> = stdout[dev_pos..].split_whitespace().collect();
                 if parts.len() > 1 {
@@ -199,7 +207,6 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
 
     #[cfg(target_os = "macos")]
     {
-        // route -n get 1.1.1.1
         let output = Command::new("route")
             .args(["-n", "get", &target.to_string()])
             .output()
@@ -217,6 +224,7 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
                         if let Ok(ip) = parts[1].parse::<IpAddr>() {
                             return Ok(RouteTarget::Gateway(ip));
                         }
+                        // 有时 gateway 返回的是 MAC 地址或 link#x，这种情况下需要回退到 interface
                     }
                 }
                 if line.starts_with("interface:") {
