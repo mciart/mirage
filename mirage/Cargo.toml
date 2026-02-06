@@ -67,7 +67,9 @@ windows = { version = "0.52", features = [
 ] }
 wintun-bindings = "0.1"
 
-# [关键修复] 定义 features
+# [关键修复] 定义所有可能的 features
 [features]
 default = []
 jemalloc = ["dep:jemallocator"]
+offload = [] # 这是一个空 feature，通常用于开启某些优化或硬件卸载支持
+debug = []   # 添加一个通用的 debug feature 以防万一
