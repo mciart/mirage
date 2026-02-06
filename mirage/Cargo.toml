@@ -46,7 +46,10 @@ dirs = "5.0"
 # Utils
 parking_lot = "0.12"
 ctrlc = "3.4"
-socket2-ext = "0.1" # Hypothetical if needed, but standard socket2 is usually enough
+socket2-ext = "0.1" 
+
+# Allocator (Optional)
+jemallocator = { version = "0.5", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tun = { version = "0.6", features = ["async"] }
@@ -55,15 +58,16 @@ tun = { version = "0.6", features = ["async"] }
 tun = { version = "0.6", features = ["async"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# 使用 0.52 版本，API 比较稳定
+# Windows API
 windows = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
 ] }
-# WinTun 绑定
 wintun-bindings = "0.1"
-# Windows 下的 tun crate 实现通常依赖 wintun，或者我们自己封装
-# 假设 mirage 使用的是兼容的 tun crate 或自定义实现
-# 如果这里之前有特定依赖，请保持原样。根据之前的上下文，这里只有 wintun-bindings
+
+# [关键修复] 定义 features
+[features]
+default = []
+jemalloc = ["dep:jemallocator"]
