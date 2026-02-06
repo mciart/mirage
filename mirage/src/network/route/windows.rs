@@ -8,11 +8,11 @@ use tracing::{debug, info, warn};
 
 // 引入 Windows API
 use windows::core::{HRESULT, PCWSTR};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, WIN32_ERROR};
+use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToAlias, ConvertInterfaceLuidToIndex,
-    CreateIpForwardEntry2, DeleteIpForwardEntry2, GetBestRoute2, InitializeIpForwardEntry,
-    MIB_IPFORWARD_ROW2,
+    CreateIpForwardEntry2, DeleteIpForwardEntry2, FreeMibTable, GetBestRoute2, GetIpForwardTable2,
+    InitializeIpForwardEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
 };
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, IN6_ADDR, IN_ADDR, SOCKADDR_INET};
@@ -36,7 +36,18 @@ pub fn delete_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &
 }
 
 fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
-    debug!("Adding route: {} via {:?}", network, target);
+    debug!(
+        "Preparing to add route: {} via {:?} on interface '{}'",
+        network, target, interface_name
+    );
+
+    // [强力清理] 先扫描并删除所有冲突的旧路由
+    if let Err(e) = remove_conflicting_routes(network) {
+        warn!(
+            "Failed to clean up potential ghost routes for {}: {}",
+            network, e
+        );
+    }
 
     let mut route_row = MIB_IPFORWARD_ROW2::default();
     unsafe { InitializeIpForwardEntry(&mut route_row) };
@@ -47,19 +58,37 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         RouteTarget::Gateway(gw_ip) => {
             route_row.NextHop = ip_to_sockaddr(*gw_ip);
 
-            match get_best_interface_index_for_gateway(*gw_ip) {
-                Ok(index) => {
+            // [核心修复] 优先级翻转：优先使用指定的接口名 (tun0)，而不是让 Windows 自动推断
+            // 只有当接口名为 "auto" 或者查找失败时，才回退到 get_best_interface_index_for_gateway
+            let mut interface_index_found = false;
+
+            if interface_name != "auto" {
+                if let Ok(index) = get_interface_index_by_name(interface_name) {
+                    debug!("Resolved interface '{}' to index {}", interface_name, index);
                     route_row.InterfaceIndex = index;
-                }
-                Err(e) => {
+                    interface_index_found = true;
+                } else {
                     warn!(
-                        "Failed to resolve interface for gateway {}, trying name '{}': {}",
-                        gw_ip, interface_name, e
+                        "Could not resolve interface name '{}', falling back to gateway lookup",
+                        interface_name
                     );
-                    if let Ok(index) = get_interface_index_by_name(interface_name) {
+                }
+            }
+
+            if !interface_index_found {
+                match get_best_interface_index_for_gateway(*gw_ip) {
+                    Ok(index) => {
+                        debug!("Resolved gateway {} to interface index {}", gw_ip, index);
                         route_row.InterfaceIndex = index;
-                    } else {
-                        return Err(e);
+                    }
+                    Err(e) => {
+                        return Err(RouteError::PlatformError {
+                            message: format!(
+                                "Failed to resolve interface for gateway {}: {}",
+                                gw_ip, e
+                            ),
+                        }
+                        .into());
                     }
                 }
             }
@@ -79,9 +108,12 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
             match get_interface_index_by_name(name_to_resolve) {
                 Ok(index) => route_row.InterfaceIndex = index,
-                Err(_) => {
+                Err(e) => {
                     return Err(RouteError::PlatformError {
-                        message: format!("Interface '{}' not found in system", name_to_resolve),
+                        message: format!(
+                            "Interface '{}' not found in system: {}",
+                            name_to_resolve, e
+                        ),
                     }
                     .into());
                 }
@@ -95,17 +127,14 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     route_row.ValidLifetime = 0xffffffff;
     route_row.PreferredLifetime = 0xffffffff;
 
-    // [关键修改] 先删后加：强制清除残留的旧路由
-    // 我们忽略删除错误（比如路由本来就不存在），目的是确保干净
-    unsafe { DeleteIpForwardEntry2(&route_row) };
-
     let result = unsafe { CreateIpForwardEntry2(&route_row) };
 
     if let Err(e) = result {
-        // 如果删除了还报已存在，那就真的是有问题了
         if e.code() == HRESULT::from_win32(5010) {
-            // ERROR_OBJECT_ALREADY_EXISTS
-            debug!("Route already exists after deletion attempt, skipping.");
+            warn!(
+                "Route {} already exists on interface {}. Skipping.",
+                network, route_row.InterfaceIndex
+            );
             return Ok(());
         }
         return Err(RouteError::AddFailed {
@@ -115,34 +144,48 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         .into());
     }
 
-    info!("Successfully added route {} (Native API)", network);
+    info!(
+        "Successfully added route {} via interface index {} (Native API)",
+        network, route_row.InterfaceIndex
+    );
     Ok(())
 }
 
-fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
-    let mut route_row = MIB_IPFORWARD_ROW2::default();
-    unsafe { InitializeIpForwardEntry(&mut route_row) };
-
-    fill_ip_prefix(network, &mut route_row);
-
-    if let Ok(index) = get_interface_index_by_name(interface_name) {
-        route_row.InterfaceIndex = index;
-    } else if let RouteTarget::Gateway(gw_ip) = target {
-        if let Ok(index) = get_best_interface_index_for_gateway(*gw_ip) {
-            route_row.InterfaceIndex = index;
+fn delete_route(network: &IpNet, _target: &RouteTarget, _interface_name: &str) -> Result<()> {
+    remove_conflicting_routes(network).map_err(|e| {
+        RouteError::PlatformError {
+            message: format!("Delete failed: {}", e),
         }
-    }
+        .into()
+    })
+}
 
-    if let RouteTarget::Gateway(gw_ip) = target {
-        route_row.NextHop = ip_to_sockaddr(*gw_ip);
-    }
+/// 扫描路由表并删除所有匹配特定目标的路由
+fn remove_conflicting_routes(network: &IpNet) -> Result<()> {
+    let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
 
-    let result = unsafe { DeleteIpForwardEntry2(&route_row) };
+    let family = match network {
+        IpNet::V4(_) => AF_INET,
+        IpNet::V6(_) => AF_INET6,
+    };
 
-    if let Err(e) = result {
-        // 2 = ERROR_FILE_NOT_FOUND
-        if e.code() != HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0) {
-            warn!("Failed to delete route {}: {}", network, e);
+    unsafe {
+        if GetIpForwardTable2(family, &mut table).is_ok() && !table.is_null() {
+            let entries =
+                std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
+
+            for entry in entries {
+                let entry_net = sockaddr_to_ipnet(&entry.DestinationPrefix);
+
+                if entry_net == *network {
+                    debug!(
+                        "Found conflicting route: {} on interface {}. Deleting...",
+                        entry_net, entry.InterfaceIndex
+                    );
+                    let _ = DeleteIpForwardEntry2(entry);
+                }
+            }
+            FreeMibTable(table as *const _);
         }
     }
     Ok(())
@@ -157,8 +200,8 @@ pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
         GetBestRoute2(
             None,
             0,
-            None,                   // SourceAddress
-            &dest_addr as *const _, // DestinationAddress
+            None,
+            &dest_addr as *const _,
             0,
             &mut best_route,
             &mut best_src_addr,
@@ -237,6 +280,14 @@ fn sockaddr_to_ip(sockaddr: &SOCKADDR_INET) -> IpAddr {
             _ => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         }
     }
+}
+
+fn sockaddr_to_ipnet(
+    prefix: &windows::Win32::NetworkManagement::IpHelper::IP_ADDRESS_PREFIX,
+) -> IpNet {
+    let ip = sockaddr_to_ip(&prefix.Prefix);
+    let len = prefix.PrefixLength;
+    IpNet::new(ip, len).unwrap_or_else(|_| "0.0.0.0/0".parse().unwrap())
 }
 
 fn get_best_interface_index_for_gateway(gateway: IpAddr) -> Result<u32> {
