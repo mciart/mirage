@@ -12,9 +12,10 @@ use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, WIN32_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToAlias, ConvertInterfaceLuidToIndex,
     CreateIpForwardEntry2, DeleteIpForwardEntry2, GetBestRoute2, InitializeIpForwardEntry,
-    MIB_IPFORWARD_ROW2, NL_ROUTE_PROTOCOL,
+    MIB_IPFORWARD_ROW2,
 };
-use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
+// [修复 1] NL_ROUTE_PROTOCOL 位于 Ndis 模块
+use windows::Win32::NetworkManagement::Ndis::{NET_LUID_LH, NL_ROUTE_PROTOCOL};
 use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, IN6_ADDR, IN_ADDR, SOCKADDR_INET};
 
 use super::RouteTarget;
@@ -94,18 +95,16 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
     // 4. 设置其他参数
     route_row.Metric = 0;
-    // [修复] 使用 NL_ROUTE_PROTOCOL 而不是 MIB_IPFORWARD_PROTO
-    // RouteProtocolNetMgmt = 3 (Static)
+    // [修复 1] 构造 NL_ROUTE_PROTOCOL(3) (Static)
     route_row.Protocol = NL_ROUTE_PROTOCOL(3);
     route_row.ValidLifetime = 0xffffffff;
     route_row.PreferredLifetime = 0xffffffff;
 
-    // 5. 调用 Windows API (返回 Result)
+    // 5. 调用 Windows API
     let result = unsafe { CreateIpForwardEntry2(&route_row) };
 
     if let Err(e) = result {
-        // [修复] 检查错误码是否为 "对象已存在" (5010)
-        // 使用 WIN32_ERROR(5010).0 获取 u32
+        // ERROR_OBJECT_ALREADY_EXISTS = 5010
         if e.code() == HRESULT::from_win32(WIN32_ERROR(5010).0) {
             debug!("Route already exists, skipping.");
             return Ok(());
@@ -142,7 +141,6 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
     let result = unsafe { DeleteIpForwardEntry2(&route_row) };
 
     if let Err(e) = result {
-        // [修复] 忽略 "未找到文件" (Error 2)
         if e.code() != HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0) {
             warn!("Failed to delete route {}: {}", network, e);
         }
@@ -156,13 +154,18 @@ pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
-    // [修复] 使用 std::ptr::null() 和 &addr as *const _ 传递指针
+    // [修复 2] 正确使用 Option<*const T>
+    // InterfaceLuid: None
+    // InterfaceIndex: 0
+    // SourceAddress: None (不需要指定源)
+    // DestinationAddress: Some(&dest_addr) (我们要去哪里)
+    // AddressSortOptions: 0
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
-            std::ptr::null(),       // SourceAddress (Optional)
-            &dest_addr as *const _, // DestinationAddress
+            None,
+            Some(&dest_addr),
             0,
             &mut best_route,
             &mut best_src_addr,
@@ -248,13 +251,13 @@ fn get_best_interface_index_for_gateway(gateway: IpAddr) -> Result<u32> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
-    // [修复] 指针传递
+    // [修复 2] 同上，使用 Option 包装指针
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
-            std::ptr::null(),
-            &dest_addr as *const _,
+            None,
+            Some(&dest_addr),
             0,
             &mut best_route,
             &mut best_src_addr,
