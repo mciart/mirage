@@ -58,18 +58,19 @@ tun = { version = "0.6", features = ["async"] }
 tun = { version = "0.6", features = ["async"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# Windows API
+# [关键修复] Windows API 保持 0.52
 windows = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
 ] }
-wintun-bindings = "0.1"
+# [关键修复] 改为继承 workspace，解决版本冲突
+wintun-bindings = { workspace = true }
 
-# [关键修复] 定义所有可能的 features
+# [关键修复] 补全所有缺失的 features
 [features]
 default = []
 jemalloc = ["dep:jemallocator"]
-offload = [] # 这是一个空 feature，通常用于开启某些优化或硬件卸载支持
-debug = []   # 添加一个通用的 debug feature 以防万一
+offload = [] 
+debug = []
