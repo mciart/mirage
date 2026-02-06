@@ -58,11 +58,11 @@ async fn test_client_isolation(client_config: ClientConfig, server_config: Serve
 
     // [修复] 添加 std::future::Pending<()>
     client_a
-        .start::<ClientAInterface, std::future::Pending<()>>(None)
+        .start::<ClientAInterface, std::future::Pending<()>>(None, None)
         .await
         .unwrap();
     client_b
-        .start::<ClientBInterface, std::future::Pending<()>>(None)
+        .start::<ClientBInterface, std::future::Pending<()>>(None, None)
         .await
         .unwrap();
 

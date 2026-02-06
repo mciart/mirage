@@ -15,59 +15,38 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-/// Command line arguments for the Mirage client daemon.
 #[derive(Parser)]
 #[command(name = "mirage-client-daemon")]
 pub struct Args {
-    /// Name of the client instance
     #[arg(long)]
     pub instance_name: String,
-    /// Path to the configuration file
     #[arg(long)]
     pub config_path: PathBuf,
-    /// Path to the IPC socket to connect to
     #[arg(long)]
     pub socket_path: PathBuf,
-    /// Path to the log file
     #[arg(long)]
     pub log_path: PathBuf,
-    /// Environment variable prefix for configuration
     #[arg(long, default_value = "MIRAGE_")]
     pub env_prefix: String,
-    /// Log level (trace, debug, info, warn, error)
     #[arg(long, default_value = "info")]
     pub log_level: String,
 }
 
-/// Client connection state
 #[derive(Clone, Default)]
 struct ConnectionState {
-    /// When the connection was established
     start_time: Option<Instant>,
-    /// Client's assigned VPN IP
     client_address: Option<ipnet::IpNet>,
-    /// Server's VPN IP  
     server_address: Option<ipnet::IpNet>,
-    /// Whether the client is currently running
     is_running: bool,
 }
 
-/// The Mirage client daemon that manages VPN connections and IPC communication.
-///
-/// This daemon runs with elevated privileges to manage network interfaces and routes.
-/// It communicates with the GUI client through IPC messages and maintains heartbeat
-/// monitoring for connection health.
 struct ClientDaemon {
-    /// Current connection state
     state: Arc<Mutex<ConnectionState>>,
-    /// Unique identifier for this daemon instance
     instance_name: String,
-    /// Broadcast sender for shutdown notifications
     shutdown_tx: broadcast::Sender<()>,
 }
 
 impl ClientDaemon {
-    /// Creates a new ClientDaemon instance.
     fn new(instance_name: String) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
         Self {
@@ -77,8 +56,6 @@ impl ClientDaemon {
         }
     }
 
-    /// Starts the VPN client with the given configuration.
-    /// This is a blocking operation that can be cancelled via the cancel_rx channel.
     async fn start_client_cancellable(
         &self,
         config_path: PathBuf,
@@ -97,16 +74,16 @@ impl ClientDaemon {
         let config = ClientConfig::from_path(&config_path, env_prefix)?;
         let mut client = MirageClient::new(config);
 
-        // Start the client in a separate task so we can listen for cancellation
-        // 1. 创建一个单次通知通道
         let (tx, rx) = oneshot::channel();
         let state_clone = state.clone();
 
-        // 2. 启动客户端任务 (Spawn task)
         let client_task = tokio::spawn(async move {
-            let result = client.start::<TunRsInterface>(Some(tx)).await;
+            // [修复] 传入 None 作为 shutdown_signal, Some(tx) 作为 connection_event_tx
+            // 这里使用 std::future::Pending<()> 显式指定泛型 F
+            let result = client
+                .start::<TunRsInterface, std::future::Pending<()>>(None, Some(tx))
+                .await;
 
-            // Client stopped (or failed)
             let mut state_guard = state_clone.lock().await;
             state_guard.is_running = false;
             state_guard.start_time = None;
@@ -116,24 +93,19 @@ impl ClientDaemon {
             result
         });
 
-        // 3. 等待连接成功信号 或 取消信号
         tokio::select! {
             _ = rx => {
-                // [关键] 收到信号，说明连接成功！
                 info!("Connection established successfully!");
                 let mut state_guard = state.lock().await;
                 state_guard.is_running = true;
                 state_guard.start_time = Some(Instant::now());
-                // Note: client instance moved into task, can't access it here directly to get addresses easily
-                // unless we refactor or share via Arc. For now, basic success signal is enough.
                 Ok(true)
             }
-            // 如果 task 直接结束了（报错或退出），rx 会被 drop，这里处理 task 结果
             task_res = client_task => {
                 match task_res {
                     Ok(Ok(())) => {
                         info!("Client finished normally");
-                        Ok(false) // Not running anymore
+                        Ok(false)
                     }
                     Ok(Err(e)) => {
                         error!("Client failed: {}", e);
@@ -147,13 +119,11 @@ impl ClientDaemon {
             }
             _ = &mut cancel_rx => {
                 info!("Client start cancelled");
-                // TODO: Need a way to abort the spawned task properly if it's running
                 Ok(false)
             }
         }
     }
 
-    /// Stops the running VPN client.
     async fn stop_client(&self) -> Result<()> {
         let mut state_guard = self.state.lock().await;
 
@@ -168,7 +138,6 @@ impl ClientDaemon {
         Ok(())
     }
 
-    /// Gets the current status and metrics of the VPN client.
     async fn get_status(&self) -> ClientStatus {
         let state_guard = self.state.lock().await;
 
@@ -181,8 +150,8 @@ impl ClientDaemon {
             ClientStatus {
                 status: ConnectionStatus::Connected,
                 metrics: Some(ConnectionMetrics {
-                    bytes_sent: 0,     // TODO: Implement packet counting
-                    bytes_received: 0, // TODO: Implement packet counting
+                    bytes_sent: 0,
+                    bytes_received: 0,
                     packets_sent: 0,
                     packets_received: 0,
                     connection_duration,
@@ -198,16 +167,12 @@ impl ClientDaemon {
         }
     }
 
-    /// Connects to the GUI's IPC server and handles communication.
-    /// The daemon first establishes IPC, then waits for StartClient command.
-    /// During VPN connection, it listens for cancellation.
     async fn run_ipc_client(&self, socket_path: &Path, config_path: &Path) -> Result<()> {
         let mut ipc_client = self.connect_to_gui_server(socket_path).await?;
         info!("Connected to GUI IPC server");
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
-        // Main message loop
         loop {
             tokio::select! {
                 _ = shutdown_rx.recv() => {
@@ -239,8 +204,6 @@ impl ClientDaemon {
         Ok(())
     }
 
-    /// Handles a message, with special handling for StartClient to support cancellation.
-    /// Returns true if the daemon should exit.
     async fn handle_message_with_cancel(
         &self,
         message: IpcMessage,
@@ -251,41 +214,31 @@ impl ClientDaemon {
             IpcMessage::StartClient {
                 config_path: cfg_path,
             } => {
-                // Use the config path from the message, or fall back to the one from args
                 let path = if cfg_path.as_os_str().is_empty() {
                     config_path.to_path_buf()
                 } else {
                     cfg_path
                 };
 
-                // Create a cancellation channel
                 let (cancel_tx, cancel_rx) = oneshot::channel();
-
-                // Spawn a task to listen for cancel messages while connecting
                 let cancel_tx = Arc::new(Mutex::new(Some(cancel_tx)));
                 let cancel_tx_clone = cancel_tx.clone();
                 let shutdown_tx = self.shutdown_tx.clone();
 
-                // We need to handle IPC messages while the VPN is connecting
-                // Run the connection with cancellation support
                 let daemon = self.clone();
                 let path_clone = path.clone();
 
-                // Start connecting in a spawned task
                 let mut connect_handle = tokio::spawn(async move {
                     daemon
                         .start_client_cancellable(path_clone, "MIRAGE_", cancel_rx)
                         .await
                 });
 
-                // While connecting, listen for IPC messages
                 loop {
                     tokio::select! {
-                        // Connection completed
                         result = &mut connect_handle => {
                             match result {
                                 Ok(Ok(true)) => {
-                                    // Successfully connected
                                     let status = self.get_status().await;
                                     if let Err(e) = ipc_client.send(&IpcMessage::StatusUpdate(status)).await {
                                         error!("Failed to send status: {}", e);
@@ -293,7 +246,6 @@ impl ClientDaemon {
                                     break Ok(false);
                                 }
                                 Ok(Ok(false)) => {
-                                    // Cancelled
                                     if let Err(e) = ipc_client
                                         .send(&IpcMessage::Error(GuiError::other(
                                             "Connection cancelled",
@@ -302,10 +254,9 @@ impl ClientDaemon {
                                     {
                                         error!("Failed to send cancel response: {}", e);
                                     }
-                                    break Ok(true); // Exit daemon
+                                    break Ok(true);
                                 }
                                 Ok(Err(e)) => {
-                                    // Connection failed
                                     if let Err(send_err) = ipc_client
                                         .send(&IpcMessage::Error(e.into()))
                                         .await
@@ -320,21 +271,17 @@ impl ClientDaemon {
                                 }
                             }
                         }
-                        // IPC message received while connecting
                         msg_result = ipc_client.recv() => {
                             match msg_result {
                                 Ok(IpcMessage::Shutdown) | Ok(IpcMessage::StopClient) => {
                                     info!("Received cancel/shutdown while connecting");
-                                    // Signal cancellation to abort the VPN connection
                                     if let Some(tx) = cancel_tx_clone.lock().await.take() {
                                         let _ = tx.send(());
                                     }
                                     let _ = shutdown_tx.send(());
-                                    // Exit the daemon
                                     break Ok(true);
                                 }
                                 Ok(IpcMessage::GetStatus) => {
-                                    // Send "connecting" status
                                     let status = ClientStatus {
                                         status: ConnectionStatus::Connecting,
                                         metrics: None,
@@ -348,7 +295,6 @@ impl ClientDaemon {
                                 }
                                 Err(e) => {
                                     info!("IPC connection lost while connecting: {}", e);
-                                    // Signal cancellation
                                     if let Some(tx) = cancel_tx_clone.lock().await.take() {
                                         let _ = tx.send(());
                                     }
@@ -383,7 +329,6 @@ impl ClientDaemon {
         }
     }
 
-    /// Connects to the GUI's IPC server with retry logic.
     async fn connect_to_gui_server(&self, socket_path: &Path) -> Result<IpcClient> {
         const MAX_RETRIES: u32 = 30;
         const RETRY_DELAY: Duration = Duration::from_millis(500);
@@ -417,7 +362,6 @@ impl ClientDaemon {
         unreachable!()
     }
 
-    /// Handles a StopClient IPC message.
     async fn handle_stop_client_message(&self) -> IpcMessage {
         match self.stop_client().await {
             Ok(()) => {
@@ -428,7 +372,6 @@ impl ClientDaemon {
         }
     }
 
-    /// Handles a Shutdown IPC message.
     async fn handle_shutdown_message(&self) -> IpcMessage {
         info!("Received shutdown request, stopping client and daemon");
         if let Err(e) = self.stop_client().await {
@@ -453,13 +396,11 @@ impl Clone for ClientDaemon {
     }
 }
 
-/// Main entry point for the Mirage client daemon.
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
     initialize_logging(&args.log_level, &args.log_path);
 
-    // Validate instance name defensively to prevent unsafe IPC names
     use mirage_gui::validation;
     validation::validate_instance_name(&args.instance_name)?;
 
@@ -475,9 +416,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Initializes the logging system for the daemon.
-/// Prefers RUST_LOG environment variable, falls back to log_level argument.
-/// Logs to a file for later retrieval by the GUI.
 fn initialize_logging(log_level: &str, log_path: &Path) {
     use std::fs::OpenOptions;
 
@@ -490,7 +428,6 @@ fn initialize_logging(log_level: &str, log_path: &Path) {
             .with_writer(log_file)
             .init();
     } else {
-        // Fall back to stdout if file creation fails
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_ansi(false)

@@ -15,7 +15,8 @@ use mirage::network::interface::{Interface, InterfaceIO};
 use mirage::network::route::{add_routes, get_gateway_for, ExclusionRouteGuard, RouteTarget};
 use mirage::{MirageError, Result};
 use tokio::net::TcpStream;
-use tokio_boring::SslStream;
+use tokio::sync::oneshot;
+use tokio_boring::SslStream; // [新增]
 
 use ipnet::IpNet;
 use std::future::Future;
@@ -43,7 +44,12 @@ impl MirageClient {
     }
 
     /// Connects to the Mirage server...
-    pub async fn start<I: InterfaceIO, F>(&mut self, shutdown_signal: Option<F>) -> Result<()>
+    /// [修改] 签名变更：接收 shutdown_signal (Future) 和 connection_event_tx (Sender)
+    pub async fn start<I: InterfaceIO, F>(
+        &mut self,
+        shutdown_signal: Option<F>,
+        connection_event_tx: Option<oneshot::Sender<()>>,
+    ) -> Result<()>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -55,7 +61,6 @@ impl MirageClient {
         let mut _route_guard: Option<ExclusionRouteGuard> = None;
         let default_interface_placeholder = "auto";
 
-        // [修复] 移除 .await，因为底层的 windows.rs 是同步的
         if let Ok(target) = get_gateway_for(server_ip) {
             match &target {
                 RouteTarget::Gateway(gw) => {
@@ -65,7 +70,6 @@ impl MirageClient {
                     );
                     let mask = if server_ip.is_ipv4() { 32 } else { 128 };
                     if let Ok(server_net) = IpNet::new(server_ip, mask) {
-                        // [修复] 移除 .await
                         if let Err(e) =
                             add_routes(&[server_net], &target, default_interface_placeholder)
                         {
@@ -90,7 +94,6 @@ impl MirageClient {
                     );
                     let mask = if server_ip.is_ipv4() { 32 } else { 128 };
                     if let Ok(server_net) = IpNet::new(server_ip, mask) {
-                        // [修复] 移除 .await
                         if let Err(e) = add_routes(&[server_net], &target, iface) {
                             warn!(
                                 "Failed to add exclusion route on interface {}: {}",
@@ -157,6 +160,11 @@ impl MirageClient {
             self.config.connection.obfuscation.clone(),
         )?;
 
+        // [恢复] 发送连接成功信号
+        if let Some(tx) = connection_event_tx {
+            let _ = tx.send(());
+        }
+
         if let Some(signal) = shutdown_signal {
             tokio::select! {
                 res = relayer.wait_for_shutdown() => res?,
@@ -180,7 +188,6 @@ impl MirageClient {
     }
 
     async fn connect_to_server(&self) -> Result<(SslStream<TcpStream>, SocketAddr)> {
-        // [新增] 自动添加默认端口 443
         let connection_string = if self.config.connection_string.contains(':') {
             self.config.connection_string.clone()
         } else {

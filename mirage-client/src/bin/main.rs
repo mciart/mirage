@@ -20,7 +20,6 @@ pub struct Args {
 
 #[tokio::main]
 async fn main() {
-    // Enable default tracing to log errors before the configuration is loaded.
     let _logger = tracing::subscriber::set_default(log_subscriber("info"));
 
     match run_client().await {
@@ -32,22 +31,19 @@ async fn main() {
     }
 }
 
-/// Runs the Mirage client.
 async fn run_client() -> Result<()> {
     let args = Args::parse();
     let config = ClientConfig::from_path(&args.config_path, &args.env_prefix)?;
-    // Enable tracing with the log level from the configuration.
     tracing::subscriber::set_global_default(log_subscriber(&config.log.level))?;
 
     let mut client = MirageClient::new(config);
 
-    // [改进] 传入自定义的信号监听器，包含对 Windows 关闭窗口事件的处理
+    // [修改] 传入 shutdown_signal 和 None (connection_event_tx)
     client
-        .start::<TunRsInterface>(Some(shutdown_signal()))
+        .start::<TunRsInterface, _>(Some(shutdown_signal()), None)
         .await
 }
 
-/// 监听多种退出信号：Ctrl+C, 窗口关闭(Windows), 终止信号(Linux/Mac)
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -57,23 +53,18 @@ async fn shutdown_signal() {
 
     #[cfg(windows)]
     {
-        // 监听点击 CMD 窗口 "X" 关闭的事件
         let ctrl_close = async {
             match tokio::signal::windows::ctrl_close() {
                 Ok(mut stream) => stream.recv().await,
                 Err(_) => std::future::pending::<Option<()>>().await,
             }
         };
-
-        // 监听系统注销/关机事件
         let ctrl_shutdown = async {
             match tokio::signal::windows::ctrl_shutdown() {
                 Ok(mut stream) => stream.recv().await,
                 Err(_) => std::future::pending::<Option<()>>().await,
             }
         };
-
-        // 监听 Ctrl+Break
         let ctrl_break = async {
             match tokio::signal::windows::ctrl_break() {
                 Ok(mut stream) => stream.recv().await,

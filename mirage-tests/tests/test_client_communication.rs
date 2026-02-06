@@ -59,11 +59,11 @@ async fn test_client_communication(client_config: ClientConfig, mut server_confi
 
     // [修复] 添加 std::future::Pending<()> 作为泛型 F
     client_a
-        .start::<ClientAInterface, std::future::Pending<()>>(None)
+        .start::<ClientAInterface, std::future::Pending<()>>(None, None)
         .await
         .unwrap();
     client_b
-        .start::<ClientBInterface, std::future::Pending<()>>(None)
+        .start::<ClientBInterface, std::future::Pending<()>>(None, None)
         .await
         .unwrap();
 

@@ -47,7 +47,7 @@ async fn test_end_to_end_communication(client_config: ClientConfig, server_confi
 
     // [修复] 添加 std::future::Pending<()>
     client
-        .start::<ClientInterface, std::future::Pending<()>>(None)
+        .start::<ClientInterface, std::future::Pending<()>>(None, None)
         .await
         .unwrap();
 

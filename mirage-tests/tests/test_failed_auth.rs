@@ -45,7 +45,7 @@ async fn test_failed_auth(mut client_config: ClientConfig, server_config: Server
 
     // [修复] 添加 std::future::Pending<()>
     assert!(client
-        .start::<ClientInterface, std::future::Pending<()>>(None)
+        .start::<ClientInterface, std::future::Pending<()>>(None, None)
         .await
         .is_err());
 
