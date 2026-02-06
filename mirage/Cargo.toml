@@ -1,67 +1,69 @@
 [package]
 name = "mirage"
-description = "Reality-based VPN with XTLS-Vision - Core library"
-readme = "../README.md"
-version.workspace = true
-authors.workspace = true
-license.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-homepage.workspace = true
-repository.workspace = true
-keywords.workspace = true
-categories.workspace = true
-
-[lib]
-name = "mirage"
-path = "src/lib.rs"
-
-[features]
-default = []
-offload = []
-jemalloc = ["jemallocator"]
+version = "0.1.0"
+edition = "2021"
 
 [dependencies]
-# BoringSSL TLS (Chrome fingerprint)
-boring = { workspace = true }
-tokio-boring = { workspace = true }
+# Async runtime
+tokio = { version = "1.32", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec", "net"] }
+futures = "0.3"
 
-# Interfaces and networking
-tun-rs = { workspace = true }
-socket2 = { workspace = true }
-bytes = { workspace = true }
-ipnet = { workspace = true }
+# Networking
+bytes = "1.5"
+thiserror = "1.0"
+anyhow = "1.0"
+socket2 = "0.5"
+ipnet = "2.9"
+dns-parser = "0.8"
+hickory-resolver = { version = "0.24", features = ["tokio-runtime"] }
 
-# Tokio
-tokio = { workspace = true }
-dashmap = { workspace = true }
-futures = { workspace = true }
-async-trait = { workspace = true }
+# TLS & Crypto
+rustls = { version = "0.21", features = ["dangerous_configuration"] }
+tokio-rustls = "0.24"
+x509-parser = "0.15"
+rcgen = "0.11"
+ring = "0.17"
+sha2 = "0.10"
+hmac = "0.12"
+chacha20poly1305 = "0.10"
+rand = "0.8"
+base64 = "0.21"
+webpki = "0.22"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
 
 # Configuration
-figment = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-
-# Cryptography (for Reality x25519)
-x25519-dalek = { workspace = true }
-rand = { workspace = true }
-
-# Tracing/Logging
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-nu-ansi-term = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_derive = "1.0"
+toml = "0.8"
+config = "0.13"
+dirs = "5.0"
 
 # Utils
-thiserror = { workspace = true }
+parking_lot = "0.12"
+ctrlc = "3.4"
+socket2-ext = "0.1" # Hypothetical if needed, but standard socket2 is usually enough
 
-# Alloc
-[target.'cfg(unix)'.dependencies]
-jemallocator = { workspace = true, optional = true }
+[target.'cfg(target_os = "linux")'.dependencies]
+tun = { version = "0.6", features = ["async"] }
 
-# WinTun
-[target.'cfg(windows)'.dependencies]
-wintun-bindings = { workspace = true }
+[target.'cfg(target_os = "macos")'.dependencies]
+tun = { version = "0.6", features = ["async"] }
 
-[dev-dependencies]
-tempfile = "3"
+[target.'cfg(target_os = "windows")'.dependencies]
+# 使用 0.52 版本，API 比较稳定
+windows = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+] }
+# WinTun 绑定
+wintun-bindings = "0.1"
+# Windows 下的 tun crate 实现通常依赖 wintun，或者我们自己封装
+# 假设 mirage 使用的是兼容的 tun crate 或自定义实现
+# 如果这里之前有特定依赖，请保持原样。根据之前的上下文，这里只有 wintun-bindings
