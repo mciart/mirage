@@ -3,7 +3,7 @@ use crate::Result;
 use ipnet::IpNet;
 use std::net::IpAddr;
 use std::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::RouteTarget;
 
@@ -33,11 +33,12 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     {
         // Linux 策略: 使用 'replace' 原子操作
         let mut cmd = Command::new("ip");
-        cmd.args(["route", "replace", &network.to_string()]);
+        // [修复] 使用链式 arg 调用，避免数组类型不匹配 (Error 49)
+        cmd.arg("route").arg("replace").arg(network.to_string());
 
         match target {
             RouteTarget::Gateway(gw) => {
-                cmd.args(["via", &gw.to_string()]);
+                cmd.arg("via").arg(gw.to_string());
             }
             RouteTarget::Interface(_) => {
                 // 直连路由不需要 via
@@ -45,7 +46,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         }
 
         // 强制绑定接口
-        cmd.args(["dev", interface_name]);
+        cmd.arg("dev").arg(interface_name);
 
         let output = cmd.output().map_err(|e| RouteError::PlatformError {
             message: format!("Failed to execute ip route: {}", e),
@@ -120,12 +121,15 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
 }
 
 fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &str) -> Result<()> {
+    // 使用 target 打印日志，消除 "unused variable" 警告
     debug!("Deleting route: {} via {:?}", network, target);
 
     #[cfg(target_os = "linux")]
     {
         let mut cmd = Command::new("ip");
-        cmd.args(["route", "del", &network.to_string()]);
+        // [修复] 链式调用
+        cmd.arg("route").arg("del").arg(network.to_string());
+
         let _ = cmd.output();
     }
 
@@ -214,30 +218,32 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
 
-            // 如果解析失败，我们需要记录日志以便调试
             let mut found_gateway = false;
             let mut found_interface = false;
 
             for line in stdout.lines() {
                 let line = line.trim();
 
-                // 优先查找 gateway
                 if line.starts_with("gateway:") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() > 1 {
-                        // [修复关键点] 去除 IPv6 的 Scope ID (例如 fe80::1%en0 -> fe80::1)
+                        // [关键修复] 去除 IPv6 的 Scope ID (例如 fe80::1%en0 -> fe80::1)
+                        // 否则 parse::<IpAddr> 会失败
                         let ip_str = parts[1].split('%').next().unwrap_or(parts[1]);
 
                         if let Ok(ip) = ip_str.parse::<IpAddr>() {
                             return Ok(RouteTarget::Gateway(ip));
                         } else {
-                            warn!("Found gateway string '{}' but failed to parse as IP. Continuing search.", parts[1]);
+                            // 使用全名 tracing::warn! 避免 unused import
+                            tracing::warn!(
+                                "Found gateway string '{}' but failed to parse as IP.",
+                                parts[1]
+                            );
                         }
                     }
                     found_gateway = true;
                 }
 
-                // 如果 gateway 解析失败（或者没有 gateway），查找 interface 作为直连回退
                 if line.starts_with("interface:") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() > 1 {
@@ -248,14 +254,14 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
             }
 
             if !found_gateway && !found_interface {
-                warn!(
-                    "Command 'route -n get' output did not contain gateway or interface info:\n{}",
+                tracing::warn!(
+                    "Command 'route -n get' output did not contain gateway info:\n{}",
                     stdout
                 );
             }
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("Command 'route -n get {}' failed: {}", target, stderr);
+            tracing::warn!("Command 'route -n get {}' failed: {}", target, stderr);
         }
     }
 
