@@ -4,15 +4,15 @@ use ipnet::IpNet;
 use std::ffi::OsStr;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::windows::ffi::OsStrExt;
-use tracing::{debug, error, info, warn}; // 引入 error
+use tracing::{debug, info, warn};
 
 // 引入 Windows API
 use windows::core::{HRESULT, PCWSTR};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, NO_ERROR, WIN32_ERROR};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, WIN32_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToAlias, ConvertInterfaceLuidToIndex,
     CreateIpForwardEntry2, DeleteIpForwardEntry2, GetBestRoute2, InitializeIpForwardEntry,
-    MIB_IPFORWARD_ROW2, NL_ROUTE_PROTOCOL,
+    MIB_IPFORWARD_ROW2,
 };
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, IN6_ADDR, IN_ADDR, SOCKADDR_INET};
@@ -36,24 +36,24 @@ pub fn delete_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &
 }
 
 fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
-    debug!("Preparing to add route: {} via {:?}", network, target);
+    debug!("Adding route: {} via {:?}", network, target);
 
-    // 1. 初始化路由行结构
     let mut route_row = MIB_IPFORWARD_ROW2::default();
     unsafe { InitializeIpForwardEntry(&mut route_row) };
 
-    // 2. 设置目标网络
     fill_ip_prefix(network, &mut route_row);
 
-    // 3. 设置下一跳和接口
     match target {
         RouteTarget::Gateway(gw_ip) => {
             route_row.NextHop = ip_to_sockaddr(*gw_ip);
+
             match get_best_interface_index_for_gateway(*gw_ip) {
-                Ok(index) => route_row.InterfaceIndex = index,
+                Ok(index) => {
+                    route_row.InterfaceIndex = index;
+                }
                 Err(e) => {
                     warn!(
-                        "Gateway lookup failed for {}, trying interface name '{}': {}",
+                        "Failed to resolve interface for gateway {}, trying name '{}': {}",
                         gw_ip, interface_name, e
                     );
                     if let Ok(index) = get_interface_index_by_name(interface_name) {
@@ -69,42 +69,41 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
                 IpNet::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
                 IpNet::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
             });
+
             let name_to_resolve =
                 if !iface_name_override.is_empty() && iface_name_override != "auto" {
                     iface_name_override
                 } else {
                     interface_name
                 };
+
             match get_interface_index_by_name(name_to_resolve) {
                 Ok(index) => route_row.InterfaceIndex = index,
-                Err(e) => return Err(e),
+                Err(_) => {
+                    return Err(RouteError::PlatformError {
+                        message: format!("Interface '{}' not found in system", name_to_resolve),
+                    }
+                    .into());
+                }
             }
         }
     }
 
-    // 4. 设置参数
     route_row.Metric = 0;
-    // Protocol = 3 (MIB_IPPROTO_NETMGMT / Static)
+    // 使用 transmute 强行赋值，无需导入 NL_ROUTE_PROTOCOL 类型
+    // 3 = MIB_IPPROTO_NETMGMT
     route_row.Protocol = unsafe { std::mem::transmute(3i32) };
     route_row.ValidLifetime = 0xffffffff;
     route_row.PreferredLifetime = 0xffffffff;
 
-    // [策略优化] 先删后加 (Force Update)
-    // 无论路由是否存在，先尝试删除它。这样可以清除任何错误的残留配置。
-    unsafe { DeleteIpForwardEntry2(&route_row) };
-
-    // 5. 添加路由
     let result = unsafe { CreateIpForwardEntry2(&route_row) };
 
     if let Err(e) = result {
-        // 如果依然报 "对象已存在" (5010)，那说明删除失败了且添加也冲突，记录 WARN
-        if e.code() == HRESULT::from_win32(5010) {
-            warn!("Route {} already exists (Delete failed?), skipping. Traffic might not route correctly.", network);
+        // 5010 = ERROR_OBJECT_ALREADY_EXISTS
+        if e.code() == HRESULT::from_win32(WIN32_ERROR(5010).0) {
+            debug!("Route already exists, skipping.");
             return Ok(());
         }
-
-        // 记录详细错误
-        error!("Failed to add route {}: {}", network, e);
         return Err(RouteError::AddFailed {
             destination: network.to_string(),
             message: format!("CreateIpForwardEntry2 failed: {}", e),
@@ -144,18 +143,18 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
     Ok(())
 }
 
-/// [原生] 获取去往特定 IP 的路由目标
 pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
     let dest_addr = ip_to_sockaddr(target);
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
+    // [修正] 直接传递指针，不使用 Option
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
-            None,
-            &dest_addr as *const _,
+            std::ptr::null(),       // SourceAddress: NULL
+            &dest_addr as *const _, // DestinationAddress: Ptr
             0,
             &mut best_route,
             &mut best_src_addr,
@@ -241,11 +240,12 @@ fn get_best_interface_index_for_gateway(gateway: IpAddr) -> Result<u32> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
+    // [修正] 直接传递指针
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
-            None,
+            std::ptr::null(),
             &dest_addr as *const _,
             0,
             &mut best_route,
