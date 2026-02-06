@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 
 // 引入 Windows API
 use windows::core::{HRESULT, PCWSTR};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, WIN32_ERROR};
+use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToAlias, ConvertInterfaceLuidToIndex,
     CreateIpForwardEntry2, DeleteIpForwardEntry2, GetBestRoute2, InitializeIpForwardEntry,
@@ -136,7 +136,7 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
 
     if let Err(e) = result {
         // 2 = ERROR_FILE_NOT_FOUND
-        if e.code() != HRESULT::from_win32(2) {
+        if e.code() != HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0) {
             warn!("Failed to delete route {}: {}", network, e);
         }
     }
@@ -148,13 +148,13 @@ pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
-    // [修正] 使用 Some() 包裹裸指针
+    // [修正] DestinationAddress 直接传指针，不使用 Option
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
-            None,                         // SourceAddress
-            Some(&dest_addr as *const _), // DestinationAddress
+            None,                   // SourceAddress
+            &dest_addr as *const _, // DestinationAddress (Required)
             0,
             &mut best_route,
             &mut best_src_addr,
@@ -240,13 +240,13 @@ fn get_best_interface_index_for_gateway(gateway: IpAddr) -> Result<u32> {
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
-    // [修正] 使用 Some() 包裹裸指针
+    // [修正] 直接传指针
     let result = unsafe {
         GetBestRoute2(
             None,
             0,
             None,
-            Some(&dest_addr as *const _),
+            &dest_addr as *const _,
             0,
             &mut best_route,
             &mut best_src_addr,
