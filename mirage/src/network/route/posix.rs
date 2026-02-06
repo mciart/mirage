@@ -3,7 +3,7 @@ use crate::Result;
 use ipnet::IpNet;
 use std::net::IpAddr;
 use std::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::RouteTarget;
 
@@ -69,9 +69,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         let mut cmd = Command::new("route");
         cmd.args(["-n", "add"]);
 
-        // [修复关键] 根据 IP 版本选择参数
-        // IPv4 使用 "-net"
-        // IPv6 使用 "-inet6" (防止 "bad address" 错误)
+        // 根据 IP 版本选择参数
         match network {
             IpNet::V4(_) => {
                 cmd.arg("-net");
@@ -136,7 +134,6 @@ fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &st
         let mut cmd = Command::new("route");
         cmd.args(["-n", "delete"]);
 
-        // [修复关键] 删除时同样需要区分参数
         match network {
             IpNet::V4(_) => {
                 cmd.arg("-net");
@@ -153,7 +150,7 @@ fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &st
                 cmd.arg(gw.to_string());
             }
             RouteTarget::Interface(_) => {
-                // 删除时不需要指定接口，只要目标匹配即可
+                // 删除时不需要指定接口
             }
         }
         let _ = cmd.output();
@@ -216,24 +213,49 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
+
+            // 如果解析失败，我们需要记录日志以便调试
+            let mut found_gateway = false;
+            let mut found_interface = false;
+
             for line in stdout.lines() {
                 let line = line.trim();
+
+                // 优先查找 gateway
                 if line.starts_with("gateway:") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() > 1 {
-                        if let Ok(ip) = parts[1].parse::<IpAddr>() {
+                        // [修复关键点] 去除 IPv6 的 Scope ID (例如 fe80::1%en0 -> fe80::1)
+                        let ip_str = parts[1].split('%').next().unwrap_or(parts[1]);
+
+                        if let Ok(ip) = ip_str.parse::<IpAddr>() {
                             return Ok(RouteTarget::Gateway(ip));
+                        } else {
+                            warn!("Found gateway string '{}' but failed to parse as IP. Continuing search.", parts[1]);
                         }
-                        // 有时 gateway 返回的是 MAC 地址或 link#x，这种情况下需要回退到 interface
                     }
+                    found_gateway = true;
                 }
+
+                // 如果 gateway 解析失败（或者没有 gateway），查找 interface 作为直连回退
                 if line.starts_with("interface:") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() > 1 {
                         return Ok(RouteTarget::Interface(parts[1].to_string()));
                     }
+                    found_interface = true;
                 }
             }
+
+            if !found_gateway && !found_interface {
+                warn!(
+                    "Command 'route -n get' output did not contain gateway or interface info:\n{}",
+                    stdout
+                );
+            }
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!("Command 'route -n get {}' failed: {}", target, stderr);
         }
     }
 
