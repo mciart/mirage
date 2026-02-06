@@ -7,11 +7,6 @@ use std::net::IpAddr;
 use super::RouteTarget;
 
 /// Adds a list of routes to the routing table.
-///
-/// ### Arguments
-/// - `networks` - the networks to be routed through the gateway
-/// - `target` - the gateway or interface to be used for the routes
-/// - `interface_name` - the name of the interface to add the routes to
 pub fn add_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &str) -> Result<()> {
     for network in networks {
         add_route(network, target, interface_name)?;
@@ -30,8 +25,13 @@ pub fn delete_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &
 fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
     let network_str = network.to_string();
 
-    // For delete, we might not need gateway if network+interface matches?
-    // match target to gateway string just in case
+    // [修复] 动态选择 netsh 上下文
+    let ip_context = if network.addr().is_ipv4() {
+        "ip"
+    } else {
+        "ipv6"
+    };
+
     let gateway_str = match target {
         RouteTarget::Gateway(ip) => ip.to_string(),
         RouteTarget::Interface(_) => if network.addr().is_ipv6() {
@@ -44,7 +44,7 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
 
     let route_args = vec![
         "interface",
-        "ip",
+        ip_context, // 使用动态上下文
         "delete",
         "route",
         &network_str,
@@ -62,7 +62,6 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
             message: format!("failed to wait for command: {e}"),
         })?;
 
-    // We often ignore errors on delete (if route doesn't exist)
     if !output.status.success() {
         // let stderr = String::from_utf8_lossy(&output.stderr);
         // Maybe log warning but don't fail hard?
@@ -75,31 +74,26 @@ fn delete_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> 
 fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
     let network_str = network.to_string();
 
-    // Windows netsh expects gateway IP. If target is interface, what do we do?
-    // netsh interface ip add route <prefix> <interface> <gateway>
-    // If gateway is direct/on-link, we usually use 0.0.0.0 or exclude it?
-    // Actually `netsh` allows skipping gateway or using `nexthop=...`
-    // For now, if it's Interface target, we assume it's the SAME interface as `interface_name`?
-    // Wait, the `target` IS the nexthop.
+    // [修复] 动态选择 netsh 上下文
+    let ip_context = if network.addr().is_ipv4() {
+        "ip"
+    } else {
+        "ipv6"
+    };
 
     let gateway_str = match target {
         RouteTarget::Gateway(ip) => ip.to_string(),
-        RouteTarget::Interface(_) => {
-            // If target is interface, we might just use 0.0.0.0 (on-link) or skip it?
-            // "If the destination is on the local subnet, the gateway is 0.0.0.0"
-            // Let's assume on-link for interface route.
-            if network.addr().is_ipv6() {
-                "::"
-            } else {
-                "0.0.0.0"
-            }
-            .to_string()
+        RouteTarget::Interface(_) => if network.addr().is_ipv6() {
+            "::"
+        } else {
+            "0.0.0.0"
         }
+        .to_string(),
     };
 
     let route_args = vec![
         "interface",
-        "ip",
+        ip_context, // 使用动态上下文
         "add",
         "route",
         &network_str,
@@ -107,10 +101,8 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         &gateway_str,
         "store=active",
     ];
-    // ... rest of implementation
 
     let output = run_command("netsh", &route_args)
-        // ... (preserving error handling)
         .map_err(|e| RouteError::PlatformError {
             message: format!("failed to execute command: {e}"),
         })?
@@ -133,6 +125,8 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
 /// Retrieves the gateway address for a specific destination IP.
 pub fn get_gateway_for(_target: IpAddr) -> Result<RouteTarget> {
+    // Windows 上自动获取网关比较复杂，暂时返回未实现
+    // 客户端代码已处理了这种情况 (Warning: Could not detect gateway...)
     Err(RouteError::PlatformError {
         message: "Automatic gateway detection not supported on Windows yet".to_string(),
     }
