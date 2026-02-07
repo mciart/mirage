@@ -18,8 +18,9 @@ pub const PACKET_BUFFER_SIZE: usize = 32;
 /// Packet channel size used for communication between the TUN interface and TCP/TLS tunnels.
 pub const PACKET_CHANNEL_SIZE: usize = 1024 * 1024;
 
-/// Frame header size for length-prefixed protocol (4 bytes length + 1 byte type).
-pub const FRAME_HEADER_SIZE: usize = 5;
+/// Maximum frame header size for variable-length protocol (1-3 bytes).
+/// Old fixed format was 5 bytes; new compact format uses 1-3 bytes.
+pub const FRAME_HEADER_MAX_SIZE: usize = 3;
 
 /// Maximum frame size for a single IP packet (MTU 1500 + some buffer).
 pub const MAX_FRAME_SIZE: usize = 2048;

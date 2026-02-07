@@ -3,36 +3,97 @@
 //! This module provides a `FramedStream` that wraps any AsyncRead/AsyncWrite
 //! stream and provides packet-level read/write operations using length-prefixed
 //! framing. This replaces QUIC datagrams for our TCP/TLS transport.
+//!
+//! ## Compact Frame Format (v2)
+//!
+//! Uses variable-length encoding for minimal overhead:
+//!
+//! | Length Range | Header Size | Format |
+//! |--------------|-------------|--------|
+//! | 0-63 bytes   | 1 byte      | `[TT LL LLLL]` (2 type + 6 length) |
+//! | 64-16383     | 2 bytes     | `[01 TT LLLL] [LLLL LLLL]` |
+//! | 16384+       | 3 bytes     | `[10 TT LLLL] [LLLL LLLL] [LLLL LLLL]` |
 
-use crate::constants::{FRAME_HEADER_SIZE, MAX_FRAME_SIZE};
+use crate::constants::MAX_FRAME_SIZE;
 use crate::error::{NetworkError, Result};
 use bytes::{BufMut, BytesMut};
 use rand::RngCore;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+/// Frame type: Data packet
 const FRAME_TYPE_DATA: u8 = 0x00;
+/// Frame type: Padding (for traffic shaping)
 const FRAME_TYPE_PADDING: u8 = 0x01;
 
-/// Reads and parses a single frame from an async reader.
-///
-/// This function handles the common frame parsing logic:
-/// - Reads the 5-byte header (4-byte length + 1-byte type)
-/// - Validates frame size against MAX_FRAME_SIZE
-/// - Reads the frame payload into the provided buffer
-/// - Returns the frame type byte for caller to handle
-///
-/// # Arguments
-/// * `reader` - Any type implementing AsyncRead + Unpin
-/// * `buffer` - BytesMut buffer to read the frame payload into
-///
-/// # Returns
-/// The frame type byte on success
-async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R, buffer: &mut BytesMut) -> Result<u8> {
-    let mut header = [0u8; FRAME_HEADER_SIZE];
-    reader.read_exact(&mut header).await?;
+/// Encodes a compact frame header using variable-length encoding.
+/// Returns (header bytes, header length).
+#[inline]
+fn encode_compact_header(len: usize, frame_type: u8) -> ([u8; 3], usize) {
+    let ft = frame_type & 0x03; // 2 bits for type
+    if len <= 0x3F {
+        // 1-byte header: [TT LLLLLL] - 2 type bits + 6 length bits
+        ([(ft << 6) | (len as u8), 0, 0], 1)
+    } else if len <= 0x3FFF {
+        // 2-byte header: [01 TT LLLL] [LLLLLLLL] - marker 01 + 2 type + 12 length
+        let b0 = 0x40 | (ft << 4) | ((len >> 8) as u8 & 0x0F);
+        let b1 = len as u8;
+        ([b0, b1, 0], 2)
+    } else {
+        // 3-byte header: [10 TT LLLL] [LLLLLLLL] [LLLLLLLL] - marker 10 + 2 type + 20 length
+        let b0 = 0x80 | (ft << 4) | ((len >> 16) as u8 & 0x0F);
+        let b1 = (len >> 8) as u8;
+        let b2 = len as u8;
+        ([b0, b1, b2], 3)
+    }
+}
 
-    let len = u32::from_be_bytes(header[0..4].try_into().unwrap()) as usize;
-    let type_byte = header[4];
+/// Reads and decodes a compact frame header from an async reader.
+/// Returns (frame_type, payload_length).
+async fn read_compact_header<R: AsyncRead + Unpin>(reader: &mut R) -> Result<(u8, usize)> {
+    let mut first = [0u8; 1];
+    reader.read_exact(&mut first).await?;
+    let b0 = first[0];
+
+    // Check header size marker (top 2 bits)
+    let marker = b0 >> 6;
+
+    match marker {
+        0b00 | 0b01 if marker == 0b00 => {
+            // 1-byte header: top 2 bits are type, bottom 6 bits are length
+            let frame_type = (b0 >> 6) & 0x03;
+            let len = (b0 & 0x3F) as usize;
+            Ok((frame_type, len))
+        }
+        0b01 => {
+            // 2-byte header
+            let mut second = [0u8; 1];
+            reader.read_exact(&mut second).await?;
+            let frame_type = (b0 >> 4) & 0x03;
+            let len = (((b0 & 0x0F) as usize) << 8) | (second[0] as usize);
+            Ok((frame_type, len))
+        }
+        0b10 => {
+            // 3-byte header
+            let mut rest = [0u8; 2];
+            reader.read_exact(&mut rest).await?;
+            let frame_type = (b0 >> 4) & 0x03;
+            let len =
+                (((b0 & 0x0F) as usize) << 16) | ((rest[0] as usize) << 8) | (rest[1] as usize);
+            Ok((frame_type, len))
+        }
+        _ => {
+            // 0b11 is reserved for future use
+            Err(NetworkError::PacketError {
+                reason: "Invalid frame header marker (0b11 reserved)".to_string(),
+            }
+            .into())
+        }
+    }
+}
+
+/// Reads a complete frame from an async reader using compact header format.
+async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R, buffer: &mut BytesMut) -> Result<u8> {
+    let (frame_type, len) = read_compact_header(reader).await?;
 
     if len > MAX_FRAME_SIZE {
         return Err(NetworkError::PacketError {
@@ -53,7 +114,7 @@ async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R, buffer: &mut BytesMut)
         }
     }
 
-    Ok(type_byte)
+    Ok(frame_type)
 }
 
 /// A framed stream that provides packet-level operations over a byte stream.
@@ -86,13 +147,10 @@ where
             .into());
         }
 
-        let len = packet.len() as u32;
-        let mut header = [0u8; FRAME_HEADER_SIZE];
-        header[0..4].copy_from_slice(&len.to_be_bytes());
-        header[4] = FRAME_TYPE_DATA;
+        let (header, header_len) = encode_compact_header(packet.len(), FRAME_TYPE_DATA);
 
         // Simple implementation for duplex stream (mostly used in tests)
-        self.stream.write_all(&header).await?;
+        self.stream.write_all(&header[..header_len]).await?;
         self.stream.write_all(packet).await?;
         self.stream.flush().await?;
 
@@ -100,12 +158,9 @@ where
     }
 
     pub async fn send_padding(&mut self, len: usize) -> Result<()> {
-        let len_u32 = len as u32;
-        let mut header = [0u8; FRAME_HEADER_SIZE];
-        header[0..4].copy_from_slice(&len_u32.to_be_bytes());
-        header[4] = FRAME_TYPE_PADDING;
+        let (header, header_len) = encode_compact_header(len, FRAME_TYPE_PADDING);
 
-        self.stream.write_all(&header).await?;
+        self.stream.write_all(&header[..header_len]).await?;
         let mut padding = vec![0u8; len];
         rand::thread_rng().fill_bytes(&mut padding);
         self.stream.write_all(&padding).await?;
@@ -217,11 +272,11 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
             self.flush_internal(false).await?;
         }
 
-        let len = packet.len() as u32;
+        // Use compact header for minimal overhead
+        let (header, header_len) = encode_compact_header(packet.len(), FRAME_TYPE_DATA);
 
         // 1. Write Header to Buffer (Memory Op)
-        self.write_buffer.put_u32(len);
-        self.write_buffer.put_u8(FRAME_TYPE_DATA);
+        self.write_buffer.put_slice(&header[..header_len]);
 
         // 2. Write Payload to Buffer (Memory Op)
         self.write_buffer.put_slice(packet);
@@ -243,12 +298,9 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
             .into());
         }
 
-        let len_u32 = len as u32;
-        let mut header = [0u8; FRAME_HEADER_SIZE];
-        header[0..4].copy_from_slice(&len_u32.to_be_bytes());
-        header[4] = FRAME_TYPE_PADDING;
+        let (header, header_len) = encode_compact_header(len, FRAME_TYPE_PADDING);
 
-        self.writer.write_all(&header).await?;
+        self.writer.write_all(&header[..header_len]).await?;
 
         self.padding_buffer.clear();
         self.padding_buffer.resize(len, 0);

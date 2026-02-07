@@ -110,7 +110,7 @@ pub struct ClientAuthenticationConfig {
 /// TCP/TLS connection configuration
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ConnectionConfig {
-    /// The MTU to use for connections and the TUN interface (default = 1420)
+    /// The MTU for the TUN interface (default = 1280, IPv6 minimum, reduces TCP-over-TCP issues)
     #[serde(default = "default_mtu")]
     pub mtu: u16,
     /// The time after which a connection is considered timed out in seconds (default = 30)
@@ -328,7 +328,9 @@ fn default_buffer_size() -> u64 {
 }
 
 fn default_mtu() -> u16 {
-    1420
+    // 1280 = IPv6 minimum MTU, universally supported
+    // Lower MTU reduces IP fragmentation and TCP-over-TCP congestion conflicts
+    1280
 }
 
 fn default_timeout_s() -> u64 {
