@@ -83,9 +83,8 @@ impl ClientRelayer {
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
-        // Removed BufReader/BufWriter wrappers to avoid double buffering and latency
-        let framed_reader =
-            mirage::transport::framed::FramedReader::new(tokio::io::BufReader::new(reader));
+        // FramedReader has internal buffering, no need for BufReader
+        let framed_reader = mirage::transport::framed::FramedReader::new(reader);
         let framed_writer = mirage::transport::framed::FramedWriter::new(writer);
 
         let mut tasks = FuturesUnordered::new();

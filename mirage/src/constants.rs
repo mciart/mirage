@@ -11,8 +11,9 @@ pub const TLS_MTU_OVERHEAD: u16 = 50;
 /// Buffer size for authentication messages.
 pub const AUTH_MESSAGE_BUFFER_SIZE: usize = 1024;
 
-/// Packet buffer size for operations on the TUN interface.
-pub const PACKET_BUFFER_SIZE: usize = 4;
+/// Packet buffer size for batch operations on the TUN interface.
+/// Larger values improve throughput but may increase latency.
+pub const PACKET_BUFFER_SIZE: usize = 32;
 
 /// Packet channel size used for communication between the TUN interface and TCP/TLS tunnels.
 pub const PACKET_CHANNEL_SIZE: usize = 1024 * 1024;

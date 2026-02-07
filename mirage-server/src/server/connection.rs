@@ -40,8 +40,8 @@ where
         client_address.addr()
     );
 
-    // Removed BufReader/BufWriter wrappers to avoid double buffering
-    let framed_reader = FramedReader::new(tokio::io::BufReader::new(reader));
+    // FramedReader has internal buffering, no need for BufReader
+    let framed_reader = FramedReader::new(reader);
     let mut framed_writer = FramedWriter::new(writer);
 
     let mut tasks = FuturesUnordered::new();
