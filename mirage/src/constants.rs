@@ -22,8 +22,9 @@ pub const PACKET_CHANNEL_SIZE: usize = 1024 * 1024;
 /// Old fixed format was 5 bytes; new compact format uses 1-3 bytes.
 pub const FRAME_HEADER_MAX_SIZE: usize = 3;
 
-/// Maximum frame size for a single IP packet (MTU 1500 + some buffer).
-pub const MAX_FRAME_SIZE: usize = 2048;
+/// Maximum frame size for a single frame.
+/// Must support GRO/GSO offloaded packets which can be up to 64KB.
+pub const MAX_FRAME_SIZE: usize = 65535;
 
 /// Represents the supported TLS ALPN protocols for Mirage.
 pub static TLS_ALPN_PROTOCOLS: LazyLock<Vec<Vec<u8>>> = LazyLock::new(|| {
