@@ -25,70 +25,25 @@ const FRAME_TYPE_DATA: u8 = 0x00;
 /// Frame type: Padding (for traffic shaping)
 const FRAME_TYPE_PADDING: u8 = 0x01;
 
-/// Encodes a compact frame header using variable-length encoding.
-/// Returns (header bytes, header length).
+/// Encodes a compact frame header.
+/// Format: [1 byte type] [2 bytes length BE]
+/// Total: 3 bytes (down from 5 bytes in old format)
 #[inline]
 fn encode_compact_header(len: usize, frame_type: u8) -> ([u8; 3], usize) {
-    let ft = frame_type & 0x03; // 2 bits for type
-    if len <= 0x3F {
-        // 1-byte header: [TT LLLLLL] - 2 type bits + 6 length bits
-        ([(ft << 6) | (len as u8), 0, 0], 1)
-    } else if len <= 0x3FFF {
-        // 2-byte header: [01 TT LLLL] [LLLLLLLL] - marker 01 + 2 type + 12 length
-        let b0 = 0x40 | (ft << 4) | ((len >> 8) as u8 & 0x0F);
-        let b1 = len as u8;
-        ([b0, b1, 0], 2)
-    } else {
-        // 3-byte header: [10 TT LLLL] [LLLLLLLL] [LLLLLLLL] - marker 10 + 2 type + 20 length
-        let b0 = 0x80 | (ft << 4) | ((len >> 16) as u8 & 0x0F);
-        let b1 = (len >> 8) as u8;
-        let b2 = len as u8;
-        ([b0, b1, b2], 3)
-    }
+    let len_bytes = (len as u16).to_be_bytes();
+    ([frame_type, len_bytes[0], len_bytes[1]], 3)
 }
 
 /// Reads and decodes a compact frame header from an async reader.
 /// Returns (frame_type, payload_length).
 async fn read_compact_header<R: AsyncRead + Unpin>(reader: &mut R) -> Result<(u8, usize)> {
-    let mut first = [0u8; 1];
-    reader.read_exact(&mut first).await?;
-    let b0 = first[0];
+    let mut header = [0u8; 3];
+    reader.read_exact(&mut header).await?;
 
-    // Check header size marker (top 2 bits)
-    let marker = b0 >> 6;
+    let frame_type = header[0];
+    let len = u16::from_be_bytes([header[1], header[2]]) as usize;
 
-    match marker {
-        0b00 | 0b01 if marker == 0b00 => {
-            // 1-byte header: top 2 bits are type, bottom 6 bits are length
-            let frame_type = (b0 >> 6) & 0x03;
-            let len = (b0 & 0x3F) as usize;
-            Ok((frame_type, len))
-        }
-        0b01 => {
-            // 2-byte header
-            let mut second = [0u8; 1];
-            reader.read_exact(&mut second).await?;
-            let frame_type = (b0 >> 4) & 0x03;
-            let len = (((b0 & 0x0F) as usize) << 8) | (second[0] as usize);
-            Ok((frame_type, len))
-        }
-        0b10 => {
-            // 3-byte header
-            let mut rest = [0u8; 2];
-            reader.read_exact(&mut rest).await?;
-            let frame_type = (b0 >> 4) & 0x03;
-            let len =
-                (((b0 & 0x0F) as usize) << 16) | ((rest[0] as usize) << 8) | (rest[1] as usize);
-            Ok((frame_type, len))
-        }
-        _ => {
-            // 0b11 is reserved for future use
-            Err(NetworkError::PacketError {
-                reason: "Invalid frame header marker (0b11 reserved)".to_string(),
-            }
-            .into())
-        }
-    }
+    Ok((frame_type, len))
 }
 
 /// Reads a complete frame from an async reader using compact header format.
