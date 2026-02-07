@@ -231,7 +231,6 @@ impl MirageServer {
     }
 
     /// Handles a single client connection: auth + packet relay.
-    /// Handles a single client connection: auth + packet relay.
     async fn handle_client<S>(
         stream: SslStream<S>,
         remote_addr: SocketAddr,

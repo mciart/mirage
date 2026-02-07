@@ -6,7 +6,7 @@
 mod relayer;
 
 use crate::auth::AuthClient;
-use crate::users_file_auth::UsersFileClientAuthenticator;
+use mirage::auth::users_file::UsersFileClientAuthenticator;
 
 use boring::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use mirage::config::ClientConfig;
@@ -126,28 +126,27 @@ impl MirageClient {
             Duration::from_secs(self.config.connection.connection_timeout_s),
         );
 
-        let (client_address, client_address_v6, server_address, server_address_v6, reader, writer) =
-            auth_client.authenticate(read_half, write_half).await?;
+        let session = auth_client.authenticate(read_half, write_half).await?;
 
         info!("Successfully authenticated");
-        info!("Received client address: {client_address} (v4)");
-        if let Some(v6) = client_address_v6 {
+        info!("Received client address: {} (v4)", session.client_address);
+        if let Some(v6) = session.client_address_v6 {
             info!("Received client address: {v6} (v6)");
         }
-        info!("Received server address: {server_address} (v4)");
-        if let Some(v6) = server_address_v6 {
+        info!("Received server address: {} (v4)", session.server_address);
+        if let Some(v6) = session.server_address_v6 {
             info!("Received server address: {v6} (v6)");
         }
 
-        self.client_address = Some(client_address);
-        self.server_address = Some(server_address);
+        self.client_address = Some(session.client_address);
+        self.server_address = Some(session.server_address);
 
         let interface: Interface<I> = Interface::create(
-            client_address,
-            client_address_v6,
+            session.client_address,
+            session.client_address_v6,
             self.config.connection.mtu,
-            Some(server_address.addr()),
-            server_address_v6.map(|n| n.addr()),
+            Some(session.server_address.addr()),
+            session.server_address_v6.map(|n| n.addr()),
             self.config.network.interface_name.clone(),
             Some(self.config.network.routes.clone()),
             Some(self.config.network.dns_servers.clone()),
@@ -155,8 +154,8 @@ impl MirageClient {
 
         let relayer = ClientRelayer::start(
             interface,
-            reader,
-            writer,
+            session.reader,
+            session.writer,
             self.config.connection.obfuscation.clone(),
         )?;
 

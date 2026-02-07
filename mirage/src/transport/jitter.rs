@@ -1,7 +1,7 @@
 use crate::config::ObfuscationConfig;
 use crate::network::packet::Packet;
 use crate::transport::framed::FramedWriter;
-use rand::Rng; // [新增] 提到顶部引入
+use rand::Rng;
 use std::collections::VecDeque;
 use std::marker::Unpin;
 use std::time::Duration;
@@ -46,8 +46,8 @@ where
         // Track the previous packet's target time to ensure monotonic order
         let mut last_target_time = Instant::now();
 
-        // [新增] 心跳计时器初始化：10s - 30s 随机间隔
-        // 只有当这么长时间没有真实数据包发送时，才会触发心跳
+        // Initialize heartbeat timer with random 10-30 second interval.
+        // Only triggers when no real data packets have been sent for this duration.
         let mut next_heartbeat =
             Instant::now() + Duration::from_secs(rand::thread_rng().gen_range(10..=30));
 
@@ -60,7 +60,7 @@ where
                 None
             };
 
-            // [新增] 心跳的 Future
+            // Heartbeat future
             let heartbeat_future = tokio::time::sleep_until(next_heartbeat);
 
             tokio::select! {
@@ -68,8 +68,8 @@ where
                 res = rx.recv() => {
                     match res {
                         Some(packet) => {
-                            // [新增] 活跃检测：收到真实数据，重置心跳计时器
-                            // 避免在全速下载/上传时插入多余的心跳包
+                            // Activity detection: received real data, reset heartbeat timer.
+                            // Avoids inserting unnecessary heartbeats during high-speed transfers.
                             next_heartbeat = Instant::now() + Duration::from_secs(rand::thread_rng().gen_range(10..=30));
 
                             // Calculate Jitter
@@ -125,28 +125,28 @@ where
                              break;
                         }
 
-                        // [核心修改] 流量整形 (Traffic Shaping)
-                        // 使用加权分布替代均匀随机，模拟真实 HTTPS 特征
+                        // Traffic shaping using weighted distribution instead of uniform random,
+                        // simulating real HTTPS traffic characteristics.
                         if config.enabled && config.padding_probability > 0.0 && rand::thread_rng().gen_bool(config.padding_probability) {
-                             // 生成 0-99 的随机数来决定包的大小类型
+                             // Generate random 0-99 to determine packet size type
                              let profile = rand::thread_rng().gen_range(0..100);
 
                              let raw_len = if profile < 60 {
-                                 // 60% 概率：模拟 "控制帧/ACK" (40-100 Bytes)
-                                 // 像 TLS Alerts, HTTP/2 WindowUpdates
+                                 // 60% probability: simulate "control frames/ACK" (40-100 bytes)
+                                 // Like TLS Alerts, HTTP/2 WindowUpdates
                                  rand::thread_rng().gen_range(40..=100)
                              } else if profile < 90 {
-                                 // 30% 概率：模拟 "Headers/元数据" (250-600 Bytes)
-                                 // 像 HTTP Headers, TLS Handshake fragments
+                                 // 30% probability: simulate "headers/metadata" (250-600 bytes)
+                                 // Like HTTP Headers, TLS Handshake fragments
                                  rand::thread_rng().gen_range(250..=600)
                              } else {
-                                 // 10% 概率：模拟 "数据切片" (800-1200 Bytes)
-                                 // 像图片加载的数据块
+                                 // 10% probability: simulate "data chunks" (800-1200 bytes)
+                                 // Like image loading data blocks
                                  rand::thread_rng().gen_range(800..=1200)
                              };
 
-                             // 仍然遵守配置的最大值限制以防 MTU 溢出，
-                             // 但我们允许它小于 config.padding_min (因为小包才更像真实的 ACK)
+                             // Still respect config max value to prevent MTU overflow,
+                             // but allow smaller than config.padding_min (small packets look more like real ACKs)
                              let final_len = raw_len.min(config.padding_max).max(1);
 
                              if let Err(e) = writer.send_padding(final_len).await {
@@ -156,17 +156,17 @@ where
                     }
                 }
 
-                // [新增] 3. 空闲心跳 (Idle Heartbeat)
-                // 当长时间没有数据交互时触发，模拟长连接保活
+                // 3. Idle Heartbeat
+                // Triggers when there's no data exchange for a long time, simulating long connection keep-alive
                 _ = heartbeat_future => {
-                    // 发送一个 40-80 字节的小包，伪装成 TCP ACK 或 Keep-Alive
+                    // Send a small 40-80 byte packet, disguised as TCP ACK or Keep-Alive
                     let pad_len = rand::thread_rng().gen_range(40..80);
 
                     if let Err(e) = writer.send_padding(pad_len).await {
                         warn!("Failed to send heartbeat padding: {}", e);
                     }
 
-                    // 重新安排下一次心跳
+                    // Schedule next heartbeat
                     next_heartbeat = Instant::now() + Duration::from_secs(rand::thread_rng().gen_range(10..=30));
                 }
             }

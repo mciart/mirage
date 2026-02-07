@@ -17,6 +17,23 @@ use mirage::{
     Result,
 };
 
+/// Result of a successful authentication, containing network configuration
+/// and the reclaimed stream halves for packet relay.
+pub struct AuthenticatedSession<R, W> {
+    /// Client's assigned IPv4 address
+    pub client_address: IpNet,
+    /// Client's assigned IPv6 address (if dual-stack is enabled)
+    pub client_address_v6: Option<IpNet>,
+    /// Server's IPv4 address for routing
+    pub server_address: IpNet,
+    /// Server's IPv6 address for routing (if dual-stack is enabled)
+    pub server_address_v6: Option<IpNet>,
+    /// Read half of the authenticated stream
+    pub reader: R,
+    /// Write half of the authenticated stream
+    pub writer: W,
+}
+
 /// Represents an authentication client handling initial authentication and session management.
 pub struct AuthClient {
     authenticator: Box<dyn ClientAuthenticator>,
@@ -39,7 +56,7 @@ impl AuthClient {
     /// * `writer` - The write half of the TLS stream
     ///
     /// # Returns
-    /// A tuple containing the client and server IP addresses
+    /// An `AuthenticatedSession` containing network configuration and stream halves
     ///
     /// # Errors
     /// Returns `AuthError` variants for authentication failures:
@@ -50,7 +67,7 @@ impl AuthClient {
         &self,
         reader: R,
         writer: W,
-    ) -> Result<(IpNet, Option<IpNet>, IpNet, Option<IpNet>, R, W)>
+    ) -> Result<AuthenticatedSession<R, W>>
     where
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
@@ -78,14 +95,14 @@ impl AuthClient {
                 client_address_v6,
                 server_address,
                 server_address_v6,
-            } => Ok((
+            } => Ok(AuthenticatedSession {
                 client_address,
                 client_address_v6,
                 server_address,
                 server_address_v6,
                 reader,
                 writer,
-            )),
+            }),
             AuthMessage::Failed => Err(AuthError::InvalidCredentials)?,
             _ => Err(AuthError::InvalidPayload)?,
         }

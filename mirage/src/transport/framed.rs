@@ -13,6 +13,49 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 const FRAME_TYPE_DATA: u8 = 0x00;
 const FRAME_TYPE_PADDING: u8 = 0x01;
 
+/// Reads and parses a single frame from an async reader.
+///
+/// This function handles the common frame parsing logic:
+/// - Reads the 5-byte header (4-byte length + 1-byte type)
+/// - Validates frame size against MAX_FRAME_SIZE
+/// - Reads the frame payload into the provided buffer
+/// - Returns the frame type byte for caller to handle
+///
+/// # Arguments
+/// * `reader` - Any type implementing AsyncRead + Unpin
+/// * `buffer` - BytesMut buffer to read the frame payload into
+///
+/// # Returns
+/// The frame type byte on success
+async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R, buffer: &mut BytesMut) -> Result<u8> {
+    let mut header = [0u8; FRAME_HEADER_SIZE];
+    reader.read_exact(&mut header).await?;
+
+    let len = u32::from_be_bytes(header[0..4].try_into().unwrap()) as usize;
+    let type_byte = header[4];
+
+    if len > MAX_FRAME_SIZE {
+        return Err(NetworkError::PacketError {
+            reason: format!("Frame too large: {} bytes (max: {})", len, MAX_FRAME_SIZE),
+        }
+        .into());
+    }
+
+    buffer.clear();
+    buffer.reserve(len);
+
+    // Use take() to limit reads to exactly `len` bytes
+    let mut taker = reader.take(len as u64);
+    while buffer.len() < len {
+        let n = taker.read_buf(buffer).await?;
+        if n == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+        }
+    }
+
+    Ok(type_byte)
+}
+
 /// A framed stream that provides packet-level operations over a byte stream.
 pub struct FramedStream<S> {
     stream: S,
@@ -70,25 +113,10 @@ where
         Ok(())
     }
 
+    /// Receives a data packet from the stream, skipping padding frames.
     pub async fn recv_packet(&mut self) -> Result<BytesMut> {
         loop {
-            let mut header = [0u8; FRAME_HEADER_SIZE];
-            self.stream.read_exact(&mut header).await?;
-
-            let len = u32::from_be_bytes(header[0..4].try_into().unwrap()) as usize;
-            let type_byte = header[4];
-
-            if len > MAX_FRAME_SIZE {
-                return Err(NetworkError::PacketError {
-                    reason: format!("Frame too large: {} bytes (max: {})", len, MAX_FRAME_SIZE),
-                }
-                .into());
-            }
-
-            self.read_buffer.clear();
-            self.read_buffer.resize(len, 0);
-            self.stream.read_exact(&mut self.read_buffer).await?;
-
+            let type_byte = read_frame(&mut self.stream, &mut self.read_buffer).await?;
             match type_byte {
                 FRAME_TYPE_DATA => return Ok(self.read_buffer.split()),
                 FRAME_TYPE_PADDING => continue,
@@ -134,33 +162,10 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
         }
     }
 
+    /// Receives a data packet from the reader, skipping padding frames.
     pub async fn recv_packet(&mut self) -> Result<BytesMut> {
         loop {
-            let mut header = [0u8; FRAME_HEADER_SIZE];
-            self.reader.read_exact(&mut header).await?;
-
-            let len = u32::from_be_bytes(header[0..4].try_into().unwrap()) as usize;
-            let type_byte = header[4];
-
-            if len > MAX_FRAME_SIZE {
-                return Err(NetworkError::PacketError {
-                    reason: format!("Frame too large: {} bytes", len),
-                }
-                .into());
-            }
-
-            self.read_buffer.clear();
-            self.read_buffer.reserve(len);
-
-            use tokio::io::AsyncReadExt;
-            let mut taker = (&mut self.reader).take(len as u64);
-            while self.read_buffer.len() < len {
-                let n = taker.read_buf(&mut self.read_buffer).await?;
-                if n == 0 {
-                    return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
-                }
-            }
-
+            let type_byte = read_frame(&mut self.reader, &mut self.read_buffer).await?;
             match type_byte {
                 FRAME_TYPE_DATA => return Ok(self.read_buffer.split()),
                 FRAME_TYPE_PADDING => continue,

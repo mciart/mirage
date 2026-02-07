@@ -9,13 +9,12 @@ use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use ipnet::IpNet;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::server::address_pool::AddressPool;
 use mirage::{
-    auth::{ClientAuthenticator, ServerAuthenticator},
-    config::{ClientAuthenticationConfig, ServerAuthenticationConfig},
+    auth::{users_file::UsersFilePayload, ServerAuthenticator},
+    config::ServerAuthenticationConfig,
     error::AuthError,
     Result,
 };
@@ -25,17 +24,7 @@ pub struct UsersFileServerAuthenticator {
     address_pool: Arc<AddressPool>,
 }
 
-pub struct UsersFileClientAuthenticator {
-    username: String,
-    password: String,
-}
-
-/// Authentication payload for users file authentication method
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UsersFilePayload {
-    username: String,
-    password: String,
-}
+// UsersFilePayload and UsersFileClientAuthenticator are now in mirage::auth::users_file
 
 /// Represents a user database for authentication
 pub struct UserDatabase {
@@ -73,19 +62,6 @@ impl UsersFileServerAuthenticator {
     }
 }
 
-impl UsersFileClientAuthenticator {
-    /// Creates a new users file client authenticator
-    ///
-    /// # Arguments
-    /// * `config` - Client authentication configuration containing credentials
-    pub fn new(config: &ClientAuthenticationConfig) -> Self {
-        Self {
-            username: config.username.clone(),
-            password: config.password.clone(),
-        }
-    }
-}
-
 #[async_trait]
 impl ServerAuthenticator for UsersFileServerAuthenticator {
     async fn authenticate_user(
@@ -96,7 +72,7 @@ impl ServerAuthenticator for UsersFileServerAuthenticator {
             .map_err(|_| AuthError::InvalidPayload)?;
 
         self.user_database
-            .authenticate(&payload.username, payload.password)
+            .authenticate(&payload.username, payload.password.clone())
             .await?;
 
         let (client_address_v4, client_address_v6) = self.address_pool.next_available_address();
@@ -104,18 +80,6 @@ impl ServerAuthenticator for UsersFileServerAuthenticator {
         let client_address_v4 = client_address_v4.ok_or(AuthError::StoreUnavailable)?;
 
         Ok((payload.username, client_address_v4, client_address_v6))
-    }
-}
-
-#[async_trait]
-impl ClientAuthenticator for UsersFileClientAuthenticator {
-    async fn generate_payload(&self) -> Result<Value> {
-        let payload = UsersFilePayload {
-            username: self.username.clone(),
-            password: self.password.clone(),
-        };
-
-        Ok(serde_json::to_value(payload).map_err(|_| AuthError::InvalidPayload)?)
     }
 }
 

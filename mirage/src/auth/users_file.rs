@@ -1,26 +1,42 @@
+//! Users file based authentication for the Mirage VPN system.
+//!
+//! This module provides authentication structures for the users file
+//! authentication method, shared between client and server.
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use mirage::{
-    auth::ClientAuthenticator, config::ClientAuthenticationConfig, error::AuthError, Result,
+use crate::{
+    auth::ClientAuthenticator,
+    config::ClientAuthenticationConfig,
+    error::AuthError,
+    Result,
 };
 
-/// Authentication payload for users file authentication method
+/// Authentication payload for users file authentication method.
+///
+/// This structure is used to transmit credentials from the client
+/// to the server during the authentication handshake.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UsersFilePayload {
-    username: String,
-    password: String,
+    /// The username for authentication
+    pub username: String,
+    /// The plaintext password (transmitted over TLS)
+    pub password: String,
 }
 
-/// Client authenticator for users file based authentication
+/// Client authenticator for users file based authentication.
+///
+/// Generates authentication payloads containing username and password
+/// credentials for transmission to the server.
 pub struct UsersFileClientAuthenticator {
     username: String,
     password: String,
 }
 
 impl UsersFileClientAuthenticator {
-    /// Creates a new users file client authenticator
+    /// Creates a new users file client authenticator.
     ///
     /// # Arguments
     /// * `config` - Client authentication configuration containing credentials

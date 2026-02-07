@@ -1,4 +1,5 @@
 pub mod stream;
+pub mod users_file;
 
 use async_trait::async_trait;
 use ipnet::IpNet;
