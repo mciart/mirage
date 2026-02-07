@@ -8,10 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    auth::ClientAuthenticator,
-    config::ClientAuthenticationConfig,
-    error::AuthError,
-    Result,
+    auth::ClientAuthenticator, config::ClientAuthenticationConfig, error::AuthError, Result,
 };
 
 /// Authentication payload for users file authentication method.
