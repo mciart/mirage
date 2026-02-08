@@ -80,16 +80,10 @@ pub async fn run_quic_listener(
     let mut server_config = QuicServerConfig::with_crypto(Arc::new(server_crypto));
 
     // Tuning
-    let mut transport = quinn::TransportConfig::default();
-    transport.max_idle_timeout(Some(
-        quinn::IdleTimeout::try_from(std::time::Duration::from_secs(
-            config.connection.connection_timeout_s,
-        ))
-        .unwrap(),
-    ));
-    transport.keep_alive_interval(Some(std::time::Duration::from_secs(
+    let transport = mirage::transport::quic::common_transport_config(
         config.connection.keep_alive_interval_s,
-    )));
+        config.connection.connection_timeout_s,
+    );
     server_config.transport_config(Arc::new(transport));
 
     let endpoint = Endpoint::server(server_config, bind_addr)
@@ -117,60 +111,46 @@ pub async fn run_quic_listener(
             let remote_addr = connection.remote_address();
             debug!("QUIC connection established from {}", remote_addr);
 
-            // Accept bidirectional stream
-            match connection.accept_bi().await {
-                Ok((send, recv)) => {
-                    let stream = QuicStream::new(send, recv);
+            // Accept bidirectional streams in a loop (Multiplexing)
+            loop {
+                match connection.accept_bi().await {
+                    Ok((send, recv)) => {
+                        let stream = QuicStream::new(send, recv);
+                        
+                        // Clone handles for the stream task
+                        let auth_server = auth_server.clone();
+                        let ingress_queue = ingress_queue.clone();
+                        let connection_queues = connection_queues.clone();
+                        let session_queues = session_queues.clone();
+                        let address_pool = address_pool.clone();
+                        let obfuscation = obfuscation.clone();
+                        let remote_addr = remote_addr;
 
-                    // We can reuse the existing handle_client logic if we can adapt QuicStream to AsyncRead+AsyncWrite
-                    // However, handle_client expects SslStream<S> which implies TCP.
-                    // But wait, handle_client signature is:
-                    // async fn handle_client<S>(stream: SslStream<S>, ...)
-                    // It expects a tokio_boring::SslStream.
-
-                    // Since QUIC already provides encryption, we don't need SslStream wrapper.
-                    // We need a version of handle_client that works with generic AsyncRead+AsyncWrite.
-                    // The authentication logic inside handle_client assumes a stream.
-
-                    // We need to refactor handle_client in mod.rs to accept generic stream,
-                    // or duplicate the logic here.
-                    // Given the complexity of handle_client, refactoring is better.
-                    // But handle_client splits the stream. QuicStream is splittable?
-                    // QuicStream implements AsyncRead/AsyncWrite. tokio::io::split works on it.
-
-                    // Let's copy the logic for now to avoid massive refactor of mod.rs in this step,
-                    // or better, extract the core logic.
-
-                    // Oh, handle_client takes SslStream because it needs to access TLS info?
-                    // No, usually just for read/write.
-
-                    // Let's verify `handle_client` in `mod.rs`.
-                    // It takes `SslStream<S>`. `SslStream` derefs to `Ssl` which allows accessing alpn etc if needed.
-                    // But `handle_client` doesn't seem to use TLS info explicitly, mostly just auth_server.
-
-                    // IMPORTANT: The `AuthServer` needs to read/write.
-
-                    match handle_quic_client(
-                        stream,
-                        remote_addr,
-                        auth_server,
-                        ingress_queue,
-                        connection_queues,
-                        session_queues,
-                        address_pool,
-                        obfuscation,
-                    )
-                    .await
-                    {
-                        Ok(_) => debug!("QUIC client disconnected: {}", remote_addr),
-                        Err(e) => warn!("QUIC client error {}: {}", remote_addr, e),
+                        tokio::spawn(async move {
+                             match handle_quic_client(
+                                stream,
+                                remote_addr,
+                                auth_server,
+                                ingress_queue,
+                                connection_queues,
+                                session_queues,
+                                address_pool,
+                                obfuscation,
+                            )
+                            .await
+                            {
+                                Ok(_) => debug!("QUIC stream finished: {}", remote_addr),
+                                Err(e) => warn!("QUIC stream error {}: {}", remote_addr, e),
+                            }
+                        });
                     }
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to accept bidirectional stream from {}: {}",
-                        remote_addr, e
-                    );
+                    Err(e) => {
+                        warn!(
+                            "Connection closed or failed to accept stream from {}: {}",
+                            remote_addr, e
+                        );
+                        break;
+                    }
                 }
             }
         });

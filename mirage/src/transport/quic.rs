@@ -56,6 +56,49 @@ impl AsyncWrite for QuicStream {
 unsafe impl Send for QuicStream {}
 unsafe impl Sync for QuicStream {}
 
+/// Creates a high-performance QUIC transport configuration
+/// Tunes window sizes and usage BBR congestion control to mimic Hysteria 2's performance characteristics.
+pub fn common_transport_config(
+    keep_alive_interval_s: u64,
+    idle_timeout_s: u64,
+) -> quinn::TransportConfig {
+    let mut transport = quinn::TransportConfig::default();
+
+    // 1. Use BBR Congestion Control (High throughput, handles packet loss better than Cubic)
+    // This is similar to what Hysteria/Tuic use (or their custom variants)
+    transport.congestion_controller_factory(std::sync::Arc::new(quinn::congestion::BbrConfig::default()));
+
+    // 2. Increase Window Sizes (Critical for high speed on high RTT links)
+    // Default is usually too small (e.g., 1MB).
+    // Hysteria 2 often uses very aggressive windows.
+    // Stream receive window: 20MB
+    let stream_rw = 20 * 1024 * 1024; 
+    transport.stream_receive_window(u32::try_from(stream_rw).unwrap().into());
+    
+    // Connection receive window: 40MB (aggregate of all streams)
+    let conn_rw = 40 * 1024 * 1024;
+    transport.receive_window(u32::try_from(conn_rw).unwrap().into());
+
+    // 3. Send Window
+    transport.send_window(u64::try_from(conn_rw).unwrap());
+
+    // 4. Keep-alive, timeout, and datagrams
+    transport.keep_alive_interval(Some(std::time::Duration::from_secs(keep_alive_interval_s)));
+    transport.max_idle_timeout(Some(
+        quinn::IdleTimeout::try_from(std::time::Duration::from_secs(idle_timeout_s)).unwrap(),
+    ));
+
+    // 5. Allow some datagrams (future proofing)
+    transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
+
+    // 6. Multiplexing Concurrency Limits (Crucial for Connection Reuse)
+    // Hysteria 2 typically uses high limits to avoid blocking stream creation.
+    transport.max_concurrent_bidi_streams(10_000u32.into());
+    transport.max_concurrent_uni_streams(10_000u32.into());
+
+    transport
+}
+
 /// Helper to configure QUIC client
 pub fn configure_client() -> Result<quinn::ClientConfig> {
     // We'll use a dummy certificate verifier for now since we handle
@@ -78,12 +121,9 @@ pub fn configure_client() -> Result<quinn::ClientConfig> {
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap(),
     ));
 
-    // Performance tuning
-    let mut transport = quinn::TransportConfig::default();
-    transport.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
-    transport.max_idle_timeout(Some(
-        quinn::IdleTimeout::try_from(std::time::Duration::from_secs(30)).unwrap(),
-    ));
+    // Apply high-performance transport config
+    // Default keep-alive: 25s, Timeout: 30s (can be overridden by caller)
+    let transport = common_transport_config(25, 30);
     client_config.transport_config(std::sync::Arc::new(transport));
 
     Ok(client_config)
