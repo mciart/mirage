@@ -85,7 +85,7 @@ impl MirageClient {
 
         // Connect to server via TCP/TLS (Primary Connection)
         // We pass the specific address to connect to Avoid re-resolving
-        let (tls_stream, remote_addr): (TransportStream, SocketAddr) =
+        let (tls_stream, remote_addr, protocol): (TransportStream, SocketAddr, String) =
             self.connect_to_specific_address(primary_addr).await?;
 
         // Anti-Loop: Add exclusion route for the server IP via the gateway used to reach it
@@ -195,7 +195,14 @@ impl MirageClient {
         let primary_writer = session.writer;
         let session_id = session.session_id;
 
-        let relayer = if self.config.connection.parallel_connections > 1 {
+        // Determine parallel connection count based on protocol
+        let target_parallel_connections = if protocol == "quic" {
+            self.config.connection.quic_parallel_connections
+        } else {
+            self.config.connection.parallel_connections
+        };
+
+        let relayer = if target_parallel_connections > 1 {
             // --- Parallel Connections Logic ---
             use crate::client::connection_pool::ConnectionPool;
 
@@ -236,7 +243,7 @@ impl MirageClient {
             connections.push((primary_reader, primary_writer));
 
             // Establish additional connections
-            let num_parallel = self.config.connection.parallel_connections as usize;
+            let num_parallel = target_parallel_connections as usize;
             for i in 1..num_parallel {
                 // Round-robin selection of address
                 let target_addr = pool_addrs[i % pool_addrs.len()];
@@ -249,7 +256,7 @@ impl MirageClient {
                 );
 
                 match self.connect_to_specific_address(target_addr).await {
-                    Ok((stream, _)) => {
+                    Ok((stream, _, _)) => {
                         // Authenticate secondary connection
                         let (r, w) = tokio::io::split(stream);
                         let secondary_auth = AuthClient::new(
@@ -372,7 +379,7 @@ impl MirageClient {
     async fn connect_to_specific_address(
         &mut self,
         server_addr: SocketAddr,
-    ) -> Result<(TransportStream, SocketAddr)> {
+    ) -> Result<(TransportStream, SocketAddr, String)> {
         let connection_string = if self.config.connection_string.contains(':') {
             self.config.connection_string.clone()
         } else {
@@ -408,7 +415,7 @@ impl MirageClient {
                         "Successfully connected to {} using protocol: {}",
                         server_addr, protocol
                     );
-                    return Ok((stream, server_addr));
+                    return Ok((stream, server_addr, protocol.to_string()));
                 }
                 Err(e) => {
                     warn!(
@@ -623,7 +630,12 @@ impl MirageClient {
                 endpoint
             };
 
-            let host = connection_string.split(':').next().unwrap_or("localhost");
+            let host = if let Some(sni) = &self.config.connection.sni {
+                debug!("Using configured SNI for QUIC: {}", sni);
+                sni.as_str()
+            } else {
+                connection_string.split(':').next().unwrap_or("localhost")
+            };
 
             info!("Connecting via QUIC to {} (SNI: {})", server_addr, host);
 
@@ -748,8 +760,15 @@ impl MirageClient {
             sni.clone()
         } else {
             // Standard TCP/TLS
-            let host = connection_string.split(':').next().unwrap_or("");
-            debug!("Using SNI (Standard): {}", host);
+            let host = if let Some(sni) = &self.config.connection.sni {
+                debug!("Using configured SNI: {}", sni);
+                sni.as_str()
+            } else {
+                let h = connection_string.split(':').next().unwrap_or("");
+                debug!("Using SNI (derived from connection string): {}", h);
+                h
+            };
+
             connector_builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
             host.to_string()
         };

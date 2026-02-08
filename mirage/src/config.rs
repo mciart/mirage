@@ -146,6 +146,9 @@ pub struct ConnectionConfig {
     /// This helps avoid UDP blocking or throttling by refreshing the 5-tuple
     #[serde(default = "default_zero_fn")]
     pub port_hopping_interval_s: u64,
+    /// Custom SNI to use for TLS/QUIC connections (overrides host from connection string)
+    /// Useful when connecting to an IP address directly
+    pub sni: Option<String>,
     /// Enable IPv4/IPv6 Dual Stack Aggregation (default = false)
     /// If true, will attempt to use both protocols for parallel connections
     #[serde(default = "default_false_fn")]
@@ -154,6 +157,10 @@ pub struct ConnectionConfig {
     /// Higher values increase throughput but use more resources
     #[serde(default = "default_parallel_connections")]
     pub parallel_connections: u8,
+    /// Number of parallel QUIC connections (1-4, default = 1)
+    /// QUIC supports native multiplexing, so 1 is usually enough, but more can help with QoS
+    #[serde(default = "default_parallel_connections")]
+    pub quic_parallel_connections: u8,
     /// Enable connection warmup (pre-establish standby connections)
     /// Reduces latency when switching connections
     #[serde(default = "default_false_fn")]
@@ -310,8 +317,10 @@ impl Default for ConnectionConfig {
             insecure: default_false_fn(),
             enabled_protocols: default_enabled_protocols(),
             port_hopping_interval_s: default_zero_fn(),
+            sni: None,
             dual_stack_enabled: default_false_fn(),
             parallel_connections: default_parallel_connections(),
+            quic_parallel_connections: default_parallel_connections(),
             warmup_connections: default_false_fn(),
             obfuscation: ObfuscationConfig::default(),
         }

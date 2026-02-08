@@ -21,6 +21,12 @@ mtu = 1280
 tcp_nodelay = true
 # 连接超时时间（秒）
 connection_timeout_s = 30
+
+# 自定义 SNI (Server Name Indication)
+# 如果指定，将使用此域名进行 TLS/QUIC 握手，而不是 connection_string 中的地址
+# 这允许你直接连接到 IP (如 CDN 节点) 但伪装成正确的域名
+# sni = "www.example.com"
+
 # 开启的协议优先顺序 (支持: "reality", "tcp-tls", "quic")
 # 客户端将按照列表顺序尝试连接
 enabled_protocols = ["reality", "tcp-tls", "quic"]
@@ -30,12 +36,20 @@ keep_alive_interval_s = 25
 # 当使用 QUIC 时，每隔指定秒数 (如 30) 自动轮换 UDP 端口
 # 可有效对抗 ISP 对长 UDP 连接的阻断 (QoS)
 port_hopping_interval_s = 30
+
 # 并行 TCP 连接数 (1-4, 默认: 1)
 # 多连接可提高带宽聚合，但占用更多资源
-parallel_connections = 1
+parallel_connections = 2
+
+# 并行 QUIC 连接数 (1-4, 默认: 1)
+# QUIC 原生支持多路复用，通常不需要太多连接，但在高丢包环境下多连接可抗 QoS
+# 比如要同时IPv4和IPv6连接，可以配置quic_parallel_connections = 2
+# 如果超过2会使用解析的IP进行多连接
+quic_parallel_connections = 1
+
 # IPv4/IPv6 双栈并发聚合 (默认: false)
 # 开启后将同时使用 IPv4 和 IPv6 连接，并在它们之间进行负载均衡
-dual_stack_enabled = true
+dual_stack_enabled = false
 # 连接预热 (默认: false)
 # 启用后在启动时预建立备用连接，减少切换延迟
 warmup_connections = false
