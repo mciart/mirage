@@ -28,6 +28,8 @@ pub struct AuthenticatedSession<R, W> {
     pub server_address: IpNet,
     /// Server's IPv6 address for routing (if dual-stack is enabled)
     pub server_address_v6: Option<IpNet>,
+    /// Session ID for connection pooling
+    pub session_id: [u8; 8],
     /// Read half of the authenticated stream
     pub reader: R,
     /// Write half of the authenticated stream
@@ -79,6 +81,7 @@ impl AuthClient {
             .send_message_timeout(
                 AuthMessage::Authenticate {
                     payload: authentication_payload,
+                    session_id: None, // Primary connection, no existing session
                 },
                 self.auth_timeout,
             )
@@ -95,11 +98,13 @@ impl AuthClient {
                 client_address_v6,
                 server_address,
                 server_address_v6,
+                session_id,
             } => Ok(AuthenticatedSession {
                 client_address,
                 client_address_v6,
                 server_address,
                 server_address_v6,
+                session_id,
                 reader,
                 writer,
             }),

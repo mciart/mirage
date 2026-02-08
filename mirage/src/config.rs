@@ -136,6 +136,10 @@ pub struct ConnectionConfig {
     /// Options: "reality", "tcp-tls"
     #[serde(default = "default_enabled_protocols")]
     pub enabled_protocols: Vec<String>,
+    /// Number of parallel TCP connections (1-4, default = 1)
+    /// Higher values increase throughput but use more resources
+    #[serde(default = "default_parallel_connections")]
+    pub parallel_connections: u8,
     /// Obfuscation configuration (padding, timing)
     #[serde(default)]
     pub obfuscation: ObfuscationConfig,
@@ -287,6 +291,7 @@ impl Default for ConnectionConfig {
             tcp_nodelay: default_true_fn(),
             insecure: default_false_fn(),
             enabled_protocols: default_enabled_protocols(),
+            parallel_connections: default_parallel_connections(),
             obfuscation: ObfuscationConfig::default(),
         }
     }
@@ -375,6 +380,10 @@ fn default_reality_sni() -> String {
 
 fn default_enabled_protocols() -> Vec<String> {
     vec!["reality".to_string()]
+}
+
+fn default_parallel_connections() -> u8 {
+    1 // Default to single connection for backward compatibility
 }
 
 impl ConnectionConfig {

@@ -24,7 +24,8 @@ users_file = "examples/users"
 
 [connection]
 # 隧道和生成的 TUN 接口使用的 MTU
-mtu = 1420
+# 默认 1280（IPv6 最小 MTU，减少 TCP-over-TCP 问题）
+mtu = 1280
 # 开启 NODELAY
 tcp_nodelay = true
 # 是否复用套接字 (SO_REUSEADDR)
@@ -42,8 +43,11 @@ padding_min = 40
 padding_max = 1200
 # Jitter (抖动) 延迟范围 (毫秒)
 # 模拟网络自然波动，打乱时序特征
+# 建议 0-20ms，过大会影响性能
+# 最小值
 jitter_min_ms = 0
-jitter_max_ms = 20
+# 最大值
+jitter_max_ms = 0
 
 [reality]
 # 伪装的目标域名 (SNI) -> 建议选择大厂域名

@@ -47,7 +47,7 @@ impl AuthServer {
     /// * `writer` - The write half of the TLS stream
     ///
     /// # Returns
-    /// A tuple containing the authenticated username and assigned client IP address
+    /// A tuple containing the authenticated username, assigned client IP addresses, session_id, and streams
     ///
     /// # Errors
     /// Returns `AuthError` variants for authentication failures
@@ -55,7 +55,7 @@ impl AuthServer {
         &self,
         reader: R,
         writer: W,
-    ) -> Result<(String, IpNet, Option<IpNet>, R, W)>
+    ) -> Result<(String, IpNet, Option<IpNet>, [u8; 8], R, W)>
     where
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
@@ -64,10 +64,14 @@ impl AuthServer {
 
         let message = auth_stream.recv_message_timeout(self.auth_timeout).await?;
 
-        let (username, client_address, client_address_v6) = match message {
-            AuthMessage::Authenticate { payload } => {
+        let (username, client_address, client_address_v6, session_id) = match message {
+            AuthMessage::Authenticate { payload, session_id: _existing_session } => {
                 let (username, client_address_v4, client_address_v6) =
                     self.authenticator.authenticate_user(payload).await?;
+
+                // Generate new session ID for connection pooling
+                let mut session_id = [0u8; 8];
+                rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut session_id);
 
                 auth_stream
                     .send_message_timeout(
@@ -76,12 +80,13 @@ impl AuthServer {
                             client_address_v6,
                             server_address: self.server_address,
                             server_address_v6: self.server_address_v6,
+                            session_id,
                         },
                         self.auth_timeout,
                     )
                     .await?;
 
-                (username, client_address_v4, client_address_v6)
+                (username, client_address_v4, client_address_v6, session_id)
             }
             _ => {
                 // Send failure message to client if authentication format is invalid
@@ -91,6 +96,6 @@ impl AuthServer {
         };
 
         let (reader, writer) = auth_stream.into_inner();
-        Ok((username, client_address, client_address_v6, reader, writer))
+        Ok((username, client_address, client_address_v6, session_id, reader, writer))
     }
 }

@@ -39,11 +39,14 @@ use self::dispatcher::{proxy_connection, DispatchResult, TlsDispatcher};
 use self::nat::NatManager;
 
 type ConnectionQueues = Arc<DashMap<IpAddr, Sender<Bytes>>>;
+/// Maps session_id to shared sender for connection pooling
+type SessionQueues = Arc<DashMap<[u8; 8], Sender<Bytes>>>;
 
 /// Represents a Mirage server encapsulating connections and TUN interface IO.
 pub struct MirageServer {
     config: ServerConfig,
     connection_queues: ConnectionQueues,
+    session_queues: SessionQueues,
     address_pool: Arc<AddressPool>,
 }
 
@@ -55,6 +58,7 @@ impl MirageServer {
         Ok(Self {
             config,
             connection_queues: Arc::new(DashMap::new()),
+            session_queues: Arc::new(DashMap::new()),
             address_pool: Arc::new(address_pool),
         })
     }
@@ -171,6 +175,7 @@ impl MirageServer {
                     let auth_server = auth_server.clone();
                     let ingress_queue = ingress_queue.clone();
                     let connection_queues = self.connection_queues.clone();
+                    let session_queues = self.session_queues.clone();
                     let address_pool = self.address_pool.clone();
                     let acceptor = acceptor.clone();
                     let obfuscation = self.config.connection.obfuscation.clone();
@@ -193,6 +198,7 @@ impl MirageServer {
                                     auth_server,
                                     ingress_queue,
                                     connection_queues,
+                                    session_queues,
                                     address_pool,
                                     obfuscation.clone(),
                                 ).await
@@ -237,6 +243,7 @@ impl MirageServer {
         auth_server: Arc<AuthServer>,
         ingress_queue: Sender<Packet>,
         connection_queues: ConnectionQueues,
+        session_queues: SessionQueues,
         address_pool: Arc<AddressPool>,
         obfuscation: ObfuscationConfig,
     ) -> Result<()>
@@ -247,7 +254,7 @@ impl MirageServer {
         let (read_half, write_half) = tokio::io::split(stream);
 
         // Authenticate and retrieve streams back
-        let (username, client_address, client_address_v6, read_half, write_half) = match auth_server
+        let (username, client_address, client_address_v6, session_id, read_half, write_half) = match auth_server
             .handle_authentication(read_half, write_half)
             .await
         {
@@ -259,21 +266,40 @@ impl MirageServer {
         };
 
         info!(
-            "Connection established: user = {}, client address = {}, remote address = {}",
+            "Connection established: user = {}, client address = {}, remote address = {}, session_id = {:02x?}",
             username,
             client_address.addr(),
             remote_addr.ip(),
+            session_id,
         );
 
-        // Register client in connection queues
-        let (connection_sender, connection_receiver) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
-        let client_ip = client_address.addr();
-        connection_queues.insert(client_ip, connection_sender.clone());
-        if let Some(v6) = client_address_v6 {
-            connection_queues.insert(v6.addr(), connection_sender);
-        }
+        // Check if we have an existing session (for connection pooling)
+        // If so, reuse the existing connection queue sender
+        let (connection_receiver, is_secondary) = if let Some(existing_sender) = session_queues.get(&session_id) {
+            info!("Secondary connection joining session {:02x?}", session_id);
+            // Clone the existing sender for this connection
+            let client_ip = client_address.addr();
+            connection_queues.insert(client_ip, existing_sender.clone());
+            if let Some(v6) = client_address_v6 {
+                connection_queues.insert(v6.addr(), existing_sender.clone());
+            }
+            // No new receiver for secondary connections - they only send
+            (None, true)
+        } else {
+            // Primary connection: create new queue
+            let (connection_sender, connection_receiver) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
+            let client_ip = client_address.addr();
+            connection_queues.insert(client_ip, connection_sender.clone());
+            if let Some(v6) = client_address_v6 {
+                connection_queues.insert(v6.addr(), connection_sender.clone());
+            }
+            // Register in session queues for future secondary connections
+            session_queues.insert(session_id, connection_sender);
+            (Some(connection_receiver), false)
+        };
 
-        info!("Client {} authenticated, ready for data relay", client_ip);
+        let client_ip = client_address.addr();
+        info!("Client {} authenticated, ready for data relay (secondary={})", client_ip, is_secondary);
 
         // Run bidirectional packet relay
         // This blocks until connection is closed or error occurs

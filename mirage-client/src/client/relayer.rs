@@ -210,4 +210,128 @@ impl ClientRelayer {
             }
         }
     }
+
+    /// Creates a client relayer with multiple parallel connections for improved throughput.
+    pub fn start_pooled<I: InterfaceIO + 'static>(
+        interface: Interface<I>,
+        writers: Vec<mirage::transport::framed::FramedWriter<impl AsyncWrite + Unpin + Send + 'static>>,
+        readers: Vec<mirage::transport::framed::FramedReader<impl AsyncRead + Unpin + Send + 'static>>,
+        obfuscation: mirage::config::ObfuscationConfig,
+    ) -> Result<Self> {
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let interface = Arc::new(interface);
+
+        let relayer_task = tokio::spawn(Self::relay_packets_pooled(
+            interface.clone(),
+            writers,
+            readers,
+            shutdown_rx,
+            obfuscation,
+        ));
+
+        Ok(Self {
+            relayer_task,
+            shutdown_tx,
+        })
+    }
+
+    /// Relays packets using multiple parallel connections.
+    async fn relay_packets_pooled<R, W>(
+        interface: Arc<Interface<impl InterfaceIO>>,
+        writers: Vec<mirage::transport::framed::FramedWriter<W>>,
+        readers: Vec<mirage::transport::framed::FramedReader<R>>,
+        mut shutdown_rx: broadcast::Receiver<()>,
+        obfuscation: mirage::config::ObfuscationConfig,
+    ) -> Result<()>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        let mut tasks = FuturesUnordered::new();
+        let num_connections = writers.len();
+        info!("Starting pooled relay with {} connections", num_connections);
+
+        // Spawn inbound tasks for all readers (merge traffic from all connections)
+        for (i, reader) in readers.into_iter().enumerate() {
+            let iface = interface.clone();
+            tasks.push(tokio::spawn(async move {
+                debug!("Inbound task {} started", i);
+                Self::process_inbound_traffic(reader, iface).await
+            }));
+        }
+
+        // For outbound traffic, we use a single shared channel and round-robin to writers
+        let jitter_disabled = !obfuscation.enabled
+            || (obfuscation.jitter_max_ms == 0 && obfuscation.padding_probability <= 0.0);
+
+        if jitter_disabled && num_connections == 1 {
+            // Single connection, use simple direct path
+            let mut writers_iter = writers.into_iter();
+            if let Some(writer) = writers_iter.next() {
+                tasks.push(tokio::spawn(Self::process_outgoing_traffic_direct(
+                    writer,
+                    interface.clone(),
+                )));
+            }
+        } else {
+            // Multiple connections or jitter enabled: use mpsc to distribute
+            let (packet_tx, mut packet_rx) = tokio::sync::mpsc::channel::<mirage::network::packet::Packet>(4096);
+
+            // Pump packets from TUN to channel
+            let iface = interface.clone();
+            tasks.push(tokio::spawn(async move {
+                loop {
+                    match iface.read_packets().await {
+                        Ok(packets) => {
+                            for packet in packets {
+                                if packet_tx.send(packet).await.is_err() {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }));
+
+            // Distribute packets to writers using round-robin
+            let writers_count = writers.len();
+            let writers_arc: Arc<tokio::sync::Mutex<Vec<_>>> = Arc::new(tokio::sync::Mutex::new(writers));
+            let round_robin = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+            tasks.push(tokio::spawn(async move {
+                while let Some(packet) = packet_rx.recv().await {
+                    let idx = round_robin.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % writers_count;
+                    let mut writers = writers_arc.lock().await;
+                    if let Some(writer) = writers.get_mut(idx) {
+                        if let Err(e) = writer.send_packet_no_flush(&packet).await {
+                            debug!("Writer {} error: {}", idx, e);
+                        }
+                        if let Err(e) = writer.flush().await {
+                            debug!("Writer {} flush error: {}", idx, e);
+                        }
+                    }
+                }
+                Ok::<(), mirage::MirageError>(())
+            }));
+        }
+
+        interface.configure()?;
+
+        let result = tokio::select! {
+             Some(task_result) = tasks.next() => task_result?,
+             _ = shutdown_rx.recv() => {
+                 info!("Received shutdown signal, shutting down pooled relay");
+                 Ok(())
+             },
+             _ = signal::ctrl_c() => {
+                 info!("Received shutdown signal, shutting down pooled relay");
+                 Ok(())
+             },
+        };
+
+        let _ = abort_all(tasks).await;
+
+        result
+    }
 }

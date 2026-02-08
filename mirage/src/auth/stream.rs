@@ -21,13 +21,20 @@ use crate::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AuthMessage {
     /// Authentication request containing user credentials
-    Authenticate { payload: Value },
+    /// If session_id is Some, this is a secondary connection joining an existing session
+    Authenticate {
+        payload: Value,
+        #[serde(default)]
+        session_id: Option<[u8; 8]>,
+    },
     /// Successful authentication response with network configuration
     Authenticated {
         client_address: IpNet,
         client_address_v6: Option<IpNet>,
         server_address: IpNet,
         server_address_v6: Option<IpNet>,
+        /// Session ID for connection pooling (identifies this client across multiple connections)
+        session_id: [u8; 8],
     },
     /// Authentication failure response
     Failed,

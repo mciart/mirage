@@ -15,8 +15,8 @@ password = "test"
 
 [connection]
 # 隧道和生成的 TUN 接口使用的 MTU
-# TCP 开销会自动处理
-mtu = 1420
+# 默认 1280（IPv6 最小 MTU，减少 TCP-over-TCP 问题）
+mtu = 1280
 # 开启 NODELAY
 tcp_nodelay = true
 # 连接超时时间（秒）
@@ -26,6 +26,9 @@ connection_timeout_s = 30
 enabled_protocols = ["reality", "tcp-tls"]
 # 心跳保活间隔（秒）
 keep_alive_interval_s = 25
+# 并行 TCP 连接数 (1-4, 默认: 1)
+# 多连接可提高带宽聚合，但占用更多资源
+parallel_connections = 1
 # 仅供测试：禁用 TLS 证书验证（适用于自签名证书）
 # 警告：不安全！
 insecure = true
@@ -42,8 +45,11 @@ padding_min = 40
 padding_max = 1200
 # Jitter (抖动) 延迟范围 (毫秒)
 # 模拟网络自然波动，打乱时序特征
+# 建议 0-20ms，过大会影响性能
+# 最小值
 jitter_min_ms = 0
-jitter_max_ms = 20
+# 最大值
+jitter_max_ms = 0
 
 [network]
 # 需要通过隧道路由的网段列表 (CIDR 格式)
