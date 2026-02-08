@@ -66,15 +66,17 @@ pub fn common_transport_config(
 
     // 1. Use BBR Congestion Control (High throughput, handles packet loss better than Cubic)
     // This is similar to what Hysteria/Tuic use (or their custom variants)
-    transport.congestion_controller_factory(std::sync::Arc::new(quinn::congestion::BbrConfig::default()));
+    transport.congestion_controller_factory(std::sync::Arc::new(
+        quinn::congestion::BbrConfig::default(),
+    ));
 
     // 2. Increase Window Sizes (Critical for high speed on high RTT links)
     // Default is usually too small (e.g., 1MB).
     // Hysteria 2 often uses very aggressive windows.
     // Stream receive window: 20MB
-    let stream_rw = 20 * 1024 * 1024; 
+    let stream_rw = 20 * 1024 * 1024;
     transport.stream_receive_window(u32::try_from(stream_rw).unwrap().into());
-    
+
     // Connection receive window: 40MB (aggregate of all streams)
     let conn_rw = 40 * 1024 * 1024;
     transport.receive_window(u32::try_from(conn_rw).unwrap().into());

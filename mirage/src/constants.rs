@@ -33,3 +33,10 @@ pub static TLS_ALPN_PROTOCOLS: LazyLock<Vec<Vec<u8>>> = LazyLock::new(|| {
         b"http/1.1".to_vec(), // HTTP/1.1
     ]
 });
+
+/// Represents the supported QUIC ALPN protocols for Mirage (HTTP/3 camouflage).
+pub static QUIC_ALPN_PROTOCOLS: LazyLock<Vec<Vec<u8>>> = LazyLock::new(|| {
+    vec![
+        b"h3".to_vec(), // HTTP/3
+    ]
+});

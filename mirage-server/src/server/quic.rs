@@ -51,7 +51,8 @@ fn configure_server_crypto(cert_path: &Path, key_path: &Path) -> Result<rustls::
 
     // Set ALPN protocols (h3, or custom)
     // We reuse the same ALPNs as TCP/TLS
-    server_config.alpn_protocols = mirage::constants::TLS_ALPN_PROTOCOLS
+    // Set ALPN protocols (h3 for QUIC camouflage)
+    server_config.alpn_protocols = mirage::constants::QUIC_ALPN_PROTOCOLS
         .iter()
         .map(|p| p.to_vec())
         .collect();
@@ -116,7 +117,7 @@ pub async fn run_quic_listener(
                 match connection.accept_bi().await {
                     Ok((send, recv)) => {
                         let stream = QuicStream::new(send, recv);
-                        
+
                         // Clone handles for the stream task
                         let auth_server = auth_server.clone();
                         let ingress_queue = ingress_queue.clone();
@@ -127,7 +128,7 @@ pub async fn run_quic_listener(
                         let remote_addr = remote_addr;
 
                         tokio::spawn(async move {
-                             match handle_quic_client(
+                            match handle_quic_client(
                                 stream,
                                 remote_addr,
                                 auth_server,

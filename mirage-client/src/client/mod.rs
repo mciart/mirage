@@ -275,7 +275,10 @@ impl MirageClient {
                             return Ok(Box::new(stream));
                         }
                         Err(e) => {
-                            warn!("Failed to open stream on cached connection: {}, reconnecting...", e);
+                            warn!(
+                                "Failed to open stream on cached connection: {}, reconnecting...",
+                                e
+                            );
                             self.quic_connection = None;
                         }
                     }
@@ -283,7 +286,7 @@ impl MirageClient {
                     self.quic_connection = None;
                 }
             }
-            
+
             // Get or Create Endpoint
             let endpoint = if let Some(endpoint) = &self.quic_endpoint {
                 endpoint.clone()
@@ -309,7 +312,10 @@ impl MirageClient {
                 // Load user-specified certificates
                 for path in &self.config.authentication.trusted_certificate_paths {
                     let file = std::fs::File::open(path).map_err(|e| {
-                        MirageError::config_error(format!("Failed to open CA file {:?}: {}", path, e))
+                        MirageError::config_error(format!(
+                            "Failed to open CA file {:?}: {}",
+                            path, e
+                        ))
                     })?;
                     let mut reader = std::io::BufReader::new(file);
                     for cert in rustls_pemfile::certs(&mut reader) {
@@ -338,8 +344,8 @@ impl MirageClient {
                     .with_root_certificates(roots)
                     .with_no_client_auth();
 
-                // ALPN
-                client_crypto.alpn_protocols = mirage::constants::TLS_ALPN_PROTOCOLS
+                // ALPN - use h3 for better camouflage
+                client_crypto.alpn_protocols = mirage::constants::QUIC_ALPN_PROTOCOLS
                     .iter()
                     .map(|p| p.to_vec())
                     .collect();
@@ -399,11 +405,14 @@ impl MirageClient {
                         .set_certificate_verifier(std::sync::Arc::new(NoVerifier));
                 }
 
-                let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
-                    .map_err(|e| {
-                        MirageError::config_error(format!("Failed to create QUIC client crypto: {}", e))
-                    })?;
-                let mut client_config = quinn::ClientConfig::new(std::sync::Arc::new(client_crypto));
+                let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(
+                    client_crypto,
+                )
+                .map_err(|e| {
+                    MirageError::config_error(format!("Failed to create QUIC client crypto: {}", e))
+                })?;
+                let mut client_config =
+                    quinn::ClientConfig::new(std::sync::Arc::new(client_crypto));
                 let transport_config = mirage::transport::quic::common_transport_config(
                     self.config.connection.keep_alive_interval_s,
                     self.config.connection.connection_timeout_s,
@@ -421,7 +430,7 @@ impl MirageClient {
                     MirageError::system(format!("Failed to bind QUIC client socket: {}", e))
                 })?;
                 endpoint.set_default_client_config(client_config);
-                
+
                 self.quic_endpoint = Some(endpoint.clone());
                 endpoint
             };
@@ -444,7 +453,7 @@ impl MirageClient {
                 })?;
 
             info!("QUIC connection established with {}", server_addr);
-            
+
             // Cache the connection
             self.quic_connection = Some(connection.clone());
 
