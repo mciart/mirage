@@ -18,7 +18,6 @@ use mirage::{MirageError, Result};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
-
 use ipnet::IpNet;
 use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};

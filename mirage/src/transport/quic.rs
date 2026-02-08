@@ -3,7 +3,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-
 /// A wrapper around a QUIC stream (SendStream + RecvStream)
 /// that implements AsyncRead and AsyncWrite.
 pub struct QuicStream {
