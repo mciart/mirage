@@ -116,9 +116,13 @@ pub struct ClientAuthenticationConfig {
 /// TCP/TLS connection configuration
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ConnectionConfig {
-    /// The MTU for the TUN interface (default = 1280, IPv6 minimum, reduces TCP-over-TCP issues)
+    /// The MTU for the TUN interface (default = 65535, Jumbo Frames for performance)
     #[serde(default = "default_mtu")]
     pub mtu: u16,
+    /// The Maximum Transmission Unit for the outer tunnel (UDP packets) (default = 1350)
+    /// This prevents packet fragmentation and avoids WSAEMSGSIZE on Windows
+    #[serde(default = "default_outer_mtu")]
+    pub outer_mtu: u16,
     /// The time after which a connection is considered timed out in seconds (default = 30)
     #[serde(default = "default_timeout_s")]
     pub connection_timeout_s: u64,
@@ -309,6 +313,7 @@ impl Default for ConnectionConfig {
     fn default() -> Self {
         Self {
             mtu: default_mtu(),
+            outer_mtu: default_outer_mtu(),
             connection_timeout_s: default_timeout_s(),
             keep_alive_interval_s: default_keep_alive_interval_s(),
             send_buffer_size: default_buffer_size(),
@@ -363,9 +368,16 @@ fn default_buffer_size() -> u64 {
 }
 
 fn default_mtu() -> u16 {
-    // 1280 = IPv6 minimum MTU, universally supported
-    // Lower MTU reduces IP fragmentation and TCP-over-TCP congestion conflicts
-    1280
+    // 65535 = Jumbo Frames.
+    // This allows the OS to pass large chunks of data (up to 64KB) to the TUN interface in a single syscall.
+    // Mirage then fragments this into multiple UDP packets (outer_mtu).
+    // This significantly reduces CPU usage and syscall overhead for high-bandwidth transfers.
+    65535
+}
+
+fn default_outer_mtu() -> u16 {
+    // 1350 is a safe value for WAN (below 1500 - PPPoE overhead)
+    1350
 }
 
 fn default_timeout_s() -> u64 {

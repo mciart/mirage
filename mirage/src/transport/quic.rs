@@ -61,48 +61,50 @@ unsafe impl Sync for QuicStream {}
 pub fn common_transport_config(
     keep_alive_interval_s: u64,
     idle_timeout_s: u64,
+    outer_mtu: u16,
 ) -> quinn::TransportConfig {
     let mut transport = quinn::TransportConfig::default();
 
-    // 1. Use BBR Congestion Control (High throughput, handles packet loss better than Cubic)
-    // This is similar to what Hysteria/Tuic use (or their custom variants)
+    // 1. Use BBR Congestion Control
     transport.congestion_controller_factory(std::sync::Arc::new(
         quinn::congestion::BbrConfig::default(),
     ));
 
-    // 2. Increase Window Sizes (Critical for high speed on high RTT links)
-    // Default is usually too small (e.g., 1MB).
-    // Hysteria 2 often uses very aggressive windows.
-    // Stream receive window: 20MB
+    // 2. Increase Window Sizes
     let stream_rw = 20 * 1024 * 1024;
     transport.stream_receive_window(u32::try_from(stream_rw).unwrap().into());
 
-    // Connection receive window: 40MB (aggregate of all streams)
     let conn_rw = 40 * 1024 * 1024;
     transport.receive_window(u32::try_from(conn_rw).unwrap().into());
 
     // 3. Send Window
     transport.send_window(u64::try_from(conn_rw).unwrap());
 
-    // 4. Keep-alive, timeout, and datagrams
+    // 4. Keep-alive, timeout
     transport.keep_alive_interval(Some(std::time::Duration::from_secs(keep_alive_interval_s)));
     transport.max_idle_timeout(Some(
         quinn::IdleTimeout::try_from(std::time::Duration::from_secs(idle_timeout_s)).unwrap(),
     ));
 
-    // 5. Allow some datagrams (future proofing)
+    // 5. Datagrams
     transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
 
-    // 6. Multiplexing Concurrency Limits (Crucial for Connection Reuse)
-    // Hysteria 2 typically uses high limits to avoid blocking stream creation.
+    // 6. Concurrency
     transport.max_concurrent_bidi_streams(10_000u32.into());
     transport.max_concurrent_uni_streams(10_000u32.into());
 
-    // 7. Max Datagram Size
-    // Windows throws WSAEMSGSIZE (10040) if we try to send packets larger than local MTU/Buffer.
-    // Setting this explicitly prevents Quinn from trying too large packets.
-    // 1350 is a safe value for WAN (considering PPPoE overhead etc).
-    transport.max_datagram_size(Some(1350));
+    // 7. Outer MTU / UDP Payload Size
+    // Set explicit MTU limits to avoid WSAEMSGSIZE on Windows
+    let mtu = u16::max(1200, outer_mtu); // QUIC requires at least 1200
+    transport.initial_mtu(mtu);
+
+    // Restrict MTU discovery to not exceed outer_mtu
+    // This is critical for Windows to prevent sending too large packets
+    // Check if MtuDiscoveryConfig is available in this version of Quinn,
+    // if not, we rely on initial_mtu and hopefully Quinn respects it as a soft cap or start point.
+    // In Quinn 0.11, simply setting initial_mtu might not be enough if DPLPMTUD pushes it up.
+    // We try to disable DPLPMTUD if possible or cap it.
+    transport.mtu_discovery_config(None); // Disable MTU discovery to stick to initial_mtu (safest)
 
     transport
 }
@@ -130,8 +132,8 @@ pub fn configure_client() -> Result<quinn::ClientConfig> {
     ));
 
     // Apply high-performance transport config
-    // Default keep-alive: 25s, Timeout: 30s (can be overridden by caller)
-    let transport = common_transport_config(25, 30);
+    // Default keep-alive: 25s, Timeout: 30s, MTU: 1350
+    let transport = common_transport_config(25, 30, 1350);
     client_config.transport_config(std::sync::Arc::new(transport));
 
     Ok(client_config)

@@ -84,6 +84,7 @@ pub async fn run_quic_listener(
     let transport = mirage::transport::quic::common_transport_config(
         config.connection.keep_alive_interval_s,
         config.connection.connection_timeout_s,
+        config.connection.outer_mtu,
     );
     server_config.transport_config(Arc::new(transport));
 

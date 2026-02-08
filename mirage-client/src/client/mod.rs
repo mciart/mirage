@@ -611,6 +611,7 @@ impl MirageClient {
                 let transport_config = mirage::transport::quic::common_transport_config(
                     self.config.connection.keep_alive_interval_s,
                     self.config.connection.connection_timeout_s,
+                    self.config.connection.outer_mtu,
                 );
                 client_config.transport_config(std::sync::Arc::new(transport_config));
 

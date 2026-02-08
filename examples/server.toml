@@ -28,7 +28,10 @@ users_file = "examples/users"
 [connection]
 # 隧道和生成的 TUN 接口使用的 MTU
 # 默认 1280（IPv6 最小 MTU，减少 TCP-over-TCP 问题）
-mtu = 1280
+mtu = 65535
+# 外层隧道 MTU (UDP 包大小限制)
+# 默认 1350 (兼容 PPPoE/Windows)
+outer_mtu = 1350
 # 开启 NODELAY
 tcp_nodelay = true
 # 是否复用套接字 (SO_REUSEADDR)
