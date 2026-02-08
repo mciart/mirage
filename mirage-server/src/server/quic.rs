@@ -225,7 +225,7 @@ async fn handle_quic_client(
     );
 
     // Connection pooling logic
-    let (connection_receiver, is_secondary) =
+    let (connection_receiver, _is_secondary) =
         if let Some(existing_sender) = session_queues.get(&session_id) {
             info!(
                 "Secondary QUIC connection joining session {:02x?}",

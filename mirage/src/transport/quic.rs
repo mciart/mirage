@@ -2,7 +2,7 @@ use std::io::Result;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tracing::{debug, warn};
+
 
 /// A wrapper around a QUIC stream (SendStream + RecvStream)
 /// that implements AsyncRead and AsyncWrite.
@@ -25,7 +25,7 @@ impl AsyncRead for QuicStream {
     ) -> Poll<Result<()>> {
         Pin::new(&mut self.recv)
             .poll_read(cx, buf)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(std::io::Error::other)
     }
 }
 
@@ -37,19 +37,19 @@ impl AsyncWrite for QuicStream {
     ) -> Poll<Result<usize>> {
         Pin::new(&mut self.send)
             .poll_write(cx, buf)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(std::io::Error::other)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         Pin::new(&mut self.send)
             .poll_flush(cx)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(std::io::Error::other)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         Pin::new(&mut self.send)
             .poll_shutdown(cx)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(std::io::Error::other)
     }
 }
 
