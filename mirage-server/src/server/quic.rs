@@ -126,7 +126,6 @@ pub async fn run_quic_listener(
                         let address_pool = address_pool.clone();
                         let obfuscation = obfuscation.clone();
 
-
                         tokio::spawn(async move {
                             match handle_quic_client(
                                 stream,
