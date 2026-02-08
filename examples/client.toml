@@ -39,7 +39,7 @@ port_hopping_interval_s = 30
 
 # 并行 TCP 连接数 (1-4, 默认: 1)
 # 多连接可提高带宽聚合，但占用更多资源
-parallel_connections = 2
+parallel_connections = 1
 
 # 并行 QUIC 连接数 (1-4, 默认: 1)
 # QUIC 原生支持多路复用，通常不需要太多连接，但在高丢包环境下多连接可抗 QoS
