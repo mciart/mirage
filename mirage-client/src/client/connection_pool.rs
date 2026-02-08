@@ -8,8 +8,8 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use tokio::io::{ReadHalf, WriteHalf};
 use mirage::transport::framed::{FramedReader, FramedWriter};
+use tokio::io::{ReadHalf, WriteHalf};
 
 use super::TransportStream;
 
@@ -36,10 +36,7 @@ impl ConnectionPool {
     #[allow(clippy::type_complexity)]
     pub fn new(
         session_id: [u8; 8],
-        connections: Vec<(
-            ReadHalf<TransportStream>,
-            WriteHalf<TransportStream>,
-        )>,
+        connections: Vec<(ReadHalf<TransportStream>, WriteHalf<TransportStream>)>,
     ) -> Self {
         let mut readers = Vec::with_capacity(connections.len());
         let mut writers = Vec::with_capacity(connections.len());

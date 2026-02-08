@@ -128,7 +128,7 @@ impl AuthClient {
         // For secondary connections, we send the Session ID directly
         // The payload is still needed for signature verification
         let authentication_payload = self.authenticator.generate_payload().await?;
-        
+
         auth_stream
             .send_message_timeout(
                 AuthMessage::Authenticate {
