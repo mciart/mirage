@@ -98,6 +98,12 @@ pub fn common_transport_config(
     transport.max_concurrent_bidi_streams(10_000u32.into());
     transport.max_concurrent_uni_streams(10_000u32.into());
 
+    // 7. Max Datagram Size
+    // Windows throws WSAEMSGSIZE (10040) if we try to send packets larger than local MTU/Buffer.
+    // Setting this explicitly prevents Quinn from trying too large packets.
+    // 1350 is a safe value for WAN (considering PPPoE overhead etc).
+    transport.max_datagram_size(Some(1350));
+
     transport
 }
 
