@@ -112,4 +112,42 @@ impl AuthClient {
             _ => Err(AuthError::InvalidPayload)?,
         }
     }
+    /// Establishes a secondary connection that joins an existing session.
+    pub async fn authenticate_secondary<R, W>(
+        &self,
+        reader: R,
+        writer: W,
+        session_id: [u8; 8],
+    ) -> Result<(R, W)>
+    where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        let mut auth_stream = AuthStream::new(reader, writer);
+
+        // For secondary connections, we send the Session ID directly
+        // The payload is still needed for signature verification
+        let authentication_payload = self.authenticator.generate_payload().await?;
+        
+        auth_stream
+            .send_message_timeout(
+                AuthMessage::Authenticate {
+                    payload: authentication_payload,
+                    session_id: Some(session_id),
+                },
+                self.auth_timeout,
+            )
+            .await?;
+
+        let auth_response = auth_stream.recv_message_timeout(self.auth_timeout).await?;
+
+        // Retrieve the stream parts back
+        let (reader, writer) = auth_stream.into_inner();
+
+        match auth_response {
+            AuthMessage::Authenticated { .. } => Ok((reader, writer)),
+            AuthMessage::Failed => Err(AuthError::InvalidCredentials)?,
+            _ => Err(AuthError::InvalidPayload)?,
+        }
+    }
 }

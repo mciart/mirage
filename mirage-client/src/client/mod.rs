@@ -20,7 +20,7 @@ use tokio::sync::oneshot;
 
 use ipnet::IpNet;
 use std::future::Future;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite}; // [新增] // [新增]
@@ -71,9 +71,21 @@ impl MirageClient {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        // Connect to server via TCP/TLS
+        // Resolve server addresses (support Dual Stack)
+        let resolved_addrs = self.resolve_server_address().await?;
+        
+        let primary_addr = if self.config.connection.dual_stack_enabled && resolved_addrs.len() > 1 {
+             // If dual stack enabled, we might want to ensure we have both v4 and v6 if possible
+             // For the primary connection, we just pick the first one (preference is usually given by lookup_host order)
+             resolved_addrs[0]
+        } else {
+             resolved_addrs[0]
+        };
+
+        // Connect to server via TCP/TLS (Primary Connection)
+        // We pass the specific address to connect to Avoid re-resolving
         let (tls_stream, remote_addr): (TransportStream, SocketAddr) =
-            self.connect_to_server().await?;
+            self.connect_to_specific_address(primary_addr).await?;
 
         // Anti-Loop: Add exclusion route for the server IP via the gateway used to reach it
         let server_ip = remote_addr.ip();
@@ -165,6 +177,7 @@ impl MirageClient {
         self.client_address = Some(session.client_address);
         self.server_address = Some(session.server_address);
 
+        // Create interface
         let interface: Interface<I> = Interface::create(
             session.client_address,
             session.client_address_v6,
@@ -175,13 +188,103 @@ impl MirageClient {
             Some(self.config.network.routes.clone()),
             Some(self.config.network.dns_servers.clone()),
         )?;
+        
+        // Prepare primary connection
+        let primary_reader = session.reader;
+        let primary_writer = session.writer;
+        let session_id = session.session_id;
 
-        let relayer = ClientRelayer::start(
-            interface,
-            session.reader,
-            session.writer,
-            self.config.connection.obfuscation.clone(),
-        )?;
+        let relayer = if self.config.connection.parallel_connections > 1 {
+            // --- Parallel Connections Logic ---
+            use crate::client::connection_pool::ConnectionPool;
+            
+            // Determine addresses to use for pool connections
+            let mut pool_addrs = Vec::new();
+            if self.config.connection.dual_stack_enabled && resolved_addrs.len() > 1 {
+                // Dual Stack: Interleave v4 and v6 addresses
+                 let v4_addrs: Vec<_> = resolved_addrs.iter().filter(|a| a.is_ipv4()).cloned().collect();
+                 let v6_addrs: Vec<_> = resolved_addrs.iter().filter(|a| a.is_ipv6()).cloned().collect();
+                 
+                 let max_len = std::cmp::max(v4_addrs.len(), v6_addrs.len());
+                 for i in 0..max_len {
+                      if i < v4_addrs.len() { pool_addrs.push(v4_addrs[i]); }
+                      if i < v6_addrs.len() { pool_addrs.push(v6_addrs[i]); }
+                 }
+                 
+                 info!("Dual Stack Enabled: Using pool addresses: {:?}", pool_addrs);
+            } else {
+                // Just use the primary address for all connections
+                pool_addrs.push(remote_addr);
+            }
+
+            let mut connections = Vec::new();
+            
+            // Add the primary connection first
+            connections.push((primary_reader, primary_writer));
+            
+            // Establish additional connections
+            let num_parallel = self.config.connection.parallel_connections as usize;
+            for i in 1..num_parallel {
+                 // Round-robin selection of address
+                 let target_addr = pool_addrs[i % pool_addrs.len()];
+                 
+                 info!("Establishing parallel connection {}/{} to {}", i + 1, num_parallel, target_addr);
+                 
+                 match self.connect_to_specific_address(target_addr).await {
+                     Ok((stream, _)) => {
+                         // Authenticate secondary connection
+                         let (r, w) = tokio::io::split(stream);
+                         let secondary_auth = AuthClient::new(
+                            Box::new(UsersFileClientAuthenticator::new(&self.config.authentication)),
+                            Duration::from_secs(self.config.connection.connection_timeout_s)
+                         );
+                         
+                         // Secondary connections just need to join the session
+                         match secondary_auth.authenticate_secondary(r, w, session_id).await {
+                             Ok((reader, writer)) => {
+                                 connections.push((reader, writer));
+                                 info!("Parallel connection {} joined session", i + 1);
+                             }
+                             Err(e) => {
+                                 warn!("Failed to authenticate parallel connection {}: {}", i + 1, e);
+                             }
+                         }
+                     }
+                     Err(e) => {
+                         warn!("Failed to establish parallel connection {}: {}", i + 1, e);
+                     }
+                 }
+            }
+            
+            if connections.len() > 1 {
+                let pool = ConnectionPool::new(session_id, connections);
+                let (writers, readers) = pool.take_writers();
+                ClientRelayer::start_pooled(
+                    interface,
+                    writers,
+                    readers,
+                    self.config.connection.obfuscation.clone()
+                )?
+            } else {
+                // Determine if we have the primary connection back (we should)
+                let (reader, writer) = connections.pop().expect("Primary connection missing");
+                ClientRelayer::start(
+                    interface,
+                    reader,
+                    writer,
+                    self.config.connection.obfuscation.clone(),
+                )?
+            }
+
+        } else {
+            // --- Single Connection Logic ---
+            ClientRelayer::start(
+                interface,
+                primary_reader,
+                primary_writer,
+                self.config.connection.obfuscation.clone(),
+            )?
+        };
 
         // [恢复] 发送连接成功信号
         if let Some(tx) = connection_event_tx {
@@ -210,19 +313,42 @@ impl MirageClient {
         self.server_address
     }
 
-    async fn connect_to_server(&mut self) -> Result<(TransportStream, SocketAddr)> {
+    /// Resolves the server address, potentially returning multiple IP addresses (IPv4 and IPv6)
+    /// if Dual Stack is enabled.
+    async fn resolve_server_address(&self) -> Result<Vec<SocketAddr>> {
         let connection_string = if self.config.connection_string.contains(':') {
             self.config.connection_string.clone()
         } else {
             format!("{}:443", self.config.connection_string)
         };
 
-        let server_addr = connection_string.to_socket_addrs()?.next().ok_or_else(|| {
-            MirageError::connection_failed(format!(
-                "Connection string '{}' is invalid",
+        let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&connection_string)
+            .await
+            .map_err(|e| {
+                MirageError::connection_failed(format!(
+                    "Failed to resolve server address '{}': {}",
+                    connection_string, e
+                ))
+            })?
+            .collect();
+
+        if addrs.is_empty() {
+             return Err(MirageError::connection_failed(format!(
+                "Could not resolve any address for '{}'",
                 connection_string
-            ))
-        })?;
+            )));
+        }
+
+        Ok(addrs)
+    }
+
+    /// Connects to a specific server address using the configured protocols.
+    async fn connect_to_specific_address(&mut self, server_addr: SocketAddr) -> Result<(TransportStream, SocketAddr)> {
+        let connection_string = if self.config.connection_string.contains(':') {
+            self.config.connection_string.clone()
+        } else {
+            format!("{}:443", self.config.connection_string)
+        };
 
         let protocols = self.config.connection.enabled_protocols.clone();
         if protocols.is_empty() {
@@ -231,23 +357,23 @@ impl MirageClient {
             ));
         }
 
-        info!("Connection Strategy: Enabled protocols: {:?}", protocols);
+        info!("Connection Strategy to {}: Enabled protocols: {:?}", server_addr, protocols);
 
         let mut last_error = None;
 
         for protocol in &protocols {
-            info!("Attempting connection using protocol: {}", protocol);
+            info!("Attempting connection to {} using protocol: {}", server_addr, protocol);
 
             match self
                 .connect_with_protocol(server_addr, protocol, &connection_string)
                 .await
             {
                 Ok(stream) => {
-                    info!("Successfully connected using protocol: {}", protocol);
+                    info!("Successfully connected to {} using protocol: {}", server_addr, protocol);
                     return Ok((stream, server_addr));
                 }
                 Err(e) => {
-                    warn!("Failed to connect using {}: {}", protocol, e);
+                    warn!("Failed to connect to {} using {}: {}", server_addr, protocol, e);
                     last_error = Some(e);
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
@@ -255,7 +381,7 @@ impl MirageClient {
         }
 
         Err(last_error
-            .unwrap_or_else(|| MirageError::connection_failed("All connection attempts failed")))
+            .unwrap_or_else(|| MirageError::connection_failed(format!("All connection attempts to {} failed", server_addr))))
     }
 
     async fn connect_with_protocol(

@@ -25,40 +25,42 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
 - **验证通过**：进入 VPN 隧道模式，高速传输数据。
 - **验证失败**：无缝转发到真实的目标网站（如 `www.microsoft.com`），探测者只能看到合法的网站内容。
 
-### 3. 高性能 TCP 传输与隐匿 🚀
-- 采用 Length-Prefixed 帧协议，解决 TCP 粘包问题。
-- **加权拟态轮廓**：模拟真实 HTTPS 流量的三态分布（小包/中包/大包），对抗基于机器学习的流量识别。
-- **智能时序抖动 (Jitter)**：随机化发包间隔，对抗时序关联分析。
-- **应用层心跳 (Heartbeat)**：空闲时自动保活。
-- **多 TCP 连接池**：1-4 个并行连接，Active-Standby 策略。
-- **TCP 优化 (Linux)**：BBR 拥塞控制、4MB 缓冲区、QUICKACK。
+### 3. 高性能传输架构 🚀
+- **TCP 模式**:
+  - Length-Prefixed 帧协议，解决 TCP 粘包问题。
+  - **TCP 优化 (Linux)**: BBR 拥塞控制、TCP_QUICKACK、Smart Batching。
+  - **多 TCP 连接池**: 1-4 个并行连接，Active-Standby 策略。
+- **QUIC 模式 (New)**:
+  - 基于 **h3 (HTTP/3)** 伪装，完美模拟标准 QUIC 流量。
+  - **0-RTT**: 连接复用与快速握手。
+  - **端口跳跃 (Port Hopping)**: 指定时间间隔自动轮换 UDP 端口，对抗 ISP 针对长连接的 QoS 或阻断。
 
-### 4. 多模共存 (Multi-Mode) 🌗
-服务端单端口 (443) 同时支持 **标准 TLS** 和 **Reality** 等多种协议，客户端拥有极高的连接灵活性：
-- **自定义优先级**：客户端可通过配置文件定义 `enabled_protocols` 列表（例如 `["reality", "tcp-tls"]`），决定连接尝试的顺序。
-- **按需开启**：您可以为不同的客户端单独配置开启哪些协议。例如，为不方便安装证书的设备仅开启 Reality，或为特定环境仅开启标准 TLS。
-- **智能回退**：如果首选协议连接失败（被阻断或超时），客户端会自动尝试列表中的下一个协议，确保连接的高可用性。
+### 4. 流量混淆与隐匿 🕵️
+- **加权拟态轮廓**: 模拟真实 HTTPS 流量的三态分布（小包/中包/大包）。
+- **智能时序抖动 (Jitter)**: 随机化发包间隔，对抗时序关联分析。
+- **应用层心跳 (Heartbeat)**: 空闲时自动保活。
 
-### 5. 全面双栈支持 (Full Dual Stack) 🌐
-- **IPv4/IPv6 并行**：隧道内部同时分配 V4 和 V6 地址，完美支持双栈流量。
-- **自动防环路**：客户端智能检测网关，自动添加防环路路由，彻底告别配置烦恼。
+### 5. 多模共存 (Multi-Mode) 🌗
+服务端单端口 (443) 同时支持 **标准 TLS**、**Reality** 和 **QUIC** 等多种协议，客户端拥有极高的连接灵活性：
+- **自定义优先级**: 客户端可通过配置文件定义 `enabled_protocols` 列表（例如 `["quic", "reality", "tcp-tls"]`）。
+- **智能回退**: 如果首选协议连接失败，自动尝试下一个协议。
 
-### 6. CDN 友好架构 (Planned) ☁️
-- 得益于 **TCP/TLS** 架构，未来将支持 **WebSocket** 传输层。
-- **救活被墙 IP**：可配合 Cloudflare 等 CDN 复活被屏蔽的服务器 IP。
+### 6. 全面双栈聚合 (Dual Stack Aggregation) 🌐
+- **IPv4/IPv6 并发**: 同时利用 v4 和 v6 链路进行传输，互为备份且聚合上行带宽。
+- **自动防环路**: 智能检测网关，自动添加防环路路由。
 
 ---
 
-## 架构对比 (Mirage vs Quincy)
+## 架构对比 (Mirage vs Quincy vs Xray)
 
-| 特性 | Quincy (旧版) | Mirage (新版) |
-|------|---------------|---------------|
-| **传输层** | QUIC (UDP) | TCP/TLS (1.3) |
-| **扩展性** | 难 (CDN 不支持 UDP) | 强 (原生支持 WebSocket/CDN) |
-| **网络层** | IPv4 Only (通常) | Full Dual Stack (IPv4 + IPv6) |
-| **TLS 库** | Rustls | BoringSSL (Chrome 同源) |
-| **伪装能力** | 弱 (仅标准 TLS) | 强 (Reality + Chrome 指纹) |
-| **抗探测** | 易受 UDP QoS 限制 | 伪装为 HTTPS，通用性更强 |
+| 特性 | Quincy (旧版) | Mirage (新版) | Xray (Reality) |
+|------|---------------|---------------|----------------|
+| **传输层** | QUIC (UDP) | TCP/TLS + QUIC | TCP/TLS, QUIC, WS, gRPC |
+| **TLS 库** | Rustls | **BoringSSL** (Chrome 同源) | uTLS (Go) |
+| **伪装能力** | 弱 | **极致** (Reality + Chrome 指纹 + QUIC h3) | 强 (Reality) |
+| **抗探测** | 易受限 | **端口跳跃** + Jitter + Padding | Vision 流控 |
+| **多路复用** | 弱 | **强** (QUIC Stream Mux + TCP Pool) | Mux.Cool |
+| **网络栈** | IPv4 | **Dual Stack (v4+v6 聚合)** | Dual Stack |
 
 ---
 
@@ -252,7 +254,9 @@ users_file = "users"
 - [x] **Phase 2**: 功能增强与伪装 (Reality 已完成)
 - [x] **Phase 3**: 流量混淆与隐匿 (Padding, Jitter & Heartbeat 已完成)
 - [x] **Phase 3.5**: 性能优化 (连接池, TCP BBR, Smart Batching 已完成)
-- [ ] **Phase 4**: CDN 支持 (WebSocket, gRPC 等)
+- [x] **Phase 4**: QUIC 传输层回归 (h3 伪装, 0-RTT)
+- [x] **Phase 5**: 进阶抗封锁 (Port Hopping 端口跳跃, Dual Stack 双栈聚合)
+- [ ] **Phase 6**: CDN 支持 (WebSocket, gRPC 等)
 
 ---
 

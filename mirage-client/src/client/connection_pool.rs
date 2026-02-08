@@ -9,15 +9,14 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use tokio::io::{ReadHalf, WriteHalf};
-use tokio::net::TcpStream;
-use tokio_boring::SslStream;
-
 use mirage::transport::framed::{FramedReader, FramedWriter};
+
+use super::TransportStream;
 
 /// A pooled connection with its reader and writer components.
 pub struct PooledConnection {
-    pub reader: FramedReader<ReadHalf<SslStream<TcpStream>>>,
-    pub writer: FramedWriter<WriteHalf<SslStream<TcpStream>>>,
+    pub reader: FramedReader<ReadHalf<TransportStream>>,
+    pub writer: FramedWriter<WriteHalf<TransportStream>>,
 }
 
 /// Manages multiple parallel TCP/TLS connections for improved throughput.
@@ -25,9 +24,9 @@ pub struct ConnectionPool {
     /// Session ID shared across all connections in this pool
     pub session_id: [u8; 8],
     /// Writers for outbound traffic (one per connection)
-    writers: Vec<FramedWriter<WriteHalf<SslStream<TcpStream>>>>,
+    writers: Vec<FramedWriter<WriteHalf<TransportStream>>>,
     /// Readers for inbound traffic (one per connection)  
-    readers: Vec<FramedReader<ReadHalf<SslStream<TcpStream>>>>,
+    readers: Vec<FramedReader<ReadHalf<TransportStream>>>,
     /// Round-robin index for load balancing
     round_robin_idx: AtomicUsize,
 }
@@ -38,8 +37,8 @@ impl ConnectionPool {
     pub fn new(
         session_id: [u8; 8],
         connections: Vec<(
-            ReadHalf<SslStream<TcpStream>>,
-            WriteHalf<SslStream<TcpStream>>,
+            ReadHalf<TransportStream>,
+            WriteHalf<TransportStream>,
         )>,
     ) -> Self {
         let mut readers = Vec::with_capacity(connections.len());
@@ -73,8 +72,8 @@ impl ConnectionPool {
     pub fn take_writers(
         self,
     ) -> (
-        Vec<FramedWriter<WriteHalf<SslStream<TcpStream>>>>,
-        Vec<FramedReader<ReadHalf<SslStream<TcpStream>>>>,
+        Vec<FramedWriter<WriteHalf<TransportStream>>>,
+        Vec<FramedReader<ReadHalf<TransportStream>>>,
     ) {
         (self.writers, self.readers)
     }
