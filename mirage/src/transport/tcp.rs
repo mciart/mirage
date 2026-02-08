@@ -3,39 +3,14 @@
 //! Provides functions for configuring TCP sockets for optimal VPN performance,
 //! including BBR congestion control and buffer tuning.
 
-/// Optimizes TCP socket for high-throughput VPN traffic.
-/// Sets larger buffers for better performance.
+/// Optimizes TCP socket for VPN traffic (Linux only).
+/// Note: We intentionally do NOT set large buffers to avoid bufferbloat.
+/// System defaults (typically 128KB-256KB) provide a good latency/throughput balance.
 #[cfg(target_os = "linux")]
-pub fn optimize_tcp_socket<S: std::os::unix::io::AsRawFd>(socket: &S) -> std::io::Result<()> {
-    use std::os::raw::c_int;
-    use tracing::debug;
-
-    // Increase socket buffers for higher throughput
-    const SO_RCVBUF: c_int = 8;
-    const SO_SNDBUF: c_int = 7;
-    const SOL_SOCKET: c_int = 1;
-
-    // 4MB buffers for high-throughput
-    let buffer_size: c_int = 4 * 1024 * 1024;
-
-    unsafe {
-        libc::setsockopt(
-            socket.as_raw_fd(),
-            SOL_SOCKET,
-            SO_RCVBUF,
-            &buffer_size as *const _ as *const _,
-            std::mem::size_of::<c_int>() as libc::socklen_t,
-        );
-        libc::setsockopt(
-            socket.as_raw_fd(),
-            SOL_SOCKET,
-            SO_SNDBUF,
-            &buffer_size as *const _ as *const _,
-            std::mem::size_of::<c_int>() as libc::socklen_t,
-        );
-    }
-
-    debug!("TCP socket buffers optimized (4MB)");
+pub fn optimize_tcp_socket<S: std::os::unix::io::AsRawFd>(_socket: &S) -> std::io::Result<()> {
+    // Intentionally left empty - use system default buffers
+    // Large buffers (4MB) cause bufferbloat on bursty traffic
+    tracing::debug!("TCP socket using system default buffers (avoiding bufferbloat)");
     Ok(())
 }
 
