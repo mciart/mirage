@@ -214,8 +214,12 @@ impl ClientRelayer {
     /// Creates a client relayer with multiple parallel connections for improved throughput.
     pub fn start_pooled<I: InterfaceIO + 'static>(
         interface: Interface<I>,
-        writers: Vec<mirage::transport::framed::FramedWriter<impl AsyncWrite + Unpin + Send + 'static>>,
-        readers: Vec<mirage::transport::framed::FramedReader<impl AsyncRead + Unpin + Send + 'static>>,
+        writers: Vec<
+            mirage::transport::framed::FramedWriter<impl AsyncWrite + Unpin + Send + 'static>,
+        >,
+        readers: Vec<
+            mirage::transport::framed::FramedReader<impl AsyncRead + Unpin + Send + 'static>,
+        >,
         obfuscation: mirage::config::ObfuscationConfig,
     ) -> Result<Self> {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
@@ -275,7 +279,8 @@ impl ClientRelayer {
             }
         } else {
             // Multiple connections or jitter enabled: use mpsc to distribute
-            let (packet_tx, mut packet_rx) = tokio::sync::mpsc::channel::<mirage::network::packet::Packet>(4096);
+            let (packet_tx, mut packet_rx) =
+                tokio::sync::mpsc::channel::<mirage::network::packet::Packet>(4096);
 
             // Pump packets from TUN to channel
             let iface = interface.clone();
@@ -296,12 +301,14 @@ impl ClientRelayer {
 
             // Distribute packets to writers using round-robin
             let writers_count = writers.len();
-            let writers_arc: Arc<tokio::sync::Mutex<Vec<_>>> = Arc::new(tokio::sync::Mutex::new(writers));
+            let writers_arc: Arc<tokio::sync::Mutex<Vec<_>>> =
+                Arc::new(tokio::sync::Mutex::new(writers));
             let round_robin = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
             tasks.push(tokio::spawn(async move {
                 while let Some(packet) = packet_rx.recv().await {
-                    let idx = round_robin.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % writers_count;
+                    let idx = round_robin.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        % writers_count;
                     let mut writers = writers_arc.lock().await;
                     if let Some(writer) = writers.get_mut(idx) {
                         if let Err(e) = writer.send_packet_no_flush(&packet).await {

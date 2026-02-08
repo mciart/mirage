@@ -71,8 +71,12 @@ where
                         match egress_queue.try_recv() {
                             Ok(more_data) => {
                                 current_batch_size += more_data.len();
-                                if let Err(e) = framed_writer.send_packet_no_flush(&more_data).await {
-                                    return Err(MirageError::system(format!("Failed to send packet: {}", e)));
+                                if let Err(e) = framed_writer.send_packet_no_flush(&more_data).await
+                                {
+                                    return Err(MirageError::system(format!(
+                                        "Failed to send packet: {}",
+                                        e
+                                    )));
                                 }
                                 count += 1;
                             }

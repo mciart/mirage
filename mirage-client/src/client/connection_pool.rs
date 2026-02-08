@@ -66,7 +66,12 @@ impl ConnectionPool {
     }
 
     /// Takes ownership of all writers for distribution to outbound tasks.
-    pub fn take_writers(self) -> (Vec<FramedWriter<WriteHalf<SslStream<TcpStream>>>>, Vec<FramedReader<ReadHalf<SslStream<TcpStream>>>>) {
+    pub fn take_writers(
+        self,
+    ) -> (
+        Vec<FramedWriter<WriteHalf<SslStream<TcpStream>>>>,
+        Vec<FramedReader<ReadHalf<SslStream<TcpStream>>>>,
+    ) {
         (self.writers, self.readers)
     }
 }

@@ -254,16 +254,17 @@ impl MirageServer {
         let (read_half, write_half) = tokio::io::split(stream);
 
         // Authenticate and retrieve streams back
-        let (username, client_address, client_address_v6, session_id, read_half, write_half) = match auth_server
-            .handle_authentication(read_half, write_half)
-            .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                warn!("Authentication failed for '{}': {e}", remote_addr.ip());
-                return Err(e);
-            }
-        };
+        let (username, client_address, client_address_v6, session_id, read_half, write_half) =
+            match auth_server
+                .handle_authentication(read_half, write_half)
+                .await
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    warn!("Authentication failed for '{}': {e}", remote_addr.ip());
+                    return Err(e);
+                }
+            };
 
         info!(
             "Connection established: user = {}, client address = {}, remote address = {}, session_id = {:02x?}",
@@ -275,7 +276,9 @@ impl MirageServer {
 
         // Check if we have an existing session (for connection pooling)
         // If so, reuse the existing connection queue sender
-        let (connection_receiver, is_secondary) = if let Some(existing_sender) = session_queues.get(&session_id) {
+        let (connection_receiver, is_secondary) = if let Some(existing_sender) =
+            session_queues.get(&session_id)
+        {
             info!("Secondary connection joining session {:02x?}", session_id);
             // Clone the existing sender for this connection
             let client_ip = client_address.addr();
@@ -299,7 +302,10 @@ impl MirageServer {
         };
 
         let client_ip = client_address.addr();
-        info!("Client {} authenticated, ready for data relay (secondary={})", client_ip, is_secondary);
+        info!(
+            "Client {} authenticated, ready for data relay (secondary={})",
+            client_ip, is_secondary
+        );
 
         // Run bidirectional packet relay
         // This blocks until connection is closed or error occurs

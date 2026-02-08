@@ -65,7 +65,10 @@ impl AuthServer {
         let message = auth_stream.recv_message_timeout(self.auth_timeout).await?;
 
         let (username, client_address, client_address_v6, session_id) = match message {
-            AuthMessage::Authenticate { payload, session_id: _existing_session } => {
+            AuthMessage::Authenticate {
+                payload,
+                session_id: _existing_session,
+            } => {
                 let (username, client_address_v4, client_address_v6) =
                     self.authenticator.authenticate_user(payload).await?;
 
@@ -96,6 +99,13 @@ impl AuthServer {
         };
 
         let (reader, writer) = auth_stream.into_inner();
-        Ok((username, client_address, client_address_v6, session_id, reader, writer))
+        Ok((
+            username,
+            client_address,
+            client_address_v6,
+            session_id,
+            reader,
+            writer,
+        ))
     }
 }

@@ -131,7 +131,10 @@ impl MirageClient {
 
         info!("Successfully authenticated");
         info!("Session ID: {:02x?}", session.session_id);
-        info!("Parallel connections configured: {}", self.config.connection.parallel_connections);
+        info!(
+            "Parallel connections configured: {}",
+            self.config.connection.parallel_connections
+        );
         info!("Received client address: {} (v4)", session.client_address);
         if let Some(v6) = session.client_address_v6 {
             info!("Received client address: {v6} (v6)");
