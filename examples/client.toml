@@ -29,6 +29,9 @@ keep_alive_interval_s = 25
 # 并行 TCP 连接数 (1-4, 默认: 1)
 # 多连接可提高带宽聚合，但占用更多资源
 parallel_connections = 1
+# 连接预热 (默认: false)
+# 启用后在启动时预建立备用连接，减少切换延迟
+warmup_connections = false
 # 仅供测试：禁用 TLS 证书验证（适用于自签名证书）
 # 警告：不安全！
 insecure = true

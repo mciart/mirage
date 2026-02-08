@@ -251,8 +251,10 @@ impl MirageClient {
         let tcp_stream = TcpStream::connect(server_addr).await?;
         tcp_stream.set_nodelay(self.config.connection.tcp_nodelay)?;
 
-        // Try to enable BBR congestion control for better throughput (Linux only)
+        // Apply TCP optimizations (Linux only)
+        let _ = mirage::transport::tcp::optimize_tcp_socket(&tcp_stream);
         let _ = mirage::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
+        let _ = mirage::transport::tcp::set_tcp_quickack(&tcp_stream);
 
         debug!("TCP connection established to {}", server_addr);
 

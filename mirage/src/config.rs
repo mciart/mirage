@@ -140,6 +140,10 @@ pub struct ConnectionConfig {
     /// Higher values increase throughput but use more resources
     #[serde(default = "default_parallel_connections")]
     pub parallel_connections: u8,
+    /// Enable connection warmup (pre-establish standby connections)
+    /// Reduces latency when switching connections
+    #[serde(default = "default_false_fn")]
+    pub warmup_connections: bool,
     /// Obfuscation configuration (padding, timing)
     #[serde(default)]
     pub obfuscation: ObfuscationConfig,
@@ -292,6 +296,7 @@ impl Default for ConnectionConfig {
             insecure: default_false_fn(),
             enabled_protocols: default_enabled_protocols(),
             parallel_connections: default_parallel_connections(),
+            warmup_connections: default_false_fn(),
             obfuscation: ObfuscationConfig::default(),
         }
     }
