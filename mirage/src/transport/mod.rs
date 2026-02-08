@@ -5,5 +5,6 @@
 
 pub mod framed;
 pub mod jitter;
+pub mod tcp;
 
 pub use framed::FramedStream;

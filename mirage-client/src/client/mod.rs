@@ -250,6 +250,10 @@ impl MirageClient {
 
         let tcp_stream = TcpStream::connect(server_addr).await?;
         tcp_stream.set_nodelay(self.config.connection.tcp_nodelay)?;
+
+        // Try to enable BBR congestion control for better throughput (Linux only)
+        let _ = mirage::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
+
         debug!("TCP connection established to {}", server_addr);
 
         let mut connector_builder = SslConnector::builder(SslMethod::tls_client())

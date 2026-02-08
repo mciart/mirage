@@ -166,6 +166,9 @@ impl MirageServer {
                         warn!("Failed to set TCP_NODELAY: {e}");
                     }
 
+                    // Try to enable BBR congestion control for better throughput (Linux only)
+                    let _ = mirage::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
+
                     // Dispatch traffic (Reality / Standard / Proxy)
                     let dispatcher = TlsDispatcher::new(&self.config);
 
