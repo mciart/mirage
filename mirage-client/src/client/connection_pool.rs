@@ -3,6 +3,8 @@
 //! This module manages multiple parallel connections to improve throughput
 //! by aggregating bandwidth across multiple TCP streams.
 
+#![allow(dead_code)]
+
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
@@ -32,6 +34,7 @@ pub struct ConnectionPool {
 
 impl ConnectionPool {
     /// Creates a new connection pool from authenticated connections.
+    #[allow(clippy::type_complexity)]
     pub fn new(
         session_id: [u8; 8],
         connections: Vec<(
@@ -66,6 +69,7 @@ impl ConnectionPool {
     }
 
     /// Takes ownership of all writers for distribution to outbound tasks.
+    #[allow(clippy::type_complexity)]
     pub fn take_writers(
         self,
     ) -> (

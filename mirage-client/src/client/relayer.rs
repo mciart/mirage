@@ -212,6 +212,7 @@ impl ClientRelayer {
     }
 
     /// Creates a client relayer with multiple parallel connections for improved throughput.
+    #[allow(dead_code)]
     pub fn start_pooled<I: InterfaceIO + 'static>(
         interface: Interface<I>,
         writers: Vec<
@@ -240,6 +241,7 @@ impl ClientRelayer {
     }
 
     /// Relays packets using multiple parallel connections.
+    #[allow(dead_code)]
     async fn relay_packets_pooled<R, W>(
         interface: Arc<Interface<impl InterfaceIO>>,
         writers: Vec<mirage::transport::framed::FramedWriter<W>>,
