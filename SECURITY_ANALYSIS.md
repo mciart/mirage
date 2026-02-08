@@ -21,8 +21,9 @@ Mirage VPN 目前在**直连隐匿性**（Stealth）上，已经达到了与 Xra
 *   **Xray**: 支持 WebSocket / gRPC，可以套 Cloudflare CDN。
 *   **Mirage**:
     *   **Port Hopping (QUIC)**: 独有的端口跳跃技术，每隔 N 秒（如 30s）自动轮换 UDP 端口，利用 QUIC 连接迁移特性保持会话不断。这有效规避了针对长连接 UDP 的 QoS 和阻断。
+    *   **Dual Stack (双栈)**: 当 IPv4 被干扰时，自动回退或并发使用 IPv6 链路，利用两条完全不同的网络路径提高生存率。
     *   **CDN**: 目前尚未支持 WebSocket (Planned)，仍需 TCP 直连。
-*   **结论**: **Mirage 在直连抗封锁上通过 Port Hopping 扳回一局，但 CDN 支持仍缺席**。
+*   **结论**: **Mirage 在直连抗封锁上通过 Port Hopping 和 Dual Stack 建立了多重防线**。
 
 ### 4. 协议层级与体验 (Layer & UX) —— **Mirage 胜出**
 *   **Xray**: 本质上是 **L4 代理** (SOCKS/HTTP)。
@@ -32,9 +33,9 @@ Mirage VPN 目前在**直连隐匿性**（Stealth）上，已经达到了与 Xra
 ### 5. 性能优化 (Performance) —— **Mirage 胜出**
 *   **Xray**: 默认配置，依赖 Go 运行时。
 *   **Mirage**:
-    *   **多 TCP 连接池**: 1-4 个并行连接，Active-Standby 策略避免乱序
+    *   **多 TCP/QUIC 连接池**: 支持同时维护多条 TCP 和 QUIC 连接，自动负载均衡。
     *   **QUIC 0-RTT**: 极速重连与连接复用
-    *   **Dual Stack Aggregation**: 同时榨干 IPv4 和 IPv6 带宽
+    *   **Full-Duplex Aggregation**: 服务端和客户端双向聚合 IPv4/IPv6 带宽，压榨线路极限。
     *   **TCP BBR / 4MB Buffer**: 工业级内核调优
 *   **结论**: **Mirage 性能优化达到工业级水准**。
 

@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::auth::AuthServer;
-use crate::server::address_pool::AddressPool;
-use crate::server::connection;
+use crate::server::session::{SessionContext, SessionDispatcher};
+use crate::server::{address_pool::AddressPool, connection};
 use mirage::config::{ObfuscationConfig, ServerConfig};
 use mirage::network::packet::Packet;
 use mirage::transport::quic::QuicStream;
@@ -19,7 +19,7 @@ use tokio::sync::mpsc::Sender;
 use tracing::{debug, info, warn};
 
 type ConnectionQueues = Arc<DashMap<std::net::IpAddr, Sender<Bytes>>>;
-type SessionQueues = Arc<DashMap<[u8; 8], Sender<Bytes>>>;
+type SessionQueues = Arc<DashMap<[u8; 8], SessionContext>>;
 
 /// Configures QUIC server crypto using rustls
 fn configure_server_crypto(cert_path: &Path, key_path: &Path) -> Result<rustls::ServerConfig> {
@@ -207,27 +207,63 @@ async fn handle_quic_client(
 
     // Connection pooling logic
     let (connection_receiver, _is_secondary) =
-        if let Some(existing_sender) = session_queues.get(&session_id) {
+        if let Some(context) = session_queues.get(&session_id) {
             info!(
                 "Secondary QUIC connection joining session {:02x?}",
                 session_id
             );
-            let client_ip = client_address.addr();
-            connection_queues.insert(client_ip, existing_sender.clone());
-            if let Some(v6) = client_address_v6 {
-                connection_queues.insert(v6.addr(), existing_sender.clone());
+
+            // Create dedicated downlink channel
+            use tokio::sync::mpsc::channel;
+            let (conn_sender, connection_receiver) =
+                channel::<Bytes>(mirage::constants::PACKET_CHANNEL_SIZE);
+
+            // Register with dispatcher
+            if let Err(e) = context.register_tx.send(conn_sender).await {
+                warn!("Failed to register secondary QUIC connection: {}", e);
             }
-            (None, true)
+
+            let client_ip = client_address.addr();
+            connection_queues.insert(client_ip, context.packet_tx.clone());
+            if let Some(v6) = client_address_v6 {
+                connection_queues.insert(v6.addr(), context.packet_tx.clone());
+            }
+            (Some(connection_receiver), true)
         } else {
             use tokio::sync::mpsc::channel;
-            let (connection_sender, connection_receiver) =
+            // Primary connection: Create SessionDispatcher
+
+            // 1. Channel for TUN -> Dispatcher
+            let (packet_tx, packet_rx) = channel::<Bytes>(mirage::constants::PACKET_CHANNEL_SIZE);
+
+            // 2. Channel for Registering new connections
+            let (register_tx, register_rx) = channel::<Sender<Bytes>>(16);
+
+            // 3. Spawn Dispatcher
+            let dispatcher = SessionDispatcher::new(packet_rx, register_rx);
+            tokio::spawn(dispatcher.run());
+
+            // 4. Create Channel for THIS connection
+            let (conn_sender, connection_receiver) =
                 channel::<Bytes>(mirage::constants::PACKET_CHANNEL_SIZE);
-            let client_ip = client_address.addr();
-            connection_queues.insert(client_ip, connection_sender.clone());
-            if let Some(v6) = client_address_v6 {
-                connection_queues.insert(v6.addr(), connection_sender.clone());
+
+            // 5. Register primary connection immediately
+            if let Err(e) = register_tx.send(conn_sender).await {
+                warn!("Failed to register primary QUIC connection: {}", e);
             }
-            session_queues.insert(session_id, connection_sender);
+
+            // 6. Update global maps
+            let context = SessionContext {
+                packet_tx: packet_tx.clone(),
+                register_tx,
+            };
+
+            let client_ip = client_address.addr();
+            connection_queues.insert(client_ip, packet_tx.clone());
+            if let Some(v6) = client_address_v6 {
+                connection_queues.insert(v6.addr(), packet_tx);
+            }
+            session_queues.insert(session_id, context);
             (Some(connection_receiver), false)
         };
 

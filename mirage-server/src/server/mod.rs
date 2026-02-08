@@ -8,6 +8,7 @@ mod connection;
 mod dispatcher;
 mod nat;
 mod quic;
+mod session;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -38,10 +39,11 @@ use tracing::{debug, info, warn};
 use self::address_pool::AddressPool;
 use self::dispatcher::{proxy_connection, DispatchResult, TlsDispatcher};
 use self::nat::NatManager;
+use self::session::{SessionContext, SessionDispatcher};
 
 type ConnectionQueues = Arc<DashMap<IpAddr, Sender<Bytes>>>;
-/// Maps session_id to shared sender for connection pooling
-type SessionQueues = Arc<DashMap<[u8; 8], Sender<Bytes>>>;
+/// Maps session_id to session context for connection pooling
+type SessionQueues = Arc<DashMap<[u8; 8], SessionContext>>;
 
 /// Represents a Mirage server encapsulating connections and TUN interface IO.
 pub struct MirageServer {
@@ -293,31 +295,69 @@ impl MirageServer {
         );
 
         // Check if we have an existing session (for connection pooling)
-        // If so, reuse the existing connection queue sender
-        let (connection_receiver, is_secondary) = if let Some(existing_sender) =
-            session_queues.get(&session_id)
-        {
-            info!("Secondary connection joining session {:02x?}", session_id);
-            // Clone the existing sender for this connection
-            let client_ip = client_address.addr();
-            connection_queues.insert(client_ip, existing_sender.clone());
-            if let Some(v6) = client_address_v6 {
-                connection_queues.insert(v6.addr(), existing_sender.clone());
-            }
-            // No new receiver for secondary connections - they only send
-            (None, true)
-        } else {
-            // Primary connection: create new queue
-            let (connection_sender, connection_receiver) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
-            let client_ip = client_address.addr();
-            connection_queues.insert(client_ip, connection_sender.clone());
-            if let Some(v6) = client_address_v6 {
-                connection_queues.insert(v6.addr(), connection_sender.clone());
-            }
-            // Register in session queues for future secondary connections
-            session_queues.insert(session_id, connection_sender);
-            (Some(connection_receiver), false)
-        };
+        let (connection_receiver, is_secondary) =
+            if let Some(context) = session_queues.get(&session_id) {
+                info!("Secondary connection joining session {:02x?}", session_id);
+
+                // Create a dedicated channel for this connection's downlink traffic
+                let (conn_sender, conn_receiver) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
+
+                // Register this connection with the session dispatcher
+                if let Err(e) = context.register_tx.send(conn_sender).await {
+                    warn!("Failed to register secondary connection to session: {}", e);
+                    // Fallback: This connection will be uplink-only if registration fails
+                    // But generally this shouldn't happen unless session is closing
+                }
+
+                // Update connection_queues to point to the main session packet_tx
+                // This ensures packets coming from TUN for this new IP are routed to the dispatcher
+                let client_ip = client_address.addr();
+                connection_queues.insert(client_ip, context.packet_tx.clone());
+                if let Some(v6) = client_address_v6 {
+                    connection_queues.insert(v6.addr(), context.packet_tx.clone());
+                }
+
+                (Some(conn_receiver), true)
+            } else {
+                // Primary connection: Create SessionDispatcher
+
+                // 1. Channel for TUN -> Dispatcher
+                let (packet_tx, packet_rx) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
+
+                // 2. Channel for Registering new connections
+                let (register_tx, register_rx) = channel::<Sender<Bytes>>(16);
+
+                // 3. Spawn Dispatcher
+                let dispatcher = SessionDispatcher::new(packet_rx, register_rx);
+                tokio::spawn(dispatcher.run());
+
+                // 4. Create Channel for THIS primary connection
+                let (conn_sender, conn_receiver) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
+
+                // 5. Register primary connection immediately
+                if let Err(e) = register_tx.send(conn_sender).await {
+                    warn!(
+                        "Failed to register primary connection (should not happen): {}",
+                        e
+                    );
+                }
+
+                // 6. Update global maps
+                let context = SessionContext {
+                    packet_tx: packet_tx.clone(),
+                    register_tx,
+                };
+
+                let client_ip = client_address.addr();
+                connection_queues.insert(client_ip, packet_tx.clone());
+                if let Some(v6) = client_address_v6 {
+                    connection_queues.insert(v6.addr(), packet_tx);
+                }
+                // Register in session queues for future secondary connections
+                session_queues.insert(session_id, context);
+
+                (Some(conn_receiver), false)
+            };
 
         let client_ip = client_address.addr();
         info!(

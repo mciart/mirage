@@ -45,9 +45,11 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
 - **自定义优先级**: 客户端可通过配置文件定义 `enabled_protocols` 列表（例如 `["quic", "reality", "tcp-tls"]`）。
 - **智能回退**: 如果首选协议连接失败，自动尝试下一个协议。
 
-### 6. 全面双栈聚合 (Dual Stack Aggregation) 🌐
-- **IPv4/IPv6 并发**: 同时利用 v4 和 v6 链路进行传输，互为备份且聚合上行带宽。
-- **自动防环路**: 智能检测网关，自动添加防环路路由。
+### 6. 全双工双栈聚合 (Full-Duplex Dual Stack Aggregation) 🌐
+- **双向带宽聚合**: 客户端和服务端均实现了多路径分发 (Session Dispatcher)。
+- **IPv4/IPv6 并发**: 同时利用 v4 和 v6 链路进行传输，互为备份且聚合带宽。
+- **协议级多路复用**: 自适应 TCP 和 QUIC 的连接特性，同时利用 TCP 的稳定性和 QUIC 的低延迟。
+- **SNI 伪装**: 支持自定义 SNI，配合 Reality 实现连接 IP 与 伪装域名的分离 (Domain Fronting 思想)。
 
 ---
 
@@ -106,11 +108,21 @@ docker run --rm \
 ### 客户端 (`client.toml`)
 
 ```toml
-# Mirage 服务器的连接地址和端口
-connection_string = "your-server.com:443"
+# Mirage 服务器的连接地址和端口 (支持直接 IP)
+connection_string = "1.2.3.4:443"
 
-# 开启的协议优先顺序 (支持: "reality", "tcp-tls")
-enabled_protocols = ["reality", "tcp-tls"]
+[connection]
+# 自定义 SNI (可选)
+# 连接 IP 时伪装成域名，实现类似域前置的效果
+sni = "www.microsoft.com"
+
+# 并发连接数
+parallel_connections = 2       # TCP 并发数
+quic_parallel_connections = 2  # QUIC 并发数
+dual_stack_enabled = true      # 开启 IPv4/IPv6 双栈聚合
+
+# 开启的协议优先顺序 (支持: "reality", "tcp-tls", "quic")
+enabled_protocols = ["reality", "tcp-tls", "quic"]
 
 [reality]
 # 伪装的目标域名，必须与服务端一致
