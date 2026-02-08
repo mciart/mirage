@@ -142,6 +142,10 @@ pub struct ConnectionConfig {
     /// Options: "reality", "tcp-tls", "quic"
     #[serde(default = "default_enabled_protocols")]
     pub enabled_protocols: Vec<String>,
+    /// Interval to rotate source port for QUIC connections in seconds (0 to disable)
+    /// This helps avoid UDP blocking or throttling by refreshing the 5-tuple
+    #[serde(default = "default_zero_fn")]
+    pub port_hopping_interval_s: u64,
     /// Number of parallel TCP connections (1-4, default = 1)
     /// Higher values increase throughput but use more resources
     #[serde(default = "default_parallel_connections")]
@@ -301,6 +305,7 @@ impl Default for ConnectionConfig {
             tcp_nodelay: default_true_fn(),
             insecure: default_false_fn(),
             enabled_protocols: default_enabled_protocols(),
+            port_hopping_interval_s: default_zero_fn(),
             parallel_connections: default_parallel_connections(),
             warmup_connections: default_false_fn(),
             obfuscation: ObfuscationConfig::default(),
@@ -395,6 +400,10 @@ fn default_enabled_protocols() -> Vec<String> {
 
 fn default_parallel_connections() -> u8 {
     1 // Default to single connection for backward compatibility
+}
+
+fn default_zero_fn() -> u64 {
+    0
 }
 
 impl ConnectionConfig {

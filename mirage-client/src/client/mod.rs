@@ -45,6 +45,7 @@ pub struct MirageClient {
     // QUIC persistent connection state
     quic_endpoint: Option<quinn::Endpoint>,
     quic_connection: Option<quinn::Connection>,
+    last_quic_refresh: Option<std::time::Instant>,
 }
 
 impl MirageClient {
@@ -56,6 +57,7 @@ impl MirageClient {
             server_address: None,
             quic_endpoint: None,
             quic_connection: None,
+            last_quic_refresh: None,
         }
     }
 
@@ -265,6 +267,21 @@ impl MirageClient {
         info!("Connecting: {} ({})", connection_string, protocol);
 
         if protocol == "quic" {
+            // Check for Port Hopping Rotation
+            if let Some(last_refresh) = self.last_quic_refresh {
+                if self.config.connection.port_hopping_interval_s > 0
+                    && last_refresh.elapsed()
+                        > std::time::Duration::from_secs(
+                            self.config.connection.port_hopping_interval_s,
+                        )
+                {
+                    info!("Port Hopping: Rotating QUIC connection and endpoint to new port...");
+                    self.quic_connection = None;
+                    self.quic_endpoint = None; // Force new endpoint creation (new port)
+                    self.last_quic_refresh = None;
+                }
+            }
+
             // QUIC Connection - Attempt Reuse
             if let Some(conn) = &self.quic_connection {
                 if conn.close_reason().is_none() {
@@ -456,6 +473,9 @@ impl MirageClient {
 
             // Cache the connection
             self.quic_connection = Some(connection.clone());
+            if self.last_quic_refresh.is_none() {
+                self.last_quic_refresh = Some(std::time::Instant::now());
+            }
 
             let (send, recv) = connection.open_bi().await.map_err(|e| {
                 MirageError::connection_failed(format!("Failed to open QUIC stream: {}", e))
