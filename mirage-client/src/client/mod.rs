@@ -272,6 +272,27 @@ impl MirageClient {
             connector_builder.set_verify(SslVerifyMode::NONE);
         } else {
             connector_builder.set_verify(SslVerifyMode::PEER);
+
+            // Load system root certificates (for macOS/Windows/Linux compatibility)
+            // BoringSSL doesn't load macOS Keychain certificates by default
+            let native_certs = rustls_native_certs::load_native_certs();
+            if !native_certs.errors.is_empty() {
+                warn!(
+                    "Errors loading native certs: {:?}",
+                    native_certs.errors
+                );
+            }
+            let mut loaded_count = 0;
+            for cert in native_certs.certs {
+                if let Ok(x509) = boring::x509::X509::from_der(&cert) {
+                    if connector_builder.cert_store_mut().add_cert(x509).is_ok() {
+                        loaded_count += 1;
+                    }
+                }
+            }
+            info!("Loaded {} system root certificates", loaded_count);
+
+            // Also load user-specified certificates
             for path in &self.config.authentication.trusted_certificate_paths {
                 connector_builder.set_ca_file(path).map_err(|e| {
                     MirageError::config_error(format!("Failed to load CA file {:?}: {}", path, e))

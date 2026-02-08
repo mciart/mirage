@@ -348,10 +348,12 @@ impl MirageServer {
         let mut acceptor_builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls_server())
             .map_err(|e| MirageError::system(format!("Failed to create SSL acceptor: {e}")))?;
 
-        // Load certificate
+        // Load certificate chain (including intermediate certificates)
+        // IMPORTANT: Use set_certificate_chain_file instead of set_certificate_file
+        // to load the complete chain (server cert + intermediate certs)
         acceptor_builder
-            .set_certificate_file(&self.config.certificate_file, SslFiletype::PEM)
-            .map_err(|e| MirageError::system(format!("Failed to load certificate: {e}")))?;
+            .set_certificate_chain_file(&self.config.certificate_file)
+            .map_err(|e| MirageError::system(format!("Failed to load certificate chain: {e}")))?;
 
         // Load private key
         acceptor_builder

@@ -56,3 +56,6 @@ tokio-boring = { workspace = true }
 ipnet = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
+
+# Native certificate loading (for macOS/Windows system root certs)
+rustls-native-certs = { workspace = true }
