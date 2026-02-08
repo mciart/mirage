@@ -350,6 +350,22 @@ quincy (QUIC)  →  mirage (TCP/TLS over BoringSSL)
 
 ---
 
+### Phase 3.5: 性能优化 (已完成) ✅
+
+**目标**：工业级性能优化，解决云厂商流量限制
+
+- [x] **多 TCP 连接池**: 1-4 个并行连接，Active-Standby 策略
+- [x] **Session ID**: 8 字节会话标识，支持连接轮换
+- [x] **TCP BBR 拥塞控制**: Linux 自动启用
+- [x] **4MB Socket 缓冲区**: 高突发流量支持
+- [x] **TCP_QUICKACK**: 减少 ACK 延迟
+- [x] **Smart Batching (16KB)**: 智能批量发送减少系统调用
+- [x] **TUN 内存预分配**: 避免热路径堆分配
+
+**产出**：工业级 VPN 性能，达到商业水准
+
+---
+
 ### Phase 4: 生产就绪 (2-3 周) 🟡
 
 **目标**：完善功能，准备发布

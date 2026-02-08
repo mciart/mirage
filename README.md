@@ -29,7 +29,9 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
 - 采用 Length-Prefixed 帧协议，解决 TCP 粘包问题。
 - **加权拟态轮廓**：模拟真实 HTTPS 流量的三态分布（小包/中包/大包），对抗基于机器学习的流量识别。
 - **智能时序抖动 (Jitter)**：随机化发包间隔，对抗时序关联分析。
-- **应用层心跳 (Heartbeat)**：空闲时自动保活，防止因“长连接零吞吐”被识别。
+- **应用层心跳 (Heartbeat)**：空闲时自动保活。
+- **多 TCP 连接池**：1-4 个并行连接，Active-Standby 策略。
+- **TCP 优化 (Linux)**：BBR 拥塞控制、4MB 缓冲区、QUICKACK。
 
 ### 4. 多模共存 (Multi-Mode) 🌗
 服务端单端口 (443) 同时支持 **标准 TLS** 和 **Reality** 等多种协议，客户端拥有极高的连接灵活性：
@@ -249,6 +251,7 @@ users_file = "users"
 - [x] **Phase 1**: 基础 TCP/TLS 隧道开发 (已完成)
 - [x] **Phase 2**: 功能增强与伪装 (Reality 已完成)
 - [x] **Phase 3**: 流量混淆与隐匿 (Padding, Jitter & Heartbeat 已完成)
+- [x] **Phase 3.5**: 性能优化 (连接池, TCP BBR, Smart Batching 已完成)
 - [ ] **Phase 4**: CDN 支持 (WebSocket, gRPC 等)
 
 ---
