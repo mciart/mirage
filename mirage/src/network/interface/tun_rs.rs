@@ -370,7 +370,6 @@ fn reader_task(
     mtu: usize,
 ) -> JoinHandle<Result<()>> {
     use std::io::ErrorKind;
-    use std::iter;
     use tun_rs::{IDEAL_BATCH_SIZE, VIRTIO_NET_HDR_LEN};
 
     let batch_size = (u16::MAX as usize / mtu).min(IDEAL_BATCH_SIZE);
@@ -379,13 +378,18 @@ fn reader_task(
     let mut sizes = vec![0; batch_size];
 
     tokio::spawn(async move {
+        // [优化] 在循环外预分配 Vec，避免热路径重复堆分配
+        let mut bufs = Vec::with_capacity(batch_size);
+
         loop {
-            let mut bufs = iter::repeat_with(|| unsafe {
-                // SAFETY: the data is written to before it resized and read
-                uninitialized_bytes_mut(mtu)
-            })
-            .take(batch_size)
-            .collect::<Vec<_>>();
+            // 复用 Vec 容量，只重新填充 BytesMut
+            bufs.clear();
+            for _ in 0..batch_size {
+                bufs.push(unsafe {
+                    // SAFETY: the data is written to before it resized and read
+                    uninitialized_bytes_mut(mtu)
+                });
+            }
 
             let num_packets = interface
                 .recv_multiple(&mut original_buffer, &mut bufs, &mut sizes, 0)

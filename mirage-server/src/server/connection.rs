@@ -65,7 +65,7 @@ where
                     let mut current_batch_size = data.len();
                     let mut count = 0;
                     let max_batch_count = 16;
-                    let max_batch_bytes = 8192;
+                    let max_batch_bytes = 16384; // 16KB for high throughput
 
                     while count < max_batch_count && current_batch_size < max_batch_bytes {
                         match egress_queue.try_recv() {
