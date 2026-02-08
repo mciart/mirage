@@ -278,7 +278,8 @@ impl ClientRelayer {
                 )));
             }
         } else {
-            // Multiple connections or jitter enabled: use mpsc to distribute
+            // Multiple connections: use Active-Standby strategy
+            // Only one connection is used at a time to avoid packet reordering
             let (packet_tx, mut packet_rx) =
                 tokio::sync::mpsc::channel::<mirage::network::packet::Packet>(4096);
 
@@ -299,23 +300,41 @@ impl ClientRelayer {
                 }
             }));
 
-            // Distribute packets to writers using round-robin
-            let writers_count = writers.len();
+            // Active-Standby: use primary writer, switch on error
             let writers_arc: Arc<tokio::sync::Mutex<Vec<_>>> =
                 Arc::new(tokio::sync::Mutex::new(writers));
-            let round_robin = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let active_idx = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
             tasks.push(tokio::spawn(async move {
                 while let Some(packet) = packet_rx.recv().await {
-                    let idx = round_robin.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                        % writers_count;
+                    let current_idx = active_idx.load(std::sync::atomic::Ordering::Relaxed);
                     let mut writers = writers_arc.lock().await;
-                    if let Some(writer) = writers.get_mut(idx) {
-                        if let Err(e) = writer.send_packet_no_flush(&packet).await {
-                            debug!("Writer {} error: {}", idx, e);
+                    let writers_count = writers.len();
+
+                    // Try current active connection first
+                    let mut success = false;
+                    if let Some(writer) = writers.get_mut(current_idx) {
+                        if writer.send_packet_no_flush(&packet).await.is_ok()
+                            && writer.flush().await.is_ok()
+                        {
+                            success = true;
                         }
-                        if let Err(e) = writer.flush().await {
-                            debug!("Writer {} flush error: {}", idx, e);
+                    }
+
+                    // If failed, try next connection (failover)
+                    if !success && writers_count > 1 {
+                        let next_idx = (current_idx + 1) % writers_count;
+                        info!(
+                            "Connection {} failed, switching to connection {}",
+                            current_idx, next_idx
+                        );
+                        active_idx.store(next_idx, std::sync::atomic::Ordering::Relaxed);
+
+                        if let Some(writer) = writers.get_mut(next_idx) {
+                            if let Err(e) = writer.send_packet_no_flush(&packet).await {
+                                debug!("Failover writer {} error: {}", next_idx, e);
+                            }
+                            let _ = writer.flush().await;
                         }
                     }
                 }
