@@ -181,6 +181,7 @@ pub async fn run_quic_listener(
 
 /// Handles a single QUIC client connection
 /// Copied and adapted from MirageServer::handle_client
+#[allow(clippy::too_many_arguments)]
 async fn handle_quic_client(
     stream: QuicStream,
     remote_addr: SocketAddr,
