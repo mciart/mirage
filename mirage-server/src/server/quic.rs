@@ -125,7 +125,7 @@ pub async fn run_quic_listener(
                         let session_queues = session_queues.clone();
                         let address_pool = address_pool.clone();
                         let obfuscation = obfuscation.clone();
-                        let remote_addr = remote_addr;
+
 
                         tokio::spawn(async move {
                             match handle_quic_client(
