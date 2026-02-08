@@ -277,10 +277,7 @@ impl MirageClient {
             // BoringSSL doesn't load macOS Keychain certificates by default
             let native_certs = rustls_native_certs::load_native_certs();
             if !native_certs.errors.is_empty() {
-                warn!(
-                    "Errors loading native certs: {:?}",
-                    native_certs.errors
-                );
+                warn!("Errors loading native certs: {:?}", native_certs.errors);
             }
             let mut loaded_count = 0;
             for cert in native_certs.certs {
