@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Manages a user session with multiple connections, performing
 /// load-balancing for downlink (server -> client) traffic.
@@ -80,7 +80,7 @@ impl SessionDispatcher {
                           if self.connections.is_empty() {
                               robin_idx = 0;
                           } else {
-                              robin_idx = robin_idx % self.connections.len();
+                              robin_idx %= self.connections.len();
                           }
                      }
                 }
