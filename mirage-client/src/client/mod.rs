@@ -261,6 +261,12 @@ impl MirageClient {
         let mut connector_builder = SslConnector::builder(SslMethod::tls_client())
             .map_err(|e| MirageError::system(format!("Failed to create SSL connector: {e}")))?;
 
+        // Log the insecure setting status for debugging
+        debug!(
+            "Certificate verification config: insecure={}",
+            self.config.connection.insecure
+        );
+
         if self.config.connection.insecure {
             warn!("TLS certificate verification DISABLED - this is unsafe!");
             connector_builder.set_verify(SslVerifyMode::NONE);
@@ -285,6 +291,11 @@ impl MirageClient {
         }
 
         let sni = if protocol == "reality" {
+            // Reality mode: server uses its own certificate, not the real target's
+            // So we must disable certificate verification for Reality connections
+            connector_builder.set_verify(SslVerifyMode::NONE);
+            debug!("Reality mode: Certificate verification disabled (expected)");
+
             let sni = &self.config.reality.target_sni;
             debug!("Using SNI (Reality): {}", sni);
 
@@ -318,9 +329,17 @@ impl MirageClient {
         };
 
         let connector = connector_builder.build();
-        let ssl_config = connector
+        let mut ssl_config = connector
             .configure()
             .map_err(|e| MirageError::system(format!("Failed to configure SSL: {e}")))?;
+
+        // For Reality mode or insecure mode, disable hostname verification as well
+        // SslVerifyMode::NONE only disables certificate chain validation,
+        // but hostname verification is a separate check that must also be disabled.
+        if protocol == "reality" || self.config.connection.insecure {
+            ssl_config.set_verify_hostname(false);
+            debug!("Hostname verification disabled");
+        }
 
         let tls_stream = tokio_boring::connect(ssl_config, &sni, tcp_stream)
             .await

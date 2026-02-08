@@ -34,7 +34,7 @@ parallel_connections = 1
 warmup_connections = false
 # 仅供测试：禁用 TLS 证书验证（适用于自签名证书）
 # 警告：不安全！
-insecure = true
+insecure = false
 
 [connection.obfuscation]
 # 是否启用流量混淆 (默认: true)
