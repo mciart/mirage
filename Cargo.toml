@@ -27,6 +27,7 @@ tokio-boring = "4"
 # Interfaces and networking
 tun-rs = { version = "=2.7.3", features = ["async_tokio"] } # pinned audited version
 socket2 = { version = "^0.6.0", features = ["all"] }
+libc = "^0.2"
 bytes = "^1.4"
 ipnet = { version = "^2.7", features = ["serde"] }
 

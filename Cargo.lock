@@ -2565,6 +2565,7 @@ dependencies = [
  "futures",
  "ipnet",
  "jemallocator",
+ "libc",
  "nu-ansi-term",
  "rand 0.8.5",
  "serde",
