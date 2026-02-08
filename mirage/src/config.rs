@@ -57,6 +57,12 @@ pub struct ServerConfig {
     /// NAT configuration
     #[serde(default)]
     pub nat: NatConfig,
+    /// Whether to enable QUIC listener (default = false)
+    #[serde(default = "default_false_fn")]
+    pub quic_enabled: bool,
+    /// The port to bind the QUIC tunnel to (default = 443)
+    #[serde(default = "default_bind_port")]
+    pub quic_bind_port: u16,
 }
 
 /// Mirage server-side authentication configuration
@@ -133,7 +139,7 @@ pub struct ConnectionConfig {
     #[serde(default = "default_false_fn")]
     pub insecure: bool,
     /// List of enabled protocols in order of priority (default = ["reality"])
-    /// Options: "reality", "tcp-tls"
+    /// Options: "reality", "tcp-tls", "quic"
     #[serde(default = "default_enabled_protocols")]
     pub enabled_protocols: Vec<String>,
     /// Number of parallel TCP connections (1-4, default = 1)

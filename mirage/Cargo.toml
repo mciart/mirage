@@ -27,6 +27,10 @@ debug = [] # 为了稳妥，加上 debug
 boring = { workspace = true }
 tokio-boring = { workspace = true }
 
+# QUIC support
+quinn = { workspace = true, features = ["runtime-tokio", "rustls-ring"] }
+rustls = { workspace = true, features = ["ring", "std"] }
+
 # Interfaces and networking
 tun-rs = { workspace = true }
 socket2 = { workspace = true }

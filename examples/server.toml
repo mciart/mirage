@@ -9,6 +9,9 @@ bind_address = "::0"
 # IPv4: bind_address = "0.0.0.0"
 # 隧道绑定的端口
 bind_port = 443
+# QUIC 监听端口 (UDP)
+quic_enabled = true
+quic_bind_port = 443
 # 隧道端点地址和分配给客户端的地址池基准地址
 tunnel_network = "10.11.12.1/24"
 # IPv6 隧道网络 (可选，启用双栈)

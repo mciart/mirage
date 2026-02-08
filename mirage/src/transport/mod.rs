@@ -5,6 +5,8 @@
 
 pub mod framed;
 pub mod jitter;
+pub mod quic;
 pub mod tcp;
 
 pub use framed::FramedStream;
+pub use quic::QuicStream;

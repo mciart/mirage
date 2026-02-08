@@ -17,12 +17,23 @@ use mirage::network::route::{add_routes, get_gateway_for, ExclusionRouteGuard, R
 use mirage::{MirageError, Result};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
-use tokio_boring::SslStream; // [新增]
+use tokio_boring::SslStream;
 
 use ipnet::IpNet;
 use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::pin::Pin;
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite}; // [新增] // [新增]
+
+// Type alias to abstract over TCP/TLS and QUIC streams
+// wrapper trait
+pub trait TransportStreamTrait: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized> TransportStreamTrait for T {}
+
+pub type TransportStream = Box<dyn TransportStreamTrait>;
+
+use mirage::transport::quic::QuicStream;
 
 use crate::client::relayer::ClientRelayer;
 use tracing::{debug, info, warn};
@@ -55,7 +66,8 @@ impl MirageClient {
         F: Future<Output = ()> + Send + 'static,
     {
         // Connect to server via TCP/TLS
-        let (tls_stream, remote_addr) = self.connect_to_server().await?;
+        let (tls_stream, remote_addr): (TransportStream, SocketAddr) =
+            self.connect_to_server().await?;
 
         // Anti-Loop: Add exclusion route for the server IP via the gateway used to reach it
         let server_ip = remote_addr.ip();
@@ -152,7 +164,7 @@ impl MirageClient {
             session.client_address_v6,
             self.config.connection.mtu,
             Some(session.server_address.addr()),
-            session.server_address_v6.map(|n| n.addr()),
+            session.server_address_v6.map(|n: ipnet::IpNet| n.addr()),
             self.config.network.interface_name.clone(),
             Some(self.config.network.routes.clone()),
             Some(self.config.network.dns_servers.clone()),
@@ -192,7 +204,7 @@ impl MirageClient {
         self.server_address
     }
 
-    async fn connect_to_server(&self) -> Result<(SslStream<TcpStream>, SocketAddr)> {
+    async fn connect_to_server(&self) -> Result<(TransportStream, SocketAddr)> {
         let connection_string = if self.config.connection_string.contains(':') {
             self.config.connection_string.clone()
         } else {
@@ -245,8 +257,177 @@ impl MirageClient {
         server_addr: SocketAddr,
         protocol: &str,
         connection_string: &str,
-    ) -> Result<SslStream<TcpStream>> {
+    ) -> Result<TransportStream> {
         info!("Connecting: {} ({})", connection_string, protocol);
+
+        if protocol == "quic" {
+            // QUIC Connection
+            let mut roots = rustls::RootCertStore::empty();
+
+            // Load system root certificates
+            let native_certs = rustls_native_certs::load_native_certs();
+            if !native_certs.errors.is_empty() {
+                warn!(
+                    "Errors loading native certs for QUIC: {:?}",
+                    native_certs.errors
+                );
+            }
+            let mut loaded_count = 0;
+            for cert in native_certs.certs {
+                if roots.add(cert).is_ok() {
+                    loaded_count += 1;
+                }
+            }
+            debug!("Loaded {} system root certificates for QUIC", loaded_count);
+
+            // Load user-specified certificates
+            for path in &self.config.authentication.trusted_certificate_paths {
+                let file = std::fs::File::open(path).map_err(|e| {
+                    MirageError::config_error(format!("Failed to open CA file {:?}: {}", path, e))
+                })?;
+                let mut reader = std::io::BufReader::new(file);
+                for cert in rustls_pemfile::certs(&mut reader) {
+                    let cert = cert.map_err(|e| {
+                        MirageError::config_error(format!("Failed to parse CA cert: {}", e))
+                    })?;
+                    roots.add(cert).map_err(|e| {
+                        MirageError::config_error(format!("Failed to add CA cert: {}", e))
+                    })?;
+                }
+            }
+
+            for pem in &self.config.authentication.trusted_certificates {
+                let mut reader = std::io::Cursor::new(pem.as_bytes());
+                for cert in rustls_pemfile::certs(&mut reader) {
+                    let cert = cert.map_err(|e| {
+                        MirageError::config_error(format!("Failed to parse CA cert: {}", e))
+                    })?;
+                    roots.add(cert).map_err(|e| {
+                        MirageError::config_error(format!("Failed to add CA cert: {}", e))
+                    })?;
+                }
+            }
+
+            let mut client_crypto = rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+
+            // ALPN
+            client_crypto.alpn_protocols = mirage::constants::TLS_ALPN_PROTOCOLS
+                .iter()
+                .map(|p| p.to_vec())
+                .collect();
+
+            // Insecure mode
+            if self.config.connection.insecure {
+                warn!("QUIC certificate verification DISABLED - this is unsafe!");
+                #[derive(Debug)]
+                struct NoVerifier;
+                impl rustls::client::danger::ServerCertVerifier for NoVerifier {
+                    fn verify_server_cert(
+                        &self,
+                        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+                        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+                        _server_name: &rustls::pki_types::ServerName<'_>,
+                        _ocsp_response: &[u8],
+                        _now: rustls::pki_types::UnixTime,
+                    ) -> std::result::Result<
+                        rustls::client::danger::ServerCertVerified,
+                        rustls::Error,
+                    > {
+                        Ok(rustls::client::danger::ServerCertVerified::assertion())
+                    }
+                    fn verify_tls12_signature(
+                        &self,
+                        _message: &[u8],
+                        _cert: &rustls::pki_types::CertificateDer<'_>,
+                        _dss: &rustls::DigitallySignedStruct,
+                    ) -> std::result::Result<
+                        rustls::client::danger::HandshakeSignatureValid,
+                        rustls::Error,
+                    > {
+                        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+                    }
+                    fn verify_tls13_signature(
+                        &self,
+                        _message: &[u8],
+                        _cert: &rustls::pki_types::CertificateDer<'_>,
+                        _dss: &rustls::DigitallySignedStruct,
+                    ) -> std::result::Result<
+                        rustls::client::danger::HandshakeSignatureValid,
+                        rustls::Error,
+                    > {
+                        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+                    }
+                    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+                        vec![
+                            rustls::SignatureScheme::RSA_PSS_SHA256,
+                            rustls::SignatureScheme::RSA_PSS_SHA384,
+                            rustls::SignatureScheme::RSA_PSS_SHA512,
+                            rustls::SignatureScheme::ED25519,
+                        ]
+                    }
+                }
+                client_crypto
+                    .dangerous()
+                    .set_certificate_verifier(std::sync::Arc::new(NoVerifier));
+            }
+
+            let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
+                .map_err(|e| {
+                    MirageError::config_error(format!("Failed to create QUIC client crypto: {}", e))
+                })?;
+            let mut client_config = quinn::ClientConfig::new(std::sync::Arc::new(client_crypto));
+            let mut transport_config = quinn::TransportConfig::default();
+            transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(
+                self.config.connection.keep_alive_interval_s,
+            )));
+            transport_config.max_idle_timeout(Some(
+                quinn::IdleTimeout::try_from(std::time::Duration::from_secs(
+                    self.config.connection.connection_timeout_s,
+                ))
+                .unwrap(),
+            ));
+            client_config.transport_config(std::sync::Arc::new(transport_config));
+
+            // Bind to 0.0.0.0:0 (any port)
+            let bind_addr = if server_addr.is_ipv6() {
+                "[::]:0".parse().unwrap()
+            } else {
+                "0.0.0.0:0".parse().unwrap()
+            };
+
+            let mut endpoint = quinn::Endpoint::client(bind_addr).map_err(|e| {
+                MirageError::system(format!("Failed to bind QUIC client socket: {}", e))
+            })?;
+            endpoint.set_default_client_config(client_config);
+
+            let host = connection_string.split(':').next().unwrap_or("localhost");
+
+            info!("Connecting via QUIC to {} (SNI: {})", server_addr, host);
+
+            let connection = endpoint
+                .connect(server_addr, host)
+                .map_err(|e| {
+                    MirageError::connection_failed(format!(
+                        "Failed to initiate QUIC connection: {}",
+                        e
+                    ))
+                })?
+                .await
+                .map_err(|e| {
+                    MirageError::connection_failed(format!("QUIC connection failed: {}", e))
+                })?;
+
+            info!("QUIC connection established with {}", server_addr);
+
+            let (send, recv) = connection.open_bi().await.map_err(|e| {
+                MirageError::connection_failed(format!("Failed to open QUIC stream: {}", e))
+            })?;
+
+            let stream = QuicStream::new(send, recv);
+            return Ok(Box::new(stream));
+        }
 
         let tcp_stream = TcpStream::connect(server_addr).await?;
         tcp_stream.set_nodelay(self.config.connection.tcp_nodelay)?;
@@ -368,6 +549,6 @@ impl MirageClient {
             connection_string, protocol
         );
 
-        Ok(tls_stream)
+        Ok(Box::new(tls_stream))
     }
 }

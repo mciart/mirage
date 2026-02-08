@@ -7,6 +7,7 @@ pub mod address_pool;
 mod connection;
 mod dispatcher;
 mod nat;
+mod quic;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -116,6 +117,17 @@ impl MirageServer {
                 self.config.isolate_clients,
             )),
         ]);
+
+        if self.config.quic_enabled {
+            tasks.push(tokio::spawn(quic::run_quic_listener(
+                self.config.clone(),
+                auth_server.clone(),
+                sender.clone(),
+                self.connection_queues.clone(),
+                self.session_queues.clone(),
+                self.address_pool.clone(),
+            )));
+        }
 
         let handler_task = self.handle_connections(auth_server, sender);
 
