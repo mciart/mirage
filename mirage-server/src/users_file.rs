@@ -79,7 +79,7 @@ impl ServerAuthenticator for UsersFileServerAuthenticator {
 
         let client_address_v4 = client_address_v4.ok_or(AuthError::StoreUnavailable)?;
 
-        Ok((payload.username, client_address_v4, client_address_v6))
+        Ok((payload.username.clone(), client_address_v4, client_address_v6))
     }
 }
 

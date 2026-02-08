@@ -60,3 +60,6 @@ tokio-boring = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
+
+# Security hardening
+subtle = { workspace = true }

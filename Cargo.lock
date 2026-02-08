@@ -2581,6 +2581,7 @@ dependencies = [
  "windows 0.52.0",
  "wintun-bindings",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -2645,6 +2646,7 @@ dependencies = [
  "rpassword",
  "serde",
  "serde_json",
+ "subtle",
  "tokio",
  "tokio-boring",
  "tracing",

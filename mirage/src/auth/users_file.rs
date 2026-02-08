@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{
     auth::ClientAuthenticator, config::ClientAuthenticationConfig, error::AuthError, Result,
@@ -15,7 +16,10 @@ use crate::{
 ///
 /// This structure is used to transmit credentials from the client
 /// to the server during the authentication handshake.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// The password field is automatically zeroed on drop to prevent
+/// sensitive data from remaining in memory.
+#[derive(Clone, Debug, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct UsersFilePayload {
     /// The username for authentication
     pub username: String,
@@ -27,6 +31,9 @@ pub struct UsersFilePayload {
 ///
 /// Generates authentication payloads containing username and password
 /// credentials for transmission to the server.
+///
+/// Sensitive credentials are automatically zeroed on drop.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct UsersFileClientAuthenticator {
     username: String,
     password: String,

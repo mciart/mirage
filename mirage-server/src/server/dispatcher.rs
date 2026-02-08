@@ -1,6 +1,7 @@
 use mirage::network::tls_detect::{parse_client_hello, ClientHelloInfo};
 use mirage::Result;
 use mirage::{config::ServerConfig, MirageError};
+use subtle::ConstantTimeEq;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
@@ -95,11 +96,14 @@ impl TlsDispatcher {
                 // SNI matches the disguised domain!
 
                 if let Some(alpns) = &info.alpn {
-                    // Check if any ALPN string is in our valid_tokens list
+                    // Check if any ALPN string matches a valid token using constant-time comparison
+                    // This prevents timing side-channel attacks that could leak valid tokens
                     for proto in alpns {
-                        if self.valid_tokens.contains(proto) {
-                            debug!("Reality Match: SNI={} ALPN={} -> VPN", sni, proto);
-                            return Ok(DispatchResult::Accept(stream));
+                        for valid_token in &self.valid_tokens {
+                            if proto.as_bytes().ct_eq(valid_token.as_bytes()).into() {
+                                debug!("Reality Match: SNI={} ALPN={} -> VPN", sni, proto);
+                                return Ok(DispatchResult::Accept(stream));
+                            }
                         }
                     }
                 }
