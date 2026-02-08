@@ -237,6 +237,7 @@ impl MirageServer {
     }
 
     /// Handles a single client connection: auth + packet relay.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_client<S>(
         stream: SslStream<S>,
         remote_addr: SocketAddr,
