@@ -15,17 +15,17 @@
 
 基于最新的[理论分析](./docs/mirage_feasibility_analysis.md)，Mirage 具备以下独有优势：
 
-### 1. 完美的 TLS 指纹伪装 🎭
+### 1. 完美的 TLS 指纹伪装
 Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chrome 同源的 **BoringSSL** 库。
 - **原生 Chrome 指纹**：支持 X25519Kyber768 (后量子加密)、GREASE 扩展、TLS 扩展随机排列。
 - **抗主动探测**：服务端无法通过 TLS 握手特征识别，完美伪装成正常的 HTTPS 流量。
 
-### 2. Reality 协议集成 🌐
+### 2. Reality 协议集成
 服务端不再仅仅是一个 VPN 端点，而是一个智能的 SNI 反向代理：
 - **验证通过**：进入 VPN 隧道模式，高速传输数据。
 - **验证失败**：无缝转发到真实的目标网站（如 `www.microsoft.com`），探测者只能看到合法的网站内容。
 
-### 3. 高性能传输架构 🚀
+### 3. 高性能传输架构
 - **TCP 模式**:
   - Length-Prefixed 帧协议，解决 TCP 粘包问题。
   - **TCP 优化 (Linux)**: BBR 拥塞控制、TCP_QUICKACK、Smart Batching。
@@ -35,17 +35,17 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
   - **0-RTT**: 连接复用与快速握手。
   - **端口跳跃 (Port Hopping)**: 指定时间间隔自动轮换 UDP 端口，对抗 ISP 针对长连接的 QoS 或阻断。
 
-### 4. 流量混淆与隐匿 🕵️
+### 4. 流量混淆与隐匿
 - **加权拟态轮廓**: 模拟真实 HTTPS 流量的三态分布（小包/中包/大包）。
 - **智能时序抖动 (Jitter)**: 随机化发包间隔，对抗时序关联分析。
 - **应用层心跳 (Heartbeat)**: 空闲时自动保活。
 
-### 5. 多模共存 (Multi-Mode) 🌗
+### 5. 多模共存 (Multi-Mode)
 服务端单端口 (443) 同时支持 **标准 TLS**、**Reality** 和 **QUIC** 等多种协议，客户端拥有极高的连接灵活性：
 - **自定义优先级**: 客户端可通过配置文件定义 `enabled_protocols` 列表（例如 `["quic", "reality", "tcp-tls"]`）。
 - **智能回退**: 如果首选协议连接失败，自动尝试下一个协议。
 
-### 6. 全双工双栈聚合 (Full-Duplex Dual Stack Aggregation) 🌐
+### 6. 全双工双栈聚合 (Full-Duplex Dual Stack Aggregation)
 - **双向带宽聚合**: 客户端和服务端均实现了多路径分发 (Session Dispatcher)。
 - **IPv4/IPv6 并发**: 同时利用 v4 和 v6 链路进行传输，互为备份且聚合带宽。
 - **协议级多路复用**: 自适应 TCP 和 QUIC 的连接特性，同时利用 TCP 的稳定性和 QUIC 的低延迟。
