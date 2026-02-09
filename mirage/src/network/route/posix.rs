@@ -44,8 +44,10 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
             }
         }
 
-        // 强制绑定接口
-        cmd.arg("dev").arg(interface_name);
+        // 强制绑定接口 (仅当接口名有效且非占位符时)
+        if interface_name != "auto" && !interface_name.is_empty() {
+            cmd.arg("dev").arg(interface_name);
+        }
 
         let output = cmd.output().map_err(|e| RouteError::PlatformError {
             message: format!("Failed to execute ip route: {}", e),
