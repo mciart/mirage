@@ -20,13 +20,13 @@ pub fn add_dns_servers(dns_servers: &[IpAddr], interface_name: &str) -> Result<(
     // Attempt 1: Try `resolvconf` (Debian/Ubuntu legacy)
     if let Err(e) = add_dns_via_resolvconf(dns_servers, interface_name) {
         tracing::warn!("Failed to configure DNS via resolvconf: {}", e);
-        
+
         // Attempt 2: Try `resolvectl` (systemd-resolved)
         if let Err(e) = add_dns_via_resolvectl(dns_servers, interface_name) {
-             tracing::warn!("Failed to configure DNS via resolvectl: {}", e);
-             tracing::error!("Could not configure DNS. Please manually set DNS if needed.");
-             // We returning Ok here to avoid crashing the client if DNS setup fails.
-             // Connectivity might still work via IP.
+            tracing::warn!("Failed to configure DNS via resolvectl: {}", e);
+            tracing::error!("Could not configure DNS. Please manually set DNS if needed.");
+            // We returning Ok here to avoid crashing the client if DNS setup fails.
+            // Connectivity might still work via IP.
         }
     }
 
@@ -67,9 +67,10 @@ fn add_dns_via_resolvconf(dns_servers: &[IpAddr], interface_name: &str) -> Resul
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DnsError::PlatformError{
-            message: format!("resolvconf failed: {}", stderr)
-        }.into());
+        return Err(DnsError::PlatformError {
+            message: format!("resolvconf failed: {}", stderr),
+        }
+        .into());
     }
 
     Ok(())
@@ -85,29 +86,30 @@ fn add_dns_via_resolvectl(dns_servers: &[IpAddr], interface_name: &str) -> Resul
 
     let output = run_command("resolvectl", args)
         .map_err(|e| DnsError::PlatformError {
-             message: format!("failed to execute resolvectl: {}", e)
+            message: format!("failed to execute resolvectl: {}", e),
         })?
         .wait_with_output()
         .map_err(|e| DnsError::PlatformError {
-            message: format!("failed to wait for resolvectl: {}", e)
+            message: format!("failed to wait for resolvectl: {}", e),
         })?;
 
     if !output.status.success() {
-         let stderr = String::from_utf8_lossy(&output.stderr);
-         return Err(DnsError::PlatformError{
-             message: format!("resolvectl failed: {}", stderr)
-         }.into());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DnsError::PlatformError {
+            message: format!("resolvectl failed: {}", stderr),
+        }
+        .into());
     }
-    
-    // Also set the domain if needed, but for now just setting DNS is enough 
+
+    // Also set the domain if needed, but for now just setting DNS is enough
     // to start routing queries.
-    
+
     Ok(())
 }
 
 /// Deletes all DNS servers from the given interface.
 ///
-/// No-op on Linux/FreeBSD as interface destruction handles it, 
+/// No-op on Linux/FreeBSD as interface destruction handles it,
 /// usually.
 pub fn delete_dns_servers() -> Result<()> {
     // This is a no-op on Linux and FreeBSD as the interface is deleted when the process exits
