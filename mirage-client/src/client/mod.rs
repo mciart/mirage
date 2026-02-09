@@ -147,6 +147,30 @@ impl MirageClient {
                             });
                         }
                     }
+                    RouteTarget::GatewayOnInterface(gw, iface) => {
+                        info!(
+                            "Detected gateway for {} {}: {} on interface {}. Adding exclusion route.",
+                            description, network, gw, iface
+                        );
+
+                        // Use the discovered interface explicitly
+                        if let Err(e) = add_routes(&[network], &target, iface) {
+                            warn!(
+                                "Failed to add exclusion route for {} {} on {} (loop risk): {}",
+                                description, network, iface, e
+                            );
+                        } else {
+                            info!(
+                                "Successfully added exclusion route for {} {} on {}",
+                                description, network, iface
+                            );
+                            _route_guards.push(ExclusionRouteGuard {
+                                network,
+                                target: target.clone(),
+                                interface: iface.clone(),
+                            });
+                        }
+                    }
                     RouteTarget::Interface(iface) => {
                         info!(
                             "Detected interface for {} {}: {}. Adding exclusion route directly.",

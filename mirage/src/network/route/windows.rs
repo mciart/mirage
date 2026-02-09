@@ -92,6 +92,23 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
                 }
             }
         }
+        RouteTarget::GatewayOnInterface(gw_ip, iface_name) => {
+            route_row.NextHop = ip_to_sockaddr(*gw_ip);
+
+            // Resolve the provided interface name to an index
+            match get_interface_index_by_name(iface_name) {
+                Ok(index) => {
+                    debug!("Resolved interface '{}' to index {}", iface_name, index);
+                    route_row.InterfaceIndex = index;
+                }
+                Err(e) => {
+                    return Err(RouteError::PlatformError {
+                        message: format!("Interface '{}' not found in system: {}", iface_name, e),
+                    }
+                    .into());
+                }
+            }
+        }
         RouteTarget::Interface(iface_name_override) => {
             route_row.NextHop = ip_to_sockaddr(match network {
                 IpNet::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -222,6 +239,11 @@ pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
         let alias = get_interface_alias_by_luid(&best_route.InterfaceLuid)
             .unwrap_or_else(|_| "auto".to_string());
         return Ok(RouteTarget::Interface(alias));
+    }
+
+    // Try to resolve interface alias for better precision
+    if let Ok(alias) = get_interface_alias_by_luid(&best_route.InterfaceLuid) {
+        return Ok(RouteTarget::GatewayOnInterface(next_hop, alias));
     }
 
     Ok(RouteTarget::Gateway(next_hop))

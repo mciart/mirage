@@ -4,6 +4,7 @@ use std::net::IpAddr;
 pub enum RouteTarget {
     Gateway(IpAddr),
     Interface(String),
+    GatewayOnInterface(IpAddr, String),
 }
 
 #[cfg(unix)]
