@@ -11,11 +11,6 @@ const RESOLVCONF_COMMAND: &str = "resolvconf";
 /// ### Arguments
 /// - `dns_servers` - the DNS servers to be added
 /// - `interface_name` - the name of the interface to add the DNS servers to
-/// Adds a list of DNS servers to the given interface.
-///
-/// ### Arguments
-/// - `dns_servers` - the DNS servers to be added
-/// - `interface_name` - the name of the interface to add the DNS servers to
 pub fn add_dns_servers(dns_servers: &[IpAddr], interface_name: &str) -> Result<()> {
     // Attempt 1: Try `resolvconf` (Debian/Ubuntu legacy)
     if let Err(e) = add_dns_via_resolvconf(dns_servers, interface_name) {
