@@ -247,6 +247,10 @@ pub struct NetworkConfig {
     /// Routes/networks to be routed through the tunnel
     #[serde(default = "default_routes")]
     pub routes: Vec<IpNet>,
+    /// Routes/networks to be explicitly excluded from the tunnel (routed via default gateway)
+    /// Useful for bypassing local networks (e.g. 192.168.0.0/16) when using 0.0.0.0/0
+    #[serde(default = "default_routes")]
+    pub excluded_routes: Vec<IpNet>,
     /// DNS servers to use for the tunnel
     #[serde(default = "default_dns_servers")]
     pub dns_servers: Vec<IpAddr>,
@@ -336,6 +340,7 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             routes: default_routes(),
+            excluded_routes: default_routes(),
             dns_servers: default_dns_servers(),
             interface_name: None,
         }

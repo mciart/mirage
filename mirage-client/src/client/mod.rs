@@ -88,62 +88,95 @@ impl MirageClient {
         let (tls_stream, remote_addr, protocol): (TransportStream, SocketAddr, String) =
             self.connect_to_specific_address(primary_addr).await?;
 
-        // Anti-Loop: Add exclusion route for the server IP via the gateway used to reach it
+        // Anti-Loop & Excluded Routes: Add exclusion routes via the gateway used to reach them
         let server_ip = remote_addr.ip();
-        let mut _route_guard: Option<ExclusionRouteGuard> = None;
+        let mut _route_guards: Vec<ExclusionRouteGuard> = Vec::new();
         let default_interface_placeholder = "auto";
 
-        if let Ok(target) = get_gateway_for(server_ip) {
-            match &target {
-                RouteTarget::Gateway(gw) => {
-                    info!(
-                        "Detected gateway for server {}: {}. Adding exclusion route.",
-                        server_ip, gw
-                    );
-                    let mask = if server_ip.is_ipv4() { 32 } else { 128 };
-                    if let Ok(server_net) = IpNet::new(server_ip, mask) {
+        // 1. Add exclusion route for Server IP
+        // Check if we actually need an exclusion route for server
+        let needs_server_exclusion = self
+            .config
+            .network
+            .routes
+            .iter()
+            .any(|route| route.contains(&server_ip));
+
+        // Valid targets for exclusion routes
+        let mut targets_to_exclude = Vec::new();
+
+        if needs_server_exclusion {
+            let mask = if server_ip.is_ipv4() { 32 } else { 128 };
+            if let Ok(server_net) = IpNet::new(server_ip, mask) {
+                targets_to_exclude.push((server_net, "Server IP"));
+            }
+        }
+
+        // 2. Add user-configured excluded routes
+        for excluded_route in &self.config.network.excluded_routes {
+            targets_to_exclude.push((*excluded_route, "Excluded Route"));
+        }
+
+        for (network, description) in targets_to_exclude {
+            // We use the network address to find the best route
+            // For a network like 192.168.1.0/24, using the network address usually works to find the interface/gateway
+            if let Ok(target) = get_gateway_for(network.addr()) {
+                match &target {
+                    RouteTarget::Gateway(gw) => {
+                        info!(
+                            "Detected gateway for {} {}: {}. Adding exclusion route.",
+                            description, network, gw
+                        );
+
                         if let Err(e) =
-                            add_routes(&[server_net], &target, default_interface_placeholder)
+                            add_routes(&[network], &target, default_interface_placeholder)
                         {
                             warn!(
-                                "Failed to add exclusion route for server (loop risk): {}",
-                                e
+                                "Failed to add exclusion route for {} {} (loop risk): {}",
+                                description, network, e
                             );
                         } else {
-                            info!("Successfully added exclusion route for server");
-                            _route_guard = Some(ExclusionRouteGuard {
-                                network: server_net,
+                            info!(
+                                "Successfully added exclusion route for {} {}",
+                                description, network
+                            );
+                            _route_guards.push(ExclusionRouteGuard {
+                                network,
                                 target: target.clone(),
                                 interface: default_interface_placeholder.to_string(),
                             });
                         }
                     }
-                }
-                RouteTarget::Interface(iface) => {
-                    info!(
-                        "Detected interface for server {}: {}. Adding exclusion route directly.",
-                        server_ip, iface
-                    );
-                    let mask = if server_ip.is_ipv4() { 32 } else { 128 };
-                    if let Ok(server_net) = IpNet::new(server_ip, mask) {
-                        if let Err(e) = add_routes(&[server_net], &target, iface) {
+                    RouteTarget::Interface(iface) => {
+                        info!(
+                            "Detected interface for {} {}: {}. Adding exclusion route directly.",
+                            description, network, iface
+                        );
+
+                        if let Err(e) = add_routes(&[network], &target, iface) {
                             warn!(
-                                "Failed to add exclusion route on interface {}: {}",
-                                iface, e
+                                "Failed to add exclusion route on interface {} for {} {}: {}",
+                                iface, description, network, e
                             );
                         } else {
-                            info!("Successfully added exclusion route on interface {}", iface);
-                            _route_guard = Some(ExclusionRouteGuard {
-                                network: server_net,
+                            info!(
+                                "Successfully added exclusion route on interface {} for {} {}",
+                                iface, description, network
+                            );
+                            _route_guards.push(ExclusionRouteGuard {
+                                network,
                                 target: target.clone(),
                                 interface: iface.clone(),
                             });
                         }
                     }
                 }
+            } else {
+                warn!(
+                    "Could not detect gateway for {} {}. Skipping exclusion route.",
+                    description, network
+                );
             }
-        } else {
-            warn!("Could not detect gateway for {}. If using global routing, you might encounter specific routing loops.", server_ip);
         }
 
         // Split stream for auth
