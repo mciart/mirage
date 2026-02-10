@@ -407,6 +407,10 @@ impl MirageClient {
         self.server_address
     }
 
+    pub fn config(&self) -> &ClientConfig {
+        &self.config
+    }
+
     /// Resolves the server address, potentially returning multiple IP addresses (IPv4 and IPv6)
     /// if Dual Stack is enabled.
     async fn resolve_server_address(&self) -> Result<Vec<SocketAddr>> {

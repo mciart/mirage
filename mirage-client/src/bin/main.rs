@@ -38,10 +38,37 @@ async fn run_client() -> Result<()> {
 
     let mut client = MirageClient::new(config);
 
-    // [修改] 传入 shutdown_signal 和 None (connection_event_tx)
-    client
-        .start::<TunRsInterface, _>(Some(shutdown_signal()), None)
-        .await
+    // Reconnection Loop
+    loop {
+        // [修改] 传入 shutdown_signal 和 None (connection_event_tx)
+        match client
+            .start::<TunRsInterface, _>(Some(shutdown_signal()), None)
+            .await
+        {
+            Ok(_) => {
+                info!("Client stopped gracefully.");
+                break Ok(());
+            }
+            Err(e) => {
+                error!("Connection failed: {}", e);
+                let retry_interval =
+                    std::time::Duration::from_secs(client.config().connection.retry_interval_s);
+                info!("Reconnecting in {:?}...", retry_interval);
+
+                // Wait for retry interval, but allow Ctrl+C to interrupt
+                tokio::select! {
+                    _ = tokio::time::sleep(retry_interval) => {
+                        info!("Retrying connection...");
+                        continue;
+                    }
+                    _ = shutdown_signal() => {
+                        info!("Received shutdown signal during wait, exiting.");
+                        break Ok(());
+                    }
+                }
+            }
+        }
+    }
 }
 
 async fn shutdown_signal() {

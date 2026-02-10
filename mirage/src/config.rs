@@ -130,6 +130,9 @@ pub struct ConnectionConfig {
     /// The time after which a connection is considered timed out in seconds (default = 30)
     #[serde(default = "default_timeout_s")]
     pub connection_timeout_s: u64,
+    /// The time to wait before retrying a failed connection in seconds (default = 5)
+    #[serde(default = "default_retry_interval_s")]
+    pub retry_interval_s: u64,
     /// Keep alive interval for connections in seconds (default = 25)
     #[serde(default = "default_keep_alive_interval_s")]
     pub keep_alive_interval_s: u64,
@@ -323,6 +326,7 @@ impl Default for ConnectionConfig {
             mtu: default_mtu(),
             outer_mtu: default_outer_mtu(),
             connection_timeout_s: default_timeout_s(),
+            retry_interval_s: default_retry_interval_s(),
             keep_alive_interval_s: default_keep_alive_interval_s(),
             send_buffer_size: default_buffer_size(),
             recv_buffer_size: default_buffer_size(),
@@ -393,6 +397,10 @@ fn default_timeout_s() -> u64 {
 
 fn default_keep_alive_interval_s() -> u64 {
     25
+}
+
+fn default_retry_interval_s() -> u64 {
+    5
 }
 
 fn default_auth_type() -> AuthType {

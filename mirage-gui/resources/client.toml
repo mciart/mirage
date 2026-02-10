@@ -1,31 +1,120 @@
-# The address and port the Quincy server is available at
-connection_string = "<your_server>:55555"
+# Mirage 服务器的连接地址和端口
+connection_string = "mirage:443"
+
+# 静态 IP 配置 (可选)
+# 请求服务器分配指定的内网 IP。如果已被占用，连接将被拒绝。
+# static_client_ip = "10.11.12.13"
+# static_client_ip_v6 = "fd00::fd00"
 
 [authentication]
-# The username used for authentication
-username = "some_user"
-# The password used for authentication
-password = "some_password"
-# A list of trusted certificate file paths the server can use or have its certificate signed by
-trusted_certificate_paths = ["some/cert/path/server_cert.pem"]
-# A list of trusted certificates as PEM strings
+# 认证使用的用户名
+username = "test"
+# 认证使用的密码
+password = "test"
+# 信任的证书文件路径列表（服务器证书或自签名 CA）
+# trusted_certificate_paths = ["examples/cert/server_cert.pem"]
+# 信任的 PEM 格式证书字符串列表（可选）
 # trusted_certificates = [
-#   "-----BEGIN CERTIFICATE-----\nMIIBkjCB...\n-----END CERTIFICATE-----"
+#     "-----BEGIN CERTIFICATE-----\n..."
 # ]
 
 [connection]
-# The MTU used by the QUIC tunnel and the spawned TUN interface
-mtu = 1420
+# 隧道和生成的 TUN 接口使用的 MTU
+# 默认 1280（IPv6 最小 MTU，减少 TCP-over-TCP 问题）
+mtu = 1280
+# 外层隧道 MTU (UDP 包大小限制)
+# 默认 1350 (兼容 PPPoE/Windows)，建议保持此值或根据网络状况微调
+# 如果想要启用巨型帧优化(Jumbo Frames)，可以将 mtu 设为 65535，outer_mtu 保持 1350
+outer_mtu = 1350
+# 开启 NODELAY
+tcp_nodelay = true
+# 连接超时时间（秒）
+# 连接超时时间（秒）
+connection_timeout_s = 30
+# 连接失败后的重试间隔（秒）
+retry_interval_s = 5
+
+# 自定义 SNI (Server Name Indication)
+# 如果指定，将使用此域名进行 TLS/QUIC 握手，而不是 connection_string 中的地址
+# 这允许你直接连接到 IP (如 CDN 节点) 但伪装成正确的域名
+# sni = "www.example.com"
+
+# 开启的协议优先顺序 (支持: "reality", "tcp-tls", "quic")
+# 客户端将按照列表顺序尝试连接
+enabled_protocols = ["reality", "tcp-tls", "quic"]
+# 心跳保活间隔（秒）
+keep_alive_interval_s = 25
+# 端口跳跃间隔 (0 为禁用, 默认: 0)
+# 当使用 QUIC 时，每隔指定秒数 (如 30) 自动轮换 UDP 端口
+# 可有效对抗 ISP 对长 UDP 连接的阻断 (QoS)
+port_hopping_interval_s = 30
+
+# 并行 TCP 连接数 (1-4, 默认: 1)
+# 多连接可提高带宽聚合，但占用更多资源
+parallel_connections = 1
+
+# 并行 QUIC 连接数 (1-4, 默认: 1)
+# QUIC 原生支持多路复用，通常不需要太多连接，但在高丢包环境下多连接可抗 QoS
+# 比如要同时IPv4和IPv6连接，可以配置quic_parallel_connections = 2
+# 如果超过2会使用解析的IP进行多连接
+quic_parallel_connections = 1
+
+# IPv4/IPv6 双栈并发聚合 (默认: false)
+# 开启后将同时使用 IPv4 和 IPv6 连接，并在它们之间进行负载均衡
+dual_stack_enabled = false
+# 连接预热 (默认: false)
+# 启用后在启动时预建立备用连接，减少切换延迟
+warmup_connections = false
+# 仅供测试：禁用 TLS 证书验证（适用于自签名证书）
+# 警告：不安全！
+insecure = false
+
+[connection.obfuscation]
+# 是否启用流量混淆 (默认: true)
+enabled = true
+# 发送随机填充包的概率 (0.0-1.0, 默认: 0.05)
+# 配合加权拟态轮廓 (Weighted Traffic Mimicry)，这会触发 60% 小包 / 30% 中包 / 10% 大包的分布
+padding_probability = 0.05
+# 随机填充包的最小长度 (字节, 默认: 40)
+padding_min = 40
+# 随机填充包的最大长度 (字节, 默认: 1200)
+padding_max = 1200
+# Jitter (抖动) 延迟范围 (毫秒)
+# 模拟网络自然波动，打乱时序特征
+# 建议 0-20ms，过大会影响性能
+# 最小值
+jitter_min_ms = 0
+# 最大值
+jitter_max_ms = 0
 
 [network]
+# 需要通过隧道路由的网段列表 (CIDR 格式)
 routes = [
-    "10.0.1.0/24",
-    "10.11.12.0/24"
+    "10.11.12.0/24",
+    "fd00::/64"
 ]
+# 需要排除在隧道之外的网段列表 (走本地网关)
+# 当 routes 包含 0.0.0.0/0 (全局路由) 时非常有用，可用于排除内网地址
+excluded_routes = [
+    "192.168.0.0/16",
+    "172.16.0.0/12",
+    "10.0.0.0/8"
+]
+# 指定本地 TUN 网卡名称 (例如 "tun0" 或 "utun3")
+# 不填则由系统自动分配
+# interface_name = "mirage0"
+# 隧道使用的 DNS 服务器
 dns_servers = [
-    "10.0.0.1"
+    "1.1.1.1",
+    "2606:4700:4700::1111"
 ]
 
+[reality]
+# 目标 SNI (必须与 Server 一致)
+target_sni = "www.microsoft.com"
+# 客户端认证 ShortId (取列表第一个)
+short_ids = ["abcd1234deadbeef"]
+
 [log]
-# The log level
+# 日志级别 (trace, debug, info, warn, error)
 level = "info"

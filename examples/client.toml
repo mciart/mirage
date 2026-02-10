@@ -29,7 +29,10 @@ outer_mtu = 1350
 # 开启 NODELAY
 tcp_nodelay = true
 # 连接超时时间（秒）
+# 连接超时时间（秒）
 connection_timeout_s = 30
+# 连接失败后的重试间隔（秒）
+retry_interval_s = 5
 
 # 自定义 SNI (Server Name Indication)
 # 如果指定，将使用此域名进行 TLS/QUIC 握手，而不是 connection_string 中的地址
