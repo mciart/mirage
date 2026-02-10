@@ -82,7 +82,7 @@ impl AddressPool {
         // Determine which network this address belongs to
         let network = if self.network_v4.contains(&address) {
             self.network_v4
-        } else if self.network_v6.map_or(false, |n| n.contains(&address)) {
+        } else if self.network_v6.is_some_and(|n| n.contains(&address)) {
             self.network_v6.unwrap()
         } else {
             return None;

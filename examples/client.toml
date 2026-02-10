@@ -3,8 +3,8 @@ connection_string = "mirage:443"
 
 # 静态 IP 配置 (可选)
 # 请求服务器分配指定的内网 IP。如果已被占用，连接将被拒绝。
-# static_client_ip = "10.0.0.100"
-# static_client_ip_v6 = "fd00::100"
+# static_client_ip = "10.11.12.13"
+# static_client_ip_v6 = "fd00::fd00"
 
 [authentication]
 # 认证使用的用户名
