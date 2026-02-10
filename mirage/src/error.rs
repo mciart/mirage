@@ -99,6 +99,10 @@ pub enum AuthError {
     /// Authentication stream communication error
     #[error("Authentication communication error")]
     StreamError,
+
+    /// Requested static IP is unavailable
+    #[error("Requested static IP is unavailable")]
+    IpUnavailable,
 }
 
 /// Configuration loading and validation errors.

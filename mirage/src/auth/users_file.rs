@@ -25,6 +25,12 @@ pub struct UsersFilePayload {
     pub username: String,
     /// The plaintext password (transmitted over TLS)
     pub password: String,
+    /// Optional static IPv4 address requested by the client
+    #[zeroize(skip)]
+    pub static_client_ip: Option<std::net::IpAddr>,
+    /// Optional static IPv6 address requested by the client
+    #[zeroize(skip)]
+    pub static_client_ip_v6: Option<std::net::IpAddr>,
 }
 
 /// Client authenticator for users file based authentication.
@@ -37,6 +43,10 @@ pub struct UsersFilePayload {
 pub struct UsersFileClientAuthenticator {
     username: String,
     password: String,
+    #[zeroize(skip)]
+    static_client_ip: Option<std::net::IpAddr>,
+    #[zeroize(skip)]
+    static_client_ip_v6: Option<std::net::IpAddr>,
 }
 
 impl UsersFileClientAuthenticator {
@@ -44,10 +54,18 @@ impl UsersFileClientAuthenticator {
     ///
     /// # Arguments
     /// * `config` - Client authentication configuration containing credentials
-    pub fn new(config: &ClientAuthenticationConfig) -> Self {
+    /// * `static_client_ip` - Optional static IPv4 address
+    /// * `static_client_ip_v6` - Optional static IPv6 address
+    pub fn new(
+        config: &ClientAuthenticationConfig,
+        static_client_ip: Option<std::net::IpAddr>,
+        static_client_ip_v6: Option<std::net::IpAddr>,
+    ) -> Self {
         Self {
             username: config.username.clone(),
             password: config.password.clone(),
+            static_client_ip,
+            static_client_ip_v6,
         }
     }
 }
@@ -58,6 +76,8 @@ impl ClientAuthenticator for UsersFileClientAuthenticator {
         let payload = UsersFilePayload {
             username: self.username.clone(),
             password: self.password.clone(),
+            static_client_ip: self.static_client_ip,
+            static_client_ip_v6: self.static_client_ip_v6,
         };
         Ok(serde_json::to_value(payload).map_err(|_| AuthError::InvalidPayload)?)
     }

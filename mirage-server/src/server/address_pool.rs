@@ -41,6 +41,20 @@ impl AddressPool {
         (v4_addr, v6_addr)
     }
 
+    /// Allocates a dynamic IPv4 address.
+    pub fn allocate_dynamic_v4(&self) -> Option<IpNet> {
+        self.find_available(self.network_v4)
+    }
+
+    /// Allocates a dynamic IPv6 address.
+    pub fn allocate_dynamic_v6(&self) -> Option<IpNet> {
+        if let Some(v6_net) = self.network_v6 {
+            self.find_available(v6_net)
+        } else {
+            None
+        }
+    }
+
     fn find_available(&self, network: IpNet) -> Option<IpNet> {
         let mut range = match network {
             IpNet::V4(network) => {
@@ -58,6 +72,29 @@ impl AddressPool {
                 IpNet::with_netmask(address, network.netmask())
                     .expect("Netmask will always be valid")
             })
+    }
+
+    /// Attempts to reserve a specific IP address.
+    ///
+    /// Returns `Some(IpNet)` if successful, or `None` if the address is already in use
+    /// or not part of the configured networks.
+    pub fn try_reserve(&self, address: IpAddr) -> Option<IpNet> {
+        // Determine which network this address belongs to
+        let network = if self.network_v4.contains(&address) {
+            self.network_v4
+        } else if self.network_v6.map_or(false, |n| n.contains(&address)) {
+            self.network_v6.unwrap()
+        } else {
+            return None;
+        };
+
+        // Try to insert into used_addresses
+        // DashSet::insert returns true if the value was NOT present (i.e. we reserved it)
+        if self.used_addresses.insert(address) {
+            IpNet::with_netmask(address, network.netmask()).ok()
+        } else {
+            None
+        }
     }
 
     /// Releases the specified address so it can be used in further requests.

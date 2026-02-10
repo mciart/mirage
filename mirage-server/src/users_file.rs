@@ -75,9 +75,27 @@ impl ServerAuthenticator for UsersFileServerAuthenticator {
             .authenticate(&payload.username, payload.password.clone())
             .await?;
 
-        let (client_address_v4, client_address_v6) = self.address_pool.next_available_address();
+        // Handle IPv4 allocation
+        let client_address_v4 = if let Some(static_ip) = payload.static_client_ip {
+            self.address_pool
+                .try_reserve(static_ip)
+                .ok_or(AuthError::IpUnavailable)?
+        } else {
+            self.address_pool
+                .allocate_dynamic_v4()
+                .ok_or(AuthError::StoreUnavailable)?
+        };
 
-        let client_address_v4 = client_address_v4.ok_or(AuthError::StoreUnavailable)?;
+        // Handle IPv6 allocation
+        let client_address_v6 = if let Some(static_ip_v6) = payload.static_client_ip_v6 {
+            Some(
+                self.address_pool
+                    .try_reserve(static_ip_v6)
+                    .ok_or(AuthError::IpUnavailable)?,
+            )
+        } else {
+            self.address_pool.allocate_dynamic_v6()
+        };
 
         Ok((
             payload.username.clone(),

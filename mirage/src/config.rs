@@ -93,6 +93,10 @@ pub struct ClientConfig {
     pub reality: RealityConfig,
     /// Logging configuration
     pub log: LogConfig,
+    /// Static IPv4 address to request (optional)
+    pub static_client_ip: Option<IpAddr>,
+    /// Static IPv6 address to request (optional)
+    pub static_client_ip_v6: Option<IpAddr>,
 }
 
 /// Mirage client-side authentication configuration
@@ -525,5 +529,7 @@ mod tests {
         assert_eq!(config.connection_string, "example.com:443");
         assert_eq!(config.reality.target_sni, "www.google.com");
         assert_eq!(config.reality.short_ids, vec!["abcd1234"]);
+        assert_eq!(config.static_client_ip, None);
+        assert_eq!(config.static_client_ip_v6, None);
     }
 }

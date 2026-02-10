@@ -209,6 +209,8 @@ impl MirageClient {
         // Authenticate
         let authenticator = Box::new(UsersFileClientAuthenticator::new(
             &self.config.authentication,
+            self.config.static_client_ip,
+            self.config.static_client_ip_v6,
         ));
         let auth_client = AuthClient::new(
             authenticator,
@@ -319,6 +321,8 @@ impl MirageClient {
                         let secondary_auth = AuthClient::new(
                             Box::new(UsersFileClientAuthenticator::new(
                                 &self.config.authentication,
+                                self.config.static_client_ip,
+                                self.config.static_client_ip_v6,
                             )),
                             Duration::from_secs(self.config.connection.connection_timeout_s),
                         );
