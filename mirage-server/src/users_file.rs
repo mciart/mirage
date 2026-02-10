@@ -67,6 +67,7 @@ impl ServerAuthenticator for UsersFileServerAuthenticator {
     async fn authenticate_user(
         &self,
         authentication_payload: Value,
+        skip_ip_allocation: bool,
     ) -> Result<(String, IpNet, Option<IpNet>)> {
         let payload: UsersFilePayload = serde_json::from_value(authentication_payload)
             .map_err(|_| AuthError::InvalidPayload)?;
@@ -74,6 +75,18 @@ impl ServerAuthenticator for UsersFileServerAuthenticator {
         self.user_database
             .authenticate(&payload.username, payload.password.clone())
             .await?;
+
+        // If we are just verifying authentication for a parallel connection,
+        // we can skip IP allocation to avoid "Address in use" errors.
+        if skip_ip_allocation {
+            // Return placeholder IPs (they won't be used as the connection joins an existing session)
+            // The actual IPs are already assigned to the session.
+            return Ok((
+                payload.username.clone(),
+                IpNet::default(), // 0.0.0.0/0
+                None,
+            ));
+        }
 
         // Handle IPv4 allocation
         let client_address_v4 = if let Some(static_ip) = payload.static_client_ip {

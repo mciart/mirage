@@ -25,9 +25,11 @@ pub trait ServerAuthenticator: Send + Sync {
     /// - `InvalidCredentials` - When provided credentials are invalid
     /// - `UserNotFound` - When the username doesn't exist
     /// - `InvalidPayload` - When the payload format is malformed
+    /// - `InvalidPayload` - When the payload format is malformed
     async fn authenticate_user(
         &self,
         authentication_payload: Value,
+        skip_ip_allocation: bool,
     ) -> Result<(String, IpNet, Option<IpNet>)>;
 }
 

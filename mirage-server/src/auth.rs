@@ -67,14 +67,22 @@ impl AuthServer {
         let (username, client_address, client_address_v6, session_id) = match message {
             AuthMessage::Authenticate {
                 payload,
-                session_id: _existing_session,
+                session_id: existing_session,
             } => {
-                let (username, client_address_v4, client_address_v6) =
-                    self.authenticator.authenticate_user(payload).await?;
+                let skip_ip_allocation = existing_session.is_some();
+                let (username, client_address_v4, client_address_v6) = self
+                    .authenticator
+                    .authenticate_user(payload, skip_ip_allocation)
+                    .await?;
 
-                // Generate new session ID for connection pooling
-                let mut session_id = [0u8; 8];
-                rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut session_id);
+                // Use existing session ID if parallel connection, else generate new one
+                let session_id = if let Some(id) = existing_session {
+                    id
+                } else {
+                    let mut id = [0u8; 8];
+                    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut id);
+                    id
+                };
 
                 auth_stream
                     .send_message_timeout(
