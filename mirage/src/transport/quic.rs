@@ -110,7 +110,7 @@ pub fn common_transport_config(
 }
 
 /// Helper to configure QUIC client
-pub fn configure_client() -> Result<quinn::ClientConfig> {
+pub fn configure_client(outer_mtu: u16) -> Result<quinn::ClientConfig> {
     // We'll use a dummy certificate verifier for now since we handle
     // verification logic in the connection later, or we can trust system roots.
     // However, quinn requires a crypto config.
@@ -132,8 +132,8 @@ pub fn configure_client() -> Result<quinn::ClientConfig> {
     ));
 
     // Apply high-performance transport config
-    // Default keep-alive: 25s, Timeout: 30s, MTU: 1350
-    let transport = common_transport_config(25, 30, 1350);
+    // Default keep-alive: 25s, Timeout: 30s, MTU: user-defined
+    let transport = common_transport_config(25, 30, outer_mtu);
     client_config.transport_config(std::sync::Arc::new(transport));
 
     Ok(client_config)
