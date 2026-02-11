@@ -15,14 +15,16 @@ pub struct TestInterface<T> {
     _p: std::marker::PhantomData<T>,
     pub tx: TestSender,
     pub rx: TestReceiver,
+    pub mtu: u16,
 }
 
 impl<T> TestInterface<T> {
-    pub fn new(tx: TestSender, rx: TestReceiver) -> Self {
+    pub fn new(tx: TestSender, rx: TestReceiver, mtu: u16) -> Self {
         Self {
             _p: std::marker::PhantomData,
             tx,
             rx,
+            mtu,
         }
     }
 }
@@ -73,7 +75,7 @@ macro_rules! interface_impl {
             fn create_interface(
                 _interface_address: IpNet,
                 _interface_address_v6: Option<IpNet>,
-                _mtu: u16,
+                mtu: u16,
                 _tunnel_gateway: Option<IpAddr>,
                 _interface_name: Option<&str>,
                 _routes: Option<&[IpNet]>,
@@ -82,6 +84,7 @@ macro_rules! interface_impl {
                 Ok(Self::new(
                     $test_queue_send.0.clone(),
                     $test_queue_recv.1.clone(),
+                    mtu,
                 ))
             }
 
@@ -116,8 +119,9 @@ macro_rules! interface_impl {
             }
 
             /// Returns the MTU (Maximum Transmission Unit) of the interface.
+            /// Returns the MTU (Maximum Transmission Unit) of the interface.
             fn mtu(&self) -> u16 {
-                1420
+                self.mtu
             }
 
             /// Returns the name of the interface.
