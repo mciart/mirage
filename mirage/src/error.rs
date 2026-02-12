@@ -285,8 +285,8 @@ pub enum QuicError {
 #[derive(Error, Debug)]
 pub enum InterfaceError {
     /// TUN interface creation failed
-    #[error("TUN interface creation failed")]
-    CreationFailed,
+    #[error("TUN interface creation failed: {reason}")]
+    CreationFailed { reason: String },
 
     /// Interface configuration failed
     #[error("Interface configuration failed: {reason}")]

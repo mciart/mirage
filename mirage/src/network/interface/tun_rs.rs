@@ -77,7 +77,9 @@ impl InterfaceIO for TunRsInterface {
 
         let interface = builder
             .build_async()
-            .map_err(|_| InterfaceError::CreationFailed)?;
+            .map_err(|e| InterfaceError::CreationFailed {
+                reason: e.to_string(),
+            })?;
         let interface = Arc::new(interface);
 
         info!(
