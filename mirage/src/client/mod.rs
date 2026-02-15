@@ -539,11 +539,30 @@ impl MirageClient {
                 }
             }
 
-            // Get or Create Endpoint
+            // Get or Create Endpoint (invalidate if address family changed)
             let endpoint = if let Some(endpoint) = &self.quic_endpoint {
-                endpoint.clone()
+                // Check if cached endpoint's address family matches the target
+                let cached_is_ipv6 = endpoint
+                    .local_addr()
+                    .map(|a| a.is_ipv6())
+                    .unwrap_or(false);
+                if cached_is_ipv6 != server_addr.is_ipv6() {
+                    info!(
+                        "QUIC endpoint address family mismatch (cached: {}, target: {}), recreating",
+                        if cached_is_ipv6 { "IPv6" } else { "IPv4" },
+                        if server_addr.is_ipv6() { "IPv6" } else { "IPv4" }
+                    );
+                    self.quic_connection = None;
+                    let endpoint =
+                        crate::protocol::quic::create_endpoint(&self.config, server_addr)?;
+                    self.quic_endpoint = Some(endpoint.clone());
+                    endpoint
+                } else {
+                    endpoint.clone()
+                }
             } else {
-                let endpoint = crate::protocol::quic::create_endpoint(&self.config)?;
+                let endpoint =
+                    crate::protocol::quic::create_endpoint(&self.config, server_addr)?;
                 self.quic_endpoint = Some(endpoint.clone());
                 endpoint
             };

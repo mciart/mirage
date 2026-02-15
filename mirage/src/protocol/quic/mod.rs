@@ -84,7 +84,11 @@ pub fn build_rustls_config(config: &ClientConfig) -> Result<rustls::ClientConfig
 }
 
 /// Creates a quinn `Endpoint` configured for client use.
-pub fn create_endpoint(config: &ClientConfig) -> Result<quinn::Endpoint> {
+/// Binds to the correct address family based on `target_addr`.
+pub fn create_endpoint(
+    config: &ClientConfig,
+    target_addr: std::net::SocketAddr,
+) -> Result<quinn::Endpoint> {
     let client_crypto = build_rustls_config(config)?;
 
     let client_crypto =
@@ -100,12 +104,22 @@ pub fn create_endpoint(config: &ClientConfig) -> Result<quinn::Endpoint> {
     );
     client_config.transport_config(std::sync::Arc::new(transport_config));
 
-    let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).map_err(|e| {
+    // Bind to the correct address family based on the target
+    let bind_addr: std::net::SocketAddr = if target_addr.is_ipv6() {
+        "[::]:0".parse().unwrap()
+    } else {
+        "0.0.0.0:0".parse().unwrap()
+    };
+
+    let mut endpoint = quinn::Endpoint::client(bind_addr).map_err(|e| {
         MirageError::connection_failed(format!("Failed to create QUIC endpoint: {}", e))
     })?;
     endpoint.set_default_client_config(client_config);
 
-    info!("Created new QUIC endpoint");
+    info!(
+        "Created new QUIC endpoint (bound to {} for target {})",
+        bind_addr, target_addr
+    );
     Ok(endpoint)
 }
 
