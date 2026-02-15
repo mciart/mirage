@@ -2,10 +2,10 @@ use crate::common::dummy_packet;
 use common::{
     client_config, make_queue_pair, server_config, TestInterface, TestReceiver, TestSender,
 };
+use mirage::client::MirageClient;
 use mirage::config::{ClientConfig, ServerConfig};
+use mirage::server::MirageServer;
 use mirage::Result;
-use mirage_client::client::MirageClient;
-use mirage_server::server::MirageServer;
 use rstest::rstest;
 use std::net::Ipv4Addr;
 use std::sync::LazyLock;

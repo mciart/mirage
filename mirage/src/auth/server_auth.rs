@@ -7,7 +7,7 @@ use ipnet::IpNet;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use mirage::{
+use crate::{
     auth::{
         stream::{AuthMessage, AuthStream},
         ServerAuthenticator,

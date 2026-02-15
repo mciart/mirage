@@ -7,15 +7,15 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::auth::AuthServer;
+use crate::auth::server_auth::AuthServer;
 use crate::server::address_pool::AddressPool;
 use crate::server::session::{SessionContext, SessionDispatcher};
 
+use crate::config::ObfuscationConfig;
+use crate::network::packet::Packet;
+use crate::Result;
 use bytes::Bytes;
 use dashmap::DashMap;
-use mirage::config::ObfuscationConfig;
-use mirage::network::packet::Packet;
-use mirage::Result;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{info, warn};
@@ -88,7 +88,7 @@ where
         );
 
         // Create a dedicated channel for this connection's downlink traffic
-        let (conn_sender, conn_receiver) = channel::<Bytes>(mirage::constants::PACKET_CHANNEL_SIZE);
+        let (conn_sender, conn_receiver) = channel::<Bytes>(crate::constants::PACKET_CHANNEL_SIZE);
 
         // Register this connection with the session dispatcher
         if let Err(e) = context.register_tx.send(conn_sender).await {
@@ -110,7 +110,7 @@ where
         // Primary connection: Create SessionDispatcher
 
         // 1. Channel for TUN -> Dispatcher
-        let (packet_tx, packet_rx) = channel::<Bytes>(mirage::constants::PACKET_CHANNEL_SIZE);
+        let (packet_tx, packet_rx) = channel::<Bytes>(crate::constants::PACKET_CHANNEL_SIZE);
 
         // 2. Channel for Registering new connections
         let (register_tx, register_rx) = channel::<Sender<Bytes>>(16);
@@ -120,7 +120,7 @@ where
         tokio::spawn(dispatcher.run());
 
         // 4. Create Channel for THIS primary connection
-        let (conn_sender, conn_receiver) = channel::<Bytes>(mirage::constants::PACKET_CHANNEL_SIZE);
+        let (conn_sender, conn_receiver) = channel::<Bytes>(crate::constants::PACKET_CHANNEL_SIZE);
 
         // 5. Register primary connection immediately
         if let Err(e) = register_tx.send(conn_sender).await {

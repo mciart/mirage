@@ -15,20 +15,20 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::auth::AuthServer;
+use crate::auth::server_auth::AuthServer;
+use crate::config::ObfuscationConfig;
+use crate::config::ServerConfig;
+use crate::constants::{PACKET_BUFFER_SIZE, PACKET_CHANNEL_SIZE, TLS_ALPN_PROTOCOLS};
+use crate::network::interface::{Interface, InterfaceIO};
+use crate::network::packet::Packet;
 use crate::users_file::UsersFileServerAuthenticator;
+use crate::utils::tasks::abort_all;
+use crate::{MirageError, Result};
 use boring::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use bytes::Bytes;
 use dashmap::DashMap;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use mirage::config::ObfuscationConfig;
-use mirage::config::ServerConfig;
-use mirage::constants::{PACKET_BUFFER_SIZE, PACKET_CHANNEL_SIZE, TLS_ALPN_PROTOCOLS};
-use mirage::network::interface::{Interface, InterfaceIO};
-use mirage::network::packet::Packet;
-use mirage::utils::tasks::abort_all;
-use mirage::{MirageError, Result};
 use std::net::IpAddr;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
@@ -181,9 +181,9 @@ impl MirageServer {
                     }
 
                     // Apply TCP optimizations (Linux only)
-                    let _ = mirage::transport::tcp::optimize_tcp_socket(&tcp_stream);
-                    let _ = mirage::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
-                    let _ = mirage::transport::tcp::set_tcp_quickack(&tcp_stream);
+                    let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
+                    let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
+                    let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
 
                     // Dispatch traffic (Reality / Standard / Proxy)
                     let dispatcher = TlsDispatcher::new(&self.config);

@@ -97,15 +97,13 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build Release
-        run: ${{ matrix.cmd }} build --release --verbose --target ${{ matrix.target }} -p mirage-client -p mirage-server
+        run: ${{ matrix.cmd }} build --release --verbose --target ${{ matrix.target }} -p mirage
 
       - name: Prepare Artifacts (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/mirage-client dist/
-          cp target/${{ matrix.target }}/release/mirage-server dist/
-          cp target/${{ matrix.target }}/release/mirage-users dist/
+          cp target/${{ matrix.target }}/release/mirage dist/
           cp examples/client.toml dist/client-example.toml
           cp examples/server.toml dist/server-example.toml
 
@@ -113,9 +111,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           mkdir dist
-          copy target\${{ matrix.target }}\release\mirage-client.exe dist\
-          copy target\${{ matrix.target }}\release\mirage-server.exe dist\
-          copy target\${{ matrix.target }}\release\mirage-users.exe dist\
+          copy target\${{ matrix.target }}\release\mirage.exe dist\
           copy examples\client.toml dist\client-example.toml
           copy examples\server.toml dist\server-example.toml
 

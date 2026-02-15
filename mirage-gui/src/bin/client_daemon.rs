@@ -1,10 +1,10 @@
 #![windows_subsystem = "windows"]
 
 use clap::Parser;
+use mirage::client::MirageClient;
 use mirage::config::{ClientConfig, FromPath};
 use mirage::network::interface::tun_rs::TunRsInterface;
 use mirage::{MirageError, Result};
-use mirage_client::client::MirageClient;
 use mirage_gui::gui::GuiError;
 use mirage_gui::ipc::{ClientStatus, ConnectionMetrics, ConnectionStatus, IpcClient, IpcMessage};
 use std::path::{Path, PathBuf};

@@ -1,6 +1,6 @@
-use mirage::protocol::tls_detect::{parse_client_hello, ClientHelloInfo};
-use mirage::Result;
-use mirage::{config::ServerConfig, MirageError};
+use crate::protocol::tls_detect::{parse_client_hello, ClientHelloInfo};
+use crate::Result;
+use crate::{config::ServerConfig, MirageError};
 use subtle::ConstantTimeEq;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;

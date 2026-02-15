@@ -56,9 +56,7 @@ jobs:
         run: |
           cargo build --release --workspace --features jemalloc
           mkdir -p release
-          cp target/release/mirage-client release/
-          cp target/release/mirage-server release/
-          cp target/release/mirage-users release/
+          cp target/release/mirage release/
           cp target/release/mirage-client-gui release/
           if [ -f "target/release/mirage-client-daemon" ]; then
             cp target/release/mirage-client-daemon release/
@@ -151,9 +149,7 @@ jobs:
         run: |
           cargo build --release --workspace --features jemalloc
           mkdir -p release
-          cp target/release/mirage-client release/
-          cp target/release/mirage-server release/
-          cp target/release/mirage-users release/
+          cp target/release/mirage release/
           cp target/release/mirage-client-gui release/
           if [ -f "target/release/mirage-client-daemon" ]; then
             cp target/release/mirage-client-daemon release/
@@ -240,9 +236,7 @@ jobs:
         run: |
           cargo build --release --workspace
           mkdir ./release
-          cp target/release/mirage-client.exe release/
-          cp target/release/mirage-server.exe release/
-          cp target/release/mirage-users.exe release/
+          cp target/release/mirage.exe release/
           cp target/release/mirage-client-gui.exe release/
           if (Test-Path "target/release/mirage-client-daemon.exe") {
             cp target/release/mirage-client-daemon.exe release/

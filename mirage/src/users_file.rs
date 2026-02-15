@@ -12,7 +12,7 @@ use ipnet::IpNet;
 use serde_json::Value;
 
 use crate::server::address_pool::AddressPool;
-use mirage::{
+use crate::{
     auth::{users_file::UsersFilePayload, ServerAuthenticator},
     config::ServerAuthenticationConfig,
     error::AuthError,
@@ -24,7 +24,7 @@ pub struct UsersFileServerAuthenticator {
     address_pool: Arc<AddressPool>,
 }
 
-// UsersFilePayload and UsersFileClientAuthenticator are now in mirage::auth::users_file
+// UsersFilePayload and UsersFileClientAuthenticator are now in crate::auth::users_file
 
 /// Represents a user database for authentication
 pub struct UserDatabase {
@@ -133,7 +133,7 @@ impl User {
 }
 
 impl TryFrom<String> for User {
-    type Error = mirage::MirageError;
+    type Error = crate::MirageError;
 
     fn try_from(user_string: String) -> Result<Self> {
         let split: Vec<String> = user_string.split(':').map(|str| str.to_owned()).collect();

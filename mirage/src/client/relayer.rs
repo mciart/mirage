@@ -3,11 +3,11 @@
 //! This module handles bidirectional packet relay between the TUN interface
 //! and the TCP/TLS tunnel using FramedStream.
 
+use crate::network::interface::{Interface, InterfaceIO};
+use crate::utils::tasks::abort_all;
+use crate::{MirageError, Result};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use mirage::network::interface::{Interface, InterfaceIO};
-use mirage::utils::tasks::abort_all;
-use mirage::{MirageError, Result};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::signal;
@@ -29,7 +29,7 @@ impl ClientRelayer {
         interface: Interface<impl InterfaceIO>,
         reader: R,
         writer: W,
-        obfuscation: mirage::config::ObfuscationConfig,
+        obfuscation: crate::config::ObfuscationConfig,
     ) -> Result<Self>
     where
         R: AsyncRead + Unpin + Send + 'static,
@@ -77,15 +77,15 @@ impl ClientRelayer {
         reader: R,
         writer: W,
         mut shutdown_rx: broadcast::Receiver<()>,
-        obfuscation: mirage::config::ObfuscationConfig,
+        obfuscation: crate::config::ObfuscationConfig,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
         // FramedReader has internal buffering, no need for BufReader
-        let framed_reader = mirage::transport::framed::FramedReader::new(reader);
-        let framed_writer = mirage::transport::framed::FramedWriter::new(writer);
+        let framed_reader = crate::transport::framed::FramedReader::new(reader);
+        let framed_writer = crate::transport::framed::FramedWriter::new(writer);
 
         let mut tasks = FuturesUnordered::new();
 
@@ -108,7 +108,7 @@ impl ClientRelayer {
             // Use Jitter Actor
             let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(1024);
 
-            use mirage::transport::jitter::spawn_jitter_sender;
+            use crate::transport::jitter::spawn_jitter_sender;
             tasks.push(tokio::spawn(async move {
                 spawn_jitter_sender(jitter_rx, framed_writer, obfuscation)
                     .await
@@ -142,7 +142,7 @@ impl ClientRelayer {
 
     /// Direct Pump: TUN -> FramedWriter (Bypasses Jitter Actor)
     async fn process_outgoing_traffic_direct<W>(
-        mut writer: mirage::transport::framed::FramedWriter<W>,
+        mut writer: crate::transport::framed::FramedWriter<W>,
         interface: Arc<Interface<impl InterfaceIO>>,
     ) -> Result<()>
     where
@@ -173,7 +173,7 @@ impl ClientRelayer {
 
     /// Handles incoming packets from the TUN interface and pumps them to the Jitter Sender.
     async fn process_outgoing_traffic_pump(
-        jitter_tx: tokio::sync::mpsc::Sender<mirage::network::packet::Packet>,
+        jitter_tx: tokio::sync::mpsc::Sender<crate::network::packet::Packet>,
         interface: Arc<Interface<impl InterfaceIO>>,
     ) -> Result<()> {
         debug!("Started outgoing traffic pump (interface -> Jitter Actor)");
@@ -191,7 +191,7 @@ impl ClientRelayer {
 
     /// Handles incoming packets from the server and relays them to the TUN interface.
     async fn process_inbound_traffic<R>(
-        mut reader: mirage::transport::framed::FramedReader<R>,
+        mut reader: crate::transport::framed::FramedReader<R>,
         interface: Arc<Interface<impl InterfaceIO>>,
     ) -> Result<()>
     where
@@ -216,12 +216,12 @@ impl ClientRelayer {
     pub fn start_pooled<I: InterfaceIO + 'static>(
         interface: Interface<I>,
         writers: Vec<
-            mirage::transport::framed::FramedWriter<impl AsyncWrite + Unpin + Send + 'static>,
+            crate::transport::framed::FramedWriter<impl AsyncWrite + Unpin + Send + 'static>,
         >,
         readers: Vec<
-            mirage::transport::framed::FramedReader<impl AsyncRead + Unpin + Send + 'static>,
+            crate::transport::framed::FramedReader<impl AsyncRead + Unpin + Send + 'static>,
         >,
-        obfuscation: mirage::config::ObfuscationConfig,
+        obfuscation: crate::config::ObfuscationConfig,
     ) -> Result<Self> {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let interface = Arc::new(interface);
@@ -244,10 +244,10 @@ impl ClientRelayer {
     #[allow(dead_code)]
     async fn relay_packets_pooled<R, W>(
         interface: Arc<Interface<impl InterfaceIO>>,
-        writers: Vec<mirage::transport::framed::FramedWriter<W>>,
-        readers: Vec<mirage::transport::framed::FramedReader<R>>,
+        writers: Vec<crate::transport::framed::FramedWriter<W>>,
+        readers: Vec<crate::transport::framed::FramedReader<R>>,
         mut shutdown_rx: broadcast::Receiver<()>,
-        obfuscation: mirage::config::ObfuscationConfig,
+        obfuscation: crate::config::ObfuscationConfig,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send + 'static,
@@ -283,7 +283,7 @@ impl ClientRelayer {
             // Multiple connections: use Active-Standby strategy
             // Only one connection is used at a time to avoid packet reordering
             let (packet_tx, mut packet_rx) =
-                tokio::sync::mpsc::channel::<mirage::network::packet::Packet>(4096);
+                tokio::sync::mpsc::channel::<crate::network::packet::Packet>(4096);
 
             // Pump packets from TUN to channel
             let iface = interface.clone();
@@ -340,7 +340,7 @@ impl ClientRelayer {
                         }
                     }
                 }
-                Ok::<(), mirage::MirageError>(())
+                Ok::<(), crate::MirageError>(())
             }));
         }
 

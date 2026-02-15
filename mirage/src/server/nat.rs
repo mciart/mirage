@@ -1,7 +1,7 @@
 use std::process::Command;
 use tracing::{debug, info, warn};
 
-use mirage::config::NatConfig;
+use crate::config::NatConfig;
 
 /// Manages NAT configuration (Masquerading, Forwarding)
 pub struct NatManager {

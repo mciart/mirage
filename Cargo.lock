@@ -2565,24 +2565,30 @@ dependencies = [
 name = "mirage"
 version = "0.1.0"
 dependencies = [
+ "argon2",
  "async-trait",
  "boring",
  "bytes",
+ "clap",
  "dashmap",
  "figment",
  "futures",
+ "hex",
  "ipnet",
  "jemallocator",
  "libc",
  "nu-ansi-term",
  "quinn",
  "rand 0.8.5",
+ "rand_core 0.6.4",
+ "rpassword",
  "rustls",
  "rustls-native-certs",
  "rustls-pemfile",
  "serde",
  "serde_json",
  "socket2",
+ "subtle",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
@@ -2597,30 +2603,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mirage-client"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "boring",
- "bytes",
- "clap",
- "futures",
- "hex",
- "ipnet",
- "mirage",
- "quinn",
- "rand 0.8.5",
- "rustls",
- "rustls-native-certs",
- "rustls-pemfile",
- "serde",
- "serde_json",
- "tokio",
- "tokio-boring",
- "tracing",
-]
-
-[[package]]
 name = "mirage-gui"
 version = "0.1.0"
 dependencies = [
@@ -2630,7 +2612,6 @@ dependencies = [
  "iced",
  "ipnet",
  "mirage",
- "mirage-client",
  "nu-ansi-term",
  "privesc",
  "regex",
@@ -2644,34 +2625,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mirage-server"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "async-trait",
- "boring",
- "bytes",
- "clap",
- "dashmap",
- "futures",
- "hex",
- "ipnet",
- "mirage",
- "quinn",
- "rand 0.8.5",
- "rand_core 0.6.4",
- "rpassword",
- "rustls",
- "rustls-pemfile",
- "serde",
- "serde_json",
- "subtle",
- "tokio",
- "tokio-boring",
- "tracing",
-]
-
-[[package]]
 name = "mirage-tests"
 version = "0.1.0"
 dependencies = [
@@ -2679,8 +2632,6 @@ dependencies = [
  "etherparse",
  "ipnet",
  "mirage",
- "mirage-client",
- "mirage-server",
  "rstest",
  "tokio",
  "tracing",

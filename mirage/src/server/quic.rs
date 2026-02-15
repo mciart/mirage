@@ -1,13 +1,13 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::auth::AuthServer;
+use crate::auth::server_auth::AuthServer;
+use crate::config::ServerConfig;
+use crate::network::packet::Packet;
 use crate::server::address_pool::AddressPool;
 use crate::server::handler;
-use mirage::config::ServerConfig;
-use mirage::network::packet::Packet;
-use mirage::transport::quic::QuicStream;
-use mirage::{MirageError, Result};
+use crate::transport::quic::QuicStream;
+use crate::{MirageError, Result};
 
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -51,7 +51,7 @@ fn configure_server_crypto(
         .map_err(|e| MirageError::config_error(format!("Invalid TLS configuration: {}", e)))?;
 
     // Set ALPN protocols (h3 for QUIC camouflage)
-    server_config.alpn_protocols = mirage::constants::QUIC_ALPN_PROTOCOLS
+    server_config.alpn_protocols = crate::constants::QUIC_ALPN_PROTOCOLS
         .iter()
         .map(|p| p.to_vec())
         .collect();
@@ -80,7 +80,7 @@ pub async fn run_quic_listener(
     let mut server_config = QuicServerConfig::with_crypto(Arc::new(server_crypto));
 
     // Tuning
-    let transport = mirage::transport::quic::common_transport_config(
+    let transport = crate::transport::quic::common_transport_config(
         config.connection.keep_alive_interval_s,
         config.connection.connection_timeout_s,
         config.connection.outer_mtu,

@@ -1,6 +1,6 @@
 [package]
 name = "mirage"
-description = "Reality-based VPN with XTLS-Vision - Core library"
+description = "Reality-based VPN with XTLS-Vision"
 readme = "../README.md"
 version.workspace = true
 authors.workspace = true
@@ -16,11 +16,15 @@ categories.workspace = true
 name = "mirage"
 path = "src/lib.rs"
 
+[[bin]]
+name = "mirage"
+path = "src/bin/main.rs"
+
 [features]
 default = []
 offload = []
 jemalloc = ["jemallocator"]
-debug = [] # 为了稳妥，加上 debug
+debug = []
 
 [dependencies]
 # BoringSSL TLS (Chrome fingerprint)
@@ -50,13 +54,21 @@ async-trait = { workspace = true }
 figment = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+clap = { workspace = true }
 
 # Cryptography (for Reality x25519)
 x25519-dalek = { workspace = true }
 rand = { workspace = true }
 
+# Authentication (for mirage users)
+argon2 = { workspace = true }
+rpassword = { workspace = true }
+rand_core = { workspace = true }
+hex = { workspace = true }
+
 # Security hardening
 zeroize = { workspace = true }
+subtle = { workspace = true }
 
 # Tracing/Logging
 tracing = { workspace = true }
@@ -73,7 +85,6 @@ jemallocator = { workspace = true, optional = true }
 # WinTun & Windows Native
 [target.'cfg(windows)'.dependencies]
 wintun-bindings = { workspace = true }
-# [新增] Windows API 依赖 (手动指定版本，因为 workspace 里通常没有这个)
 windows = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",

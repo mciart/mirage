@@ -8,7 +8,7 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use mirage::transport::framed::{FramedReader, FramedWriter};
+use crate::transport::framed::{FramedReader, FramedWriter};
 use tokio::io::{ReadHalf, WriteHalf};
 
 use super::TransportStream;

@@ -27,7 +27,6 @@ jemalloc = ["mirage/jemalloc"]
 
 [dependencies]
 mirage = { workspace = true }
-mirage-client = { workspace = true }
 
 # Configuration
 clap = { workspace = true }

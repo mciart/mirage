@@ -15,8 +15,6 @@ categories.workspace = true
 
 [dev-dependencies]
 mirage = { workspace = true }
-mirage-client = { workspace = true }
-mirage-server = { workspace = true }
 
 tokio = { workspace = true }
 tracing = { workspace = true }

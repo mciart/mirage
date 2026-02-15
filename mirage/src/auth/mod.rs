@@ -1,3 +1,5 @@
+pub mod client_auth;
+pub mod server_auth;
 pub mod stream;
 pub mod users_file;
 

@@ -7,13 +7,16 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 pub mod auth;
 pub mod certificates;
+pub mod client;
 pub mod config;
 pub mod constants;
 pub mod crypto;
 pub mod error;
 pub mod network;
 pub mod protocol;
+pub mod server;
 pub mod transport;
+pub mod users_file;
 pub mod utils;
 
 // Re-export common types for convenience

@@ -3,15 +3,15 @@
 //! This module manages individual client connections over TCP/TLS,
 //! handling packet relay after authentication.
 
+use crate::config::ObfuscationConfig;
+use crate::network::packet::Packet;
+use crate::transport::framed::{FramedReader, FramedWriter};
+use crate::utils::tasks::abort_all;
+use crate::{MirageError, Result};
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use ipnet::IpNet;
-use mirage::config::ObfuscationConfig;
-use mirage::network::packet::Packet;
-use mirage::transport::framed::{FramedReader, FramedWriter};
-use mirage::utils::tasks::abort_all;
-use mirage::{MirageError, Result};
 use std::net::SocketAddr;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -93,7 +93,7 @@ where
             }));
         } else {
             // Use Jitter Actor
-            use mirage::transport::jitter::spawn_jitter_sender;
+            use crate::transport::jitter::spawn_jitter_sender;
             let packet_rx = {
                 let (tx, rx) = tokio::sync::mpsc::channel(1024);
                 tasks.push(tokio::spawn(async move {

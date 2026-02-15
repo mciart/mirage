@@ -1,5 +1,5 @@
 [workspace]
-members = ["mirage", "mirage-client", "mirage-server", "mirage-gui", "mirage-tests"]
+members = ["mirage", "mirage-gui", "mirage-tests"]
 resolver = "2"
 
 [workspace.package]
@@ -17,8 +17,7 @@ categories = ["command-line-utilities", "network-programming"]
 [workspace.dependencies]
 # Internal crates
 mirage = { path = "mirage", version = "0.1.0" }
-mirage-client = { path = "mirage-client", version = "0.1.0" }
-mirage-server = { path = "mirage-server", version = "0.1.0" }
+
 
 # BoringSSL TLS (Chrome fingerprint)
 boring = "4"

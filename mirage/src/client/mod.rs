@@ -6,13 +6,13 @@
 pub mod connection_pool;
 mod relayer;
 
-use crate::auth::AuthClient;
-use mirage::auth::users_file::UsersFileClientAuthenticator;
+use crate::auth::client_auth::AuthClient;
+use crate::auth::users_file::UsersFileClientAuthenticator;
 
-use mirage::config::ClientConfig;
-use mirage::network::interface::{Interface, InterfaceIO};
-use mirage::network::route::{add_routes, get_gateway_for, ExclusionRouteGuard, RouteTarget};
-use mirage::{MirageError, Result};
+use crate::config::ClientConfig;
+use crate::network::interface::{Interface, InterfaceIO};
+use crate::network::route::{add_routes, get_gateway_for, ExclusionRouteGuard, RouteTarget};
+use crate::{MirageError, Result};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
@@ -30,7 +30,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized> TransportStreamTrait for
 
 pub type TransportStream = Box<dyn TransportStreamTrait>;
 
-use mirage::transport::quic::QuicStream;
+use crate::transport::quic::QuicStream;
 
 use crate::client::relayer::ClientRelayer;
 use tracing::{debug, info, warn};
@@ -549,12 +549,12 @@ impl MirageClient {
             let endpoint = if let Some(endpoint) = &self.quic_endpoint {
                 endpoint.clone()
             } else {
-                let endpoint = mirage::protocol::quic::create_endpoint(&self.config)?;
+                let endpoint = crate::protocol::quic::create_endpoint(&self.config)?;
                 self.quic_endpoint = Some(endpoint.clone());
                 endpoint
             };
 
-            let host = mirage::protocol::quic::resolve_sni(&self.config, connection_string);
+            let host = crate::protocol::quic::resolve_sni(&self.config, connection_string);
 
             info!("Connecting via QUIC to {} (SNI: {})", server_addr, host);
 
@@ -591,19 +591,19 @@ impl MirageClient {
         tcp_stream.set_nodelay(self.config.connection.tcp_nodelay)?;
 
         // Apply TCP optimizations (Linux only)
-        let _ = mirage::transport::tcp::optimize_tcp_socket(&tcp_stream);
-        let _ = mirage::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
-        let _ = mirage::transport::tcp::set_tcp_quickack(&tcp_stream);
+        let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
+        let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
+        let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
 
         debug!("TCP connection established to {}", server_addr);
 
-        let mut connector_builder = mirage::protocol::tcp_tls::build_connector(&self.config)?;
+        let mut connector_builder = crate::protocol::tcp_tls::build_connector(&self.config)?;
 
         let sni = if protocol == "reality" {
-            mirage::protocol::reality::configure(&mut connector_builder, &self.config)?
+            crate::protocol::reality::configure(&mut connector_builder, &self.config)?
         } else {
             // Standard TCP/TLS
-            let host = mirage::protocol::tcp_tls::resolve_sni(&self.config, connection_string);
+            let host = crate::protocol::tcp_tls::resolve_sni(&self.config, connection_string);
             connector_builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
             host.to_string()
         };
