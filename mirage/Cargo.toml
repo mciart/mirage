@@ -30,6 +30,8 @@ tokio-boring = { workspace = true }
 # QUIC support
 quinn = { workspace = true, features = ["runtime-tokio", "rustls-ring"] }
 rustls = { workspace = true, features = ["ring", "std"] }
+rustls-native-certs = { workspace = true }
+rustls-pemfile = { workspace = true }
 
 # Interfaces and networking
 tun-rs = { workspace = true }

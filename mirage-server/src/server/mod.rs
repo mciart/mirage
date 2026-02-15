@@ -6,6 +6,7 @@
 pub mod address_pool;
 mod connection;
 mod dispatcher;
+mod handler;
 mod nat;
 mod quic;
 mod session;
@@ -33,13 +34,12 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio_boring::SslStream;
 use tracing::{debug, info, warn};
 
 use self::address_pool::AddressPool;
 use self::dispatcher::{proxy_connection, DispatchResult, TlsDispatcher};
 use self::nat::NatManager;
-use self::session::{SessionContext, SessionDispatcher};
+use self::session::SessionContext;
 
 type ConnectionQueues = Arc<DashMap<IpAddr, Sender<Bytes>>>;
 /// Maps session_id to session context for connection pooling
@@ -258,7 +258,7 @@ impl MirageServer {
     /// Handles a single client connection: auth + packet relay.
     #[allow(clippy::too_many_arguments)]
     async fn handle_client<S>(
-        stream: SslStream<S>,
+        stream: S,
         remote_addr: SocketAddr,
         auth_server: Arc<AuthServer>,
         ingress_queue: Sender<Packet>,
@@ -270,129 +270,18 @@ impl MirageServer {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        // Split stream for authentication
-        let (read_half, write_half) = tokio::io::split(stream);
-
-        // Authenticate and retrieve streams back
-        let (username, client_address, client_address_v6, session_id, read_half, write_half) =
-            match auth_server
-                .handle_authentication(read_half, write_half)
-                .await
-            {
-                Ok(result) => result,
-                Err(e) => {
-                    warn!("Authentication failed for '{}': {e}", remote_addr.ip());
-                    return Err(e);
-                }
-            };
-
-        info!(
-            "Connection established: user = {}, client address = {}, remote address = {}, session_id = {:02x?}",
-            username,
-            client_address.addr(),
-            remote_addr.ip(),
-            session_id,
-        );
-
-        // Check if we have an existing session (for connection pooling)
-        let (connection_receiver, is_secondary) =
-            if let Some(context) = session_queues.get(&session_id) {
-                info!("Secondary connection joining session {:02x?}", session_id);
-
-                // Create a dedicated channel for this connection's downlink traffic
-                let (conn_sender, conn_receiver) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
-
-                // Register this connection with the session dispatcher
-                if let Err(e) = context.register_tx.send(conn_sender).await {
-                    warn!("Failed to register secondary connection to session: {}", e);
-                    // Fallback: This connection will be uplink-only if registration fails
-                    // But generally this shouldn't happen unless session is closing
-                }
-
-                // Update connection_queues to point to the main session packet_tx
-                // This ensures packets coming from TUN for this new IP are routed to the dispatcher
-                let client_ip = client_address.addr();
-                connection_queues.insert(client_ip, context.packet_tx.clone());
-                if let Some(v6) = client_address_v6 {
-                    connection_queues.insert(v6.addr(), context.packet_tx.clone());
-                }
-
-                (Some(conn_receiver), true)
-            } else {
-                // Primary connection: Create SessionDispatcher
-
-                // 1. Channel for TUN -> Dispatcher
-                let (packet_tx, packet_rx) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
-
-                // 2. Channel for Registering new connections
-                let (register_tx, register_rx) = channel::<Sender<Bytes>>(16);
-
-                // 3. Spawn Dispatcher
-                let dispatcher = SessionDispatcher::new(packet_rx, register_rx);
-                tokio::spawn(dispatcher.run());
-
-                // 4. Create Channel for THIS primary connection
-                let (conn_sender, conn_receiver) = channel::<Bytes>(PACKET_CHANNEL_SIZE);
-
-                // 5. Register primary connection immediately
-                if let Err(e) = register_tx.send(conn_sender).await {
-                    warn!(
-                        "Failed to register primary connection (should not happen): {}",
-                        e
-                    );
-                }
-
-                // 6. Update global maps
-                let context = SessionContext {
-                    packet_tx: packet_tx.clone(),
-                    register_tx,
-                };
-
-                let client_ip = client_address.addr();
-                connection_queues.insert(client_ip, packet_tx.clone());
-                if let Some(v6) = client_address_v6 {
-                    connection_queues.insert(v6.addr(), packet_tx);
-                }
-                // Register in session queues for future secondary connections
-                session_queues.insert(session_id, context);
-
-                (Some(conn_receiver), false)
-            };
-
-        let client_ip = client_address.addr();
-        info!(
-            "Client {} authenticated, ready for data relay (secondary={})",
-            client_ip, is_secondary
-        );
-
-        // Run bidirectional packet relay
-        // This blocks until connection is closed or error occurs
-        let relay_result = crate::server::connection::run_connection_relay(
-            read_half,
-            write_half,
+        handler::handle_authenticated_stream(
+            stream,
             remote_addr,
-            username,
-            client_address,
-            connection_receiver,
+            "TLS",
+            auth_server,
             ingress_queue,
-            obfuscation.clone(),
+            connection_queues,
+            session_queues,
+            address_pool,
+            obfuscation,
         )
-        .await;
-
-        if let Err(e) = &relay_result {
-            warn!("Connection relay error for {}: {}", client_ip, e);
-        }
-
-        // Cleanup on disconnect
-        connection_queues.remove(&client_ip);
-        address_pool.release_address(&client_ip);
-
-        if let Some(v6) = client_address_v6 {
-            connection_queues.remove(&v6.addr());
-            address_pool.release_address(&v6.addr());
-        }
-
-        relay_result
+        .await
     }
 
     /// Creates a TLS acceptor with BoringSSL.

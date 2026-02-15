@@ -12,6 +12,7 @@ pub mod constants;
 pub mod crypto;
 pub mod error;
 pub mod network;
+pub mod protocol;
 pub mod transport;
 pub mod utils;
 

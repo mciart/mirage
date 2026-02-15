@@ -9,9 +9,7 @@ mod relayer;
 use crate::auth::AuthClient;
 use mirage::auth::users_file::UsersFileClientAuthenticator;
 
-use boring::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use mirage::config::ClientConfig;
-use mirage::constants::TLS_ALPN_PROTOCOLS;
 use mirage::network::interface::{Interface, InterfaceIO};
 use mirage::network::route::{add_routes, get_gateway_for, ExclusionRouteGuard, RouteTarget};
 use mirage::{MirageError, Result};
@@ -551,157 +549,12 @@ impl MirageClient {
             let endpoint = if let Some(endpoint) = &self.quic_endpoint {
                 endpoint.clone()
             } else {
-                let mut roots = rustls::RootCertStore::empty();
-
-                // Load system root certificates
-                let native_certs = rustls_native_certs::load_native_certs();
-                if !native_certs.errors.is_empty() {
-                    warn!(
-                        "Errors loading native certs for QUIC: {:?}",
-                        native_certs.errors
-                    );
-                }
-                let mut loaded_count = 0;
-                for cert in native_certs.certs {
-                    if roots.add(cert).is_ok() {
-                        loaded_count += 1;
-                    }
-                }
-                debug!("Loaded {} system root certificates for QUIC", loaded_count);
-
-                // Load user-specified certificates
-                for path in &self.config.authentication.trusted_certificate_paths {
-                    let file = std::fs::File::open(path).map_err(|e| {
-                        MirageError::config_error(format!(
-                            "Failed to open CA file {:?}: {}",
-                            path, e
-                        ))
-                    })?;
-                    let mut reader = std::io::BufReader::new(file);
-                    for cert in rustls_pemfile::certs(&mut reader) {
-                        let cert = cert.map_err(|e| {
-                            MirageError::config_error(format!("Failed to parse CA cert: {}", e))
-                        })?;
-                        roots.add(cert).map_err(|e| {
-                            MirageError::config_error(format!("Failed to add CA cert: {}", e))
-                        })?;
-                    }
-                }
-
-                for pem in &self.config.authentication.trusted_certificates {
-                    let mut reader = std::io::Cursor::new(pem.as_bytes());
-                    for cert in rustls_pemfile::certs(&mut reader) {
-                        let cert = cert.map_err(|e| {
-                            MirageError::config_error(format!("Failed to parse CA cert: {}", e))
-                        })?;
-                        roots.add(cert).map_err(|e| {
-                            MirageError::config_error(format!("Failed to add CA cert: {}", e))
-                        })?;
-                    }
-                }
-
-                let mut client_crypto = rustls::ClientConfig::builder()
-                    .with_root_certificates(roots)
-                    .with_no_client_auth();
-
-                // ALPN - use h3 for better camouflage
-                client_crypto.alpn_protocols = mirage::constants::QUIC_ALPN_PROTOCOLS
-                    .iter()
-                    .map(|p| p.to_vec())
-                    .collect();
-
-                // Insecure mode
-                if self.config.connection.insecure {
-                    warn!("QUIC certificate verification DISABLED - this is unsafe!");
-                    #[derive(Debug)]
-                    struct NoVerifier;
-                    impl rustls::client::danger::ServerCertVerifier for NoVerifier {
-                        fn verify_server_cert(
-                            &self,
-                            _end_entity: &rustls::pki_types::CertificateDer<'_>,
-                            _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-                            _server_name: &rustls::pki_types::ServerName<'_>,
-                            _ocsp_response: &[u8],
-                            _now: rustls::pki_types::UnixTime,
-                        ) -> std::result::Result<
-                            rustls::client::danger::ServerCertVerified,
-                            rustls::Error,
-                        > {
-                            Ok(rustls::client::danger::ServerCertVerified::assertion())
-                        }
-                        fn verify_tls12_signature(
-                            &self,
-                            _message: &[u8],
-                            _cert: &rustls::pki_types::CertificateDer<'_>,
-                            _dss: &rustls::DigitallySignedStruct,
-                        ) -> std::result::Result<
-                            rustls::client::danger::HandshakeSignatureValid,
-                            rustls::Error,
-                        > {
-                            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-                        }
-                        fn verify_tls13_signature(
-                            &self,
-                            _message: &[u8],
-                            _cert: &rustls::pki_types::CertificateDer<'_>,
-                            _dss: &rustls::DigitallySignedStruct,
-                        ) -> std::result::Result<
-                            rustls::client::danger::HandshakeSignatureValid,
-                            rustls::Error,
-                        > {
-                            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-                        }
-                        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-                            vec![
-                                rustls::SignatureScheme::RSA_PSS_SHA256,
-                                rustls::SignatureScheme::RSA_PSS_SHA384,
-                                rustls::SignatureScheme::RSA_PSS_SHA512,
-                                rustls::SignatureScheme::ED25519,
-                            ]
-                        }
-                    }
-                    client_crypto
-                        .dangerous()
-                        .set_certificate_verifier(std::sync::Arc::new(NoVerifier));
-                }
-
-                let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(
-                    client_crypto,
-                )
-                .map_err(|e| {
-                    MirageError::config_error(format!("Failed to create QUIC client crypto: {}", e))
-                })?;
-                let mut client_config =
-                    quinn::ClientConfig::new(std::sync::Arc::new(client_crypto));
-                let transport_config = mirage::transport::quic::common_transport_config(
-                    self.config.connection.keep_alive_interval_s,
-                    self.config.connection.connection_timeout_s,
-                    self.config.connection.outer_mtu,
-                );
-                client_config.transport_config(std::sync::Arc::new(transport_config));
-
-                // Bind to 0.0.0.0:0 (any port)
-                let bind_addr = if server_addr.is_ipv6() {
-                    "[::]:0".parse().unwrap()
-                } else {
-                    "0.0.0.0:0".parse().unwrap()
-                };
-
-                let mut endpoint = quinn::Endpoint::client(bind_addr).map_err(|e| {
-                    MirageError::system(format!("Failed to bind QUIC client socket: {}", e))
-                })?;
-                endpoint.set_default_client_config(client_config);
-
+                let endpoint = mirage::protocol::quic::create_endpoint(&self.config)?;
                 self.quic_endpoint = Some(endpoint.clone());
                 endpoint
             };
 
-            let host = if let Some(sni) = &self.config.connection.sni {
-                debug!("Using configured SNI for QUIC: {}", sni);
-                sni.as_str()
-            } else {
-                connection_string.split(':').next().unwrap_or("localhost")
-            };
+            let host = mirage::protocol::quic::resolve_sni(&self.config, connection_string);
 
             info!("Connecting via QUIC to {} (SNI: {})", server_addr, host);
 
@@ -744,97 +597,13 @@ impl MirageClient {
 
         debug!("TCP connection established to {}", server_addr);
 
-        let mut connector_builder = SslConnector::builder(SslMethod::tls_client())
-            .map_err(|e| MirageError::system(format!("Failed to create SSL connector: {e}")))?;
-
-        // Log the insecure setting status for debugging
-        debug!(
-            "Certificate verification config: insecure={}",
-            self.config.connection.insecure
-        );
-
-        if self.config.connection.insecure {
-            warn!("TLS certificate verification DISABLED - this is unsafe!");
-            connector_builder.set_verify(SslVerifyMode::NONE);
-        } else {
-            connector_builder.set_verify(SslVerifyMode::PEER);
-
-            // Load system root certificates (for macOS/Windows/Linux compatibility)
-            // BoringSSL doesn't load macOS Keychain certificates by default
-            let native_certs = rustls_native_certs::load_native_certs();
-            if !native_certs.errors.is_empty() {
-                warn!("Errors loading native certs: {:?}", native_certs.errors);
-            }
-            let mut loaded_count = 0;
-            for cert in native_certs.certs {
-                if let Ok(x509) = boring::x509::X509::from_der(&cert) {
-                    if connector_builder.cert_store_mut().add_cert(x509).is_ok() {
-                        loaded_count += 1;
-                    }
-                }
-            }
-            info!("Loaded {} system root certificates", loaded_count);
-
-            // Also load user-specified certificates
-            for path in &self.config.authentication.trusted_certificate_paths {
-                connector_builder.set_ca_file(path).map_err(|e| {
-                    MirageError::config_error(format!("Failed to load CA file {:?}: {}", path, e))
-                })?;
-            }
-            for pem in &self.config.authentication.trusted_certificates {
-                let cert = boring::x509::X509::from_pem(pem.as_bytes()).map_err(|e| {
-                    MirageError::config_error(format!("Failed to parse CA certificate: {}", e))
-                })?;
-                connector_builder
-                    .cert_store_mut()
-                    .add_cert(cert)
-                    .map_err(|e| {
-                        MirageError::system(format!("Failed to add CA certificate to store: {}", e))
-                    })?;
-            }
-        }
+        let mut connector_builder = mirage::protocol::tcp_tls::build_connector(&self.config)?;
 
         let sni = if protocol == "reality" {
-            // Reality mode: server uses its own certificate, not the real target's
-            // So we must disable certificate verification for Reality connections
-            connector_builder.set_verify(SslVerifyMode::NONE);
-            debug!("Reality mode: Certificate verification disabled (expected)");
-
-            let sni = &self.config.reality.target_sni;
-            debug!("Using SNI (Reality): {}", sni);
-
-            mirage::crypto::impersonate::apply_chrome_fingerprint(&mut connector_builder)?;
-
-            let mut protocols_to_send: Vec<Vec<u8>> = TLS_ALPN_PROTOCOLS.iter().cloned().collect();
-            if let Some(token) = self.config.reality.short_ids.first() {
-                protocols_to_send.push(token.as_bytes().to_vec());
-            }
-
-            let alpn_protocols: Vec<u8> = protocols_to_send
-                .iter()
-                .flat_map(|p| {
-                    let mut v = vec![p.len() as u8];
-                    v.extend_from_slice(p);
-                    v
-                })
-                .collect();
-
-            connector_builder
-                .set_alpn_protos(&alpn_protocols)
-                .map_err(|e| MirageError::system(format!("Failed to set ALPN: {e}")))?;
-
-            sni.clone()
+            mirage::protocol::reality::configure(&mut connector_builder, &self.config)?
         } else {
             // Standard TCP/TLS
-            let host = if let Some(sni) = &self.config.connection.sni {
-                debug!("Using configured SNI: {}", sni);
-                sni.as_str()
-            } else {
-                let h = connection_string.split(':').next().unwrap_or("");
-                debug!("Using SNI (derived from connection string): {}", h);
-                h
-            };
-
+            let host = mirage::protocol::tcp_tls::resolve_sni(&self.config, connection_string);
             connector_builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
             host.to_string()
         };

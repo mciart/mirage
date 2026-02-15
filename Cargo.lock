@@ -2578,6 +2578,8 @@ dependencies = [
  "quinn",
  "rand 0.8.5",
  "rustls",
+ "rustls-native-certs",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "socket2",

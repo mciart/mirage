@@ -1,4 +1,4 @@
-use mirage::network::tls_detect::{parse_client_hello, ClientHelloInfo};
+use mirage::protocol::tls_detect::{parse_client_hello, ClientHelloInfo};
 use mirage::Result;
 use mirage::{config::ServerConfig, MirageError};
 use subtle::ConstantTimeEq;
