@@ -79,16 +79,22 @@ Mirage 放弃了传统的 OpenSSL/Rustls 模拟方案，直接集成 Google Chro
 Mirage 依赖 Rust 工具链和 C 编译器（用于构建 BoringSSL）。
 
 ```bash
-# 编译所有组件
+# 编译
 cargo build --release
 
-# 安装二进制文件
-cargo install --path mirage-client
-cargo install --path mirage-server
-cargo install --path mirage-gui
+# 安装 (单一二进制，包含客户端、服务端和用户管理)
+cargo install --path mirage
 ```
 
-### 使用 Docker 运行（未测试）
+安装后可通过子命令使用：
+
+```bash
+mirage client --config client.toml   # 运行客户端
+mirage server --config server.toml   # 运行服务端
+mirage users --add users             # 管理用户
+```
+
+### 使用 Docker 运行
 
 ```bash
 # 服务端运行示例
@@ -98,7 +104,7 @@ docker run --rm \
   -p 443:443 \
   -v $(pwd)/config:/etc/mirage \
   m0dex/mirage:latest \
-  mirage-server --config-path /etc/mirage/server.toml
+  mirage server --config /etc/mirage/server.toml
 ```
 
 ---
@@ -230,22 +236,15 @@ ip6tables -I FORWARD -i tun+ -j ACCEPT
 
 ## 用户管理 (User Management)
 
-Mirage 使用 `Argon2` 算法存储加密的用户密码。服务端提供了配套的 `mirage-users` 命令行工具来管理用户文件。
+Mirage 使用 `Argon2` 算法存储加密的用户密码。用户管理功能内置于 `mirage` 二进制中。
 
-### 1. 安装工具
-`mirage-users` 包含在 `mirage-server` 包中：
-```bash
-cargo install --path mirage-server
-# 现在可以使用 mirage-users 命令
-```
-
-### 2. 使用方法
+### 使用方法
 ```bash
 # 添加新用户 (交互式输入密码)
-mirage-users --add users
+mirage users --add users
 
 # 删除用户
-mirage-users --delete users
+mirage users --delete users
 ```
 
 ### 3. 服务端配置

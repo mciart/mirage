@@ -72,19 +72,10 @@ impl MirageClient {
         // Resolve server addresses (support Dual Stack)
         let resolved_addrs = self.resolve_server_address().await?;
 
-        let primary_addr = if self.config.connection.dual_stack_enabled && resolved_addrs.len() > 1
-        {
-            // If dual stack enabled, we might want to ensure we have both v4 and v6 if possible
-            // For the primary connection, we just pick the first one (preference is usually given by lookup_host order)
-            resolved_addrs[0]
-        } else {
-            resolved_addrs[0]
-        };
-
         // Connect to server via TCP/TLS (Primary Connection)
-        // We pass the specific address to connect to Avoid re-resolving
+        // Try all resolved addresses for each protocol before falling back
         let (tls_stream, remote_addr, protocol): (TransportStream, SocketAddr, String) =
-            self.connect_to_specific_address(primary_addr).await?;
+            self.connect_to_server(&resolved_addrs).await?;
 
         // Anti-Loop & Excluded Routes: Add exclusion routes via the gateway used to reach them
         let server_ip = remote_addr.ip();
@@ -312,7 +303,7 @@ impl MirageClient {
                     target_addr
                 );
 
-                match self.connect_to_specific_address(target_addr).await {
+                match self.connect_to_server(&[target_addr]).await {
                     Ok((stream, _, _)) => {
                         // Authenticate secondary connection
                         let (r, w) = tokio::io::split(stream);
@@ -438,10 +429,11 @@ impl MirageClient {
         Ok(addrs)
     }
 
-    /// Connects to a specific server address using the configured protocols.
-    async fn connect_to_specific_address(
+    /// Connects to the server using the configured protocols.
+    /// For each protocol, tries all resolved addresses before falling back to the next protocol.
+    async fn connect_to_server(
         &mut self,
-        server_addr: SocketAddr,
+        resolved_addrs: &[SocketAddr],
     ) -> Result<(TransportStream, SocketAddr, String)> {
         let connection_string = if self.config.connection_string.contains(':') {
             self.config.connection_string.clone()
@@ -457,44 +449,46 @@ impl MirageClient {
         }
 
         info!(
-            "Connection Strategy to {}: Enabled protocols: {:?}",
-            server_addr, protocols
+            "Connection Strategy: Resolved addresses: {:?}, Enabled protocols: {:?}",
+            resolved_addrs, protocols
         );
 
         let mut last_error = None;
 
         for protocol in &protocols {
-            info!(
-                "Attempting connection to {} using protocol: {}",
-                server_addr, protocol
-            );
+            for server_addr in resolved_addrs {
+                info!(
+                    "Attempting connection to {} using protocol: {}",
+                    server_addr, protocol
+                );
 
-            match self
-                .connect_with_protocol(server_addr, protocol, &connection_string)
-                .await
-            {
-                Ok(stream) => {
-                    info!(
-                        "Successfully connected to {} using protocol: {}",
-                        server_addr, protocol
-                    );
-                    return Ok((stream, server_addr, protocol.to_string()));
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to connect to {} using {}: {}",
-                        server_addr, protocol, e
-                    );
-                    last_error = Some(e);
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                match self
+                    .connect_with_protocol(*server_addr, protocol, &connection_string)
+                    .await
+                {
+                    Ok(stream) => {
+                        info!(
+                            "Successfully connected to {} using protocol: {}",
+                            server_addr, protocol
+                        );
+                        return Ok((stream, *server_addr, protocol.to_string()));
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to connect to {} using {}: {}",
+                            server_addr, protocol, e
+                        );
+                        last_error = Some(e);
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
                 }
             }
         }
 
         Err(last_error.unwrap_or_else(|| {
             MirageError::connection_failed(format!(
-                "All connection attempts to {} failed",
-                server_addr
+                "All connection attempts to {:?} failed",
+                resolved_addrs
             ))
         }))
     }
