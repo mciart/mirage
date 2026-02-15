@@ -89,9 +89,9 @@ cargo install --path mirage
 安装后可通过子命令使用：
 
 ```bash
-mirage client --config client.toml   # 运行客户端
-mirage server --config server.toml   # 运行服务端
-mirage users --add users             # 管理用户
+mirage client --config /path/to/client.toml   # 运行客户端
+mirage server --config /path/to/server.toml   # 运行服务端
+mirage users --add /path/to/users             # 管理用户
 ```
 
 ### 使用 Docker 运行
