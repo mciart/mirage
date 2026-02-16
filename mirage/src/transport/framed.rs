@@ -24,6 +24,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 const FRAME_TYPE_DATA: u8 = 0x00;
 /// Frame type: Padding (for traffic shaping)
 const FRAME_TYPE_PADDING: u8 = 0x01;
+/// Frame type: Heartbeat (keep-alive)
+const FRAME_TYPE_HEARTBEAT: u8 = 0x02;
 
 /// Encodes a compact frame header.
 /// Format: [1 byte type] [2 bytes length BE]
@@ -283,6 +285,15 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
         if flush_stream {
             self.writer.flush().await?;
         }
+        Ok(())
+    }
+
+    /// Sends a heartbeat (zero-payload keep-alive frame).
+    /// Used to prevent middleboxes from closing idle TCP/TLS connections.
+    pub async fn send_heartbeat(&mut self) -> Result<()> {
+        let (header, header_len) = encode_compact_header(0, FRAME_TYPE_HEARTBEAT);
+        self.writer.write_all(&header[..header_len]).await?;
+        self.writer.flush().await?;
         Ok(())
     }
 }

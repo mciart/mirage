@@ -29,8 +29,9 @@ pub fn default_mtu() -> u16 {
 }
 
 pub fn default_outer_mtu() -> u16 {
-    // 1350 is a safe value for WAN (below 1500 - PPPoE overhead)
-    1350
+    // 1420 = 1500 (Ethernet) - ~80 (IP/UDP/QUIC overhead)
+    // Optimal for standard broadband; QUIC PMTU discovery auto-reduces if needed
+    1420
 }
 
 pub fn default_timeout_s() -> u64 {

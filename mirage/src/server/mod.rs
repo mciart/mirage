@@ -347,9 +347,20 @@ impl MirageServer {
                     None => continue,
                 };
 
-                debug!("Found connection for IP {dest_addr}");
-
-                connection_queue.send(packet.into()).await?;
+                // Non-blocking send: if one client's channel is full, drop the packet
+                // rather than blocking the TUN reader for ALL clients.
+                if let Err(e) = connection_queue.try_send(packet.into()) {
+                    match e {
+                        tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                            debug!("Channel full for client {dest_addr}, dropping packet");
+                        }
+                        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                            debug!("Channel closed for client {dest_addr}, removing from queue");
+                            drop(connection_queue);
+                            connection_queues.remove(&dest_addr);
+                        }
+                    }
+                }
             }
         }
     }
@@ -424,8 +435,21 @@ async fn relay_unisolated(
             };
 
             match connection_queues.get(&dest_addr) {
-                // Send the packet to the appropriate TLS connection
-                Some(connection_queue) => connection_queue.send(packet.into()).await?,
+                // Send the packet to the appropriate TLS connection (non-blocking)
+                Some(connection_queue) => {
+                    if let Err(e) = connection_queue.try_send(packet.into()) {
+                        match e {
+                            tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                                debug!("Channel full for relay to {dest_addr}, dropping packet");
+                            }
+                            tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                                debug!("Channel closed for relay to {dest_addr}");
+                                drop(connection_queue);
+                                connection_queues.remove(&dest_addr);
+                            }
+                        }
+                    }
+                }
                 // Send the packet to the TUN interface
                 None => interface.write_packet(packet).await?,
             }

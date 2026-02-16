@@ -20,7 +20,7 @@ use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use rand::Rng;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
@@ -86,6 +86,44 @@ impl RotationConfig {
     }
 }
 
+/// Shared throughput statistics for the mux controller.
+#[derive(Default)]
+pub struct MuxStats {
+    /// Total packets sent (TUN → network)
+    pub tx_packets: AtomicU64,
+    /// Total bytes sent (TUN → network)
+    pub tx_bytes: AtomicU64,
+    /// Total packets received (network → TUN)
+    pub rx_packets: AtomicU64,
+    /// Total bytes received (network → TUN)
+    pub rx_bytes: AtomicU64,
+}
+
+impl MuxStats {
+    fn format_bytes(bytes: u64) -> String {
+        if bytes >= 1_073_741_824 {
+            format!("{:.2} GB", bytes as f64 / 1_073_741_824.0)
+        } else if bytes >= 1_048_576 {
+            format!("{:.2} MB", bytes as f64 / 1_048_576.0)
+        } else if bytes >= 1024 {
+            format!("{:.1} KB", bytes as f64 / 1024.0)
+        } else {
+            format!("{} B", bytes)
+        }
+    }
+
+    fn format_rate(bytes: u64, secs: f64) -> String {
+        let bps = bytes as f64 / secs;
+        if bps >= 1_048_576.0 {
+            format!("{:.2} MB/s", bps / 1_048_576.0)
+        } else if bps >= 1024.0 {
+            format!("{:.1} KB/s", bps / 1024.0)
+        } else {
+            format!("{:.0} B/s", bps)
+        }
+    }
+}
+
 /// A request to the client to establish a new secondary connection.
 /// Contains (slot_index, response_channel) so the factory knows which address to use.
 pub type ConnectionRequest<S> = (usize, oneshot::Sender<Option<(ReadHalf<S>, WriteHalf<S>)>>);
@@ -108,6 +146,8 @@ pub struct MuxController<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> {
     readers: Vec<Option<FramedReader<ReadHalf<S>>>>,
     /// Channel to request new connections from the client.
     conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
+    /// Shared throughput statistics
+    stats: Arc<MuxStats>,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
@@ -146,6 +186,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             lifetimes,
             readers,
             conn_request_tx,
+            stats: Arc::new(MuxStats::default()),
         }
     }
 
@@ -173,8 +214,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         for (i, reader) in self.readers.iter_mut().enumerate() {
             if let Some(reader) = reader.take() {
                 let tx = inbound_tx.clone();
+                let stats = self.stats.clone();
                 let handle =
-                    tokio::spawn(async move { Self::inbound_reader_task(i, reader, tx).await });
+                    tokio::spawn(
+                        async move { Self::inbound_reader_task(i, reader, tx, stats).await },
+                    );
                 reader_handles.push(Some(handle));
             } else {
                 reader_handles.push(None);
@@ -205,6 +249,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         let active_idx_clone = active_idx.clone();
         let obfuscation_clone = obfuscation.clone();
         let dead_writers_clone = dead_writers.clone();
+        let stats_for_distributor = self.stats.clone();
 
         tasks.push(tokio::spawn(async move {
             Self::outbound_distributor_task(
@@ -215,6 +260,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 active_idx_clone,
                 obfuscation_clone,
                 dead_writers_clone,
+                stats_for_distributor,
             )
             .await
         }));
@@ -229,6 +275,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             let inbound_tx_for_rotation = inbound_tx.clone();
 
             let dead_writers_for_rotation = dead_writers.clone();
+            let stats_for_rotation = self.stats.clone();
 
             tasks.push(tokio::spawn(async move {
                 Self::rotation_supervisor(
@@ -240,6 +287,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     inbound_tx_for_rotation,
                     dead_writers_for_rotation,
                     reader_handles,
+                    stats_for_rotation,
                 )
                 .await
             }));
@@ -251,6 +299,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         }
 
         interface.configure()?;
+
+        // Spawn periodic stats reporter (every 30 seconds)
+        let stats_for_reporter = self.stats.clone();
+        tasks.push(tokio::spawn(async move {
+            Self::stats_reporter_task(stats_for_reporter).await
+        }));
+
+        // Spawn heartbeat sender (every 15 seconds on each alive connection)
+        let writers_for_heartbeat = self.writers.clone();
+        let dead_writers_for_heartbeat = dead_writers.clone();
+        tasks.push(tokio::spawn(async move {
+            Self::heartbeat_sender_task(writers_for_heartbeat, dead_writers_for_heartbeat).await
+        }));
 
         info!(
             "MuxController started: {} connections, mode={:?}, rotation={}",
@@ -289,11 +350,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         conn_id: usize,
         mut reader: FramedReader<ReadHalf<S>>,
         tx: mpsc::Sender<Packet>,
+        stats: Arc<MuxStats>,
     ) -> Result<()> {
         debug!("Mux inbound reader {} started", conn_id);
         loop {
             match reader.recv_packet().await {
                 Ok(packet) => {
+                    stats.rx_packets.fetch_add(1, Ordering::Relaxed);
+                    stats
+                        .rx_bytes
+                        .fetch_add(packet.len() as u64, Ordering::Relaxed);
                     let packet: Packet = Bytes::from(packet).into();
                     if tx.send(packet).await.is_err() {
                         debug!("Mux inbound reader {}: merge channel closed", conn_id);
@@ -324,6 +390,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
     ///
     /// Tracks dead writers to avoid spamming errors on dropped connections.
     /// Dead writers are skipped until rotation replaces them.
+    #[allow(clippy::too_many_arguments)]
     async fn outbound_distributor_task(
         interface: Arc<Interface<impl InterfaceIO>>,
         writers: Vec<Arc<Mutex<FramedWriter<WriteHalf<S>>>>>,
@@ -332,6 +399,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         active_idx: Arc<AtomicUsize>,
         _obfuscation: ObfuscationConfig,
         dead_writers: Arc<Vec<AtomicBool>>,
+        stats: Arc<MuxStats>,
     ) -> Result<()> {
         debug!(
             "Mux outbound distributor started: {} writers, mode={:?}",
@@ -349,6 +417,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             if packets.is_empty() {
                 continue;
             }
+
+            // Update TX stats
+            let batch_bytes: u64 = packets.iter().map(|p| p.len() as u64).sum();
+            stats
+                .tx_packets
+                .fetch_add(packets.len() as u64, Ordering::Relaxed);
+            stats.tx_bytes.fetch_add(batch_bytes, Ordering::Relaxed);
 
             // Check if all writers are dead
             let alive_count = dead_writers
@@ -417,34 +492,34 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     let writer = &writers[current];
                     let mut w = writer.lock().await;
 
-                    let write_start = Instant::now();
-                    let mut failed = false;
-                    for packet in &packets {
-                        if w.send_packet_no_flush(packet).await.is_err() {
-                            failed = true;
-                            break;
+                    // Use timeout to detect slow/congested connections.
+                    // If the write takes too long, mark as dead and switch to standby.
+                    let write_result = tokio::time::timeout(Duration::from_secs(3), async {
+                        for packet in &packets {
+                            if w.send_packet_no_flush(packet).await.is_err() {
+                                return false;
+                            }
                         }
-                    }
+                        w.flush().await.is_ok()
+                    })
+                    .await;
 
-                    if !failed && w.flush().await.is_err() {
-                        failed = true;
-                    }
-
-                    let write_elapsed = write_start.elapsed();
-                    if write_elapsed > Duration::from_millis(500) {
-                        warn!(
-                            "Mux active-standby: write to connection {} took {:?} ({} packets)",
-                            current,
-                            write_elapsed,
-                            packets.len()
-                        );
-                    }
+                    let failed = match write_result {
+                        Ok(true) => false, // Write succeeded
+                        Ok(false) => {
+                            warn!("Mux active-standby: connection {} write error", current);
+                            true
+                        }
+                        Err(_) => {
+                            warn!(
+                                "Mux active-standby: connection {} write timed out (>3s), marking dead",
+                                current
+                            );
+                            true
+                        }
+                    };
 
                     if failed {
-                        warn!(
-                            "Mux active-standby: connection {} failed, marking dead",
-                            current
-                        );
                         dead_writers[current].store(true, Ordering::Relaxed);
 
                         // Find next alive writer and retry
@@ -470,6 +545,71 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         }
     }
 
+    /// Periodic stats reporter: logs throughput every 30 seconds.
+    async fn stats_reporter_task(stats: Arc<MuxStats>) -> Result<()> {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        let mut last_tx_bytes: u64 = 0;
+        let mut last_rx_bytes: u64 = 0;
+        let mut last_time = Instant::now();
+
+        // Skip the first immediate tick
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+
+            let tx_pkts = stats.tx_packets.load(Ordering::Relaxed);
+            let tx_bytes = stats.tx_bytes.load(Ordering::Relaxed);
+            let rx_pkts = stats.rx_packets.load(Ordering::Relaxed);
+            let rx_bytes = stats.rx_bytes.load(Ordering::Relaxed);
+
+            let elapsed = last_time.elapsed().as_secs_f64();
+            let tx_delta = tx_bytes.saturating_sub(last_tx_bytes);
+            let rx_delta = rx_bytes.saturating_sub(last_rx_bytes);
+
+            info!(
+                "[Stats] TX: {} pkts, {} | RX: {} pkts, {} | Rates: \u{2191} {} \u{2193} {}",
+                tx_pkts,
+                MuxStats::format_bytes(tx_bytes),
+                rx_pkts,
+                MuxStats::format_bytes(rx_bytes),
+                MuxStats::format_rate(tx_delta, elapsed),
+                MuxStats::format_rate(rx_delta, elapsed),
+            );
+
+            last_tx_bytes = tx_bytes;
+            last_rx_bytes = rx_bytes;
+            last_time = Instant::now();
+        }
+    }
+
+    /// Heartbeat sender: periodically sends keep-alive frames on all alive connections.
+    /// Also serves as background health check — failed heartbeats mark connections dead.
+    async fn heartbeat_sender_task(
+        writers: Vec<Arc<Mutex<FramedWriter<WriteHalf<S>>>>>,
+        dead_writers: Arc<Vec<AtomicBool>>,
+    ) -> Result<()> {
+        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        // Skip immediate first tick
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+
+            for (i, writer) in writers.iter().enumerate() {
+                if dead_writers[i].load(Ordering::Relaxed) {
+                    continue;
+                }
+
+                let mut w = writer.lock().await;
+                if w.send_heartbeat().await.is_err() {
+                    warn!("Heartbeat failed on connection {}, marking dead", i);
+                    dead_writers[i].store(true, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
     /// Rotation supervisor: monitors connection lifetimes and triggers rotation.
     #[allow(clippy::too_many_arguments)]
     async fn rotation_supervisor(
@@ -481,6 +621,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         inbound_tx: mpsc::Sender<Packet>,
         dead_writers: Arc<Vec<AtomicBool>>,
         mut reader_handles: Vec<Option<tokio::task::JoinHandle<Result<()>>>>,
+        stats: Arc<MuxStats>,
     ) -> Result<()> {
         // Use mutable local copies for tracking
         let num_connections = writers.len();
@@ -560,10 +701,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     // Spawn a new inbound reader for the replacement connection
                     let tx = inbound_tx.clone();
                     let conn_id = expire_idx;
+                    let stats_for_reader = stats.clone();
                     let new_handle = tokio::spawn(async move {
-                        if let Err(e) =
-                            Self::inbound_reader_task(conn_id, FramedReader::new(new_reader), tx)
-                                .await
+                        if let Err(e) = Self::inbound_reader_task(
+                            conn_id,
+                            FramedReader::new(new_reader),
+                            tx,
+                            stats_for_reader,
+                        )
+                        .await
                         {
                             debug!("Rotated inbound reader {} ended: {}", conn_id, e);
                         }

@@ -71,3 +71,50 @@ pub struct ServerAuthenticationConfig {
     /// The path to the file containing the list of users and their password hashes
     pub users_file: PathBuf,
 }
+
+impl ServerConfig {
+    /// Validates configuration at startup, returning a descriptive error for any misconfiguration.
+    pub fn validate(&self) -> crate::error::Result<()> {
+        use crate::error::MirageError;
+
+        // Certificate files must exist
+        if !self.certificate_file.exists() {
+            return Err(MirageError::config_error(format!(
+                "Certificate file not found: {:?}",
+                self.certificate_file
+            )));
+        }
+        if !self.certificate_key_file.exists() {
+            return Err(MirageError::config_error(format!(
+                "Certificate key file not found: {:?}",
+                self.certificate_key_file
+            )));
+        }
+
+        // Users file must exist
+        if !self.authentication.users_file.exists() {
+            return Err(MirageError::config_error(format!(
+                "Users file not found: {:?}",
+                self.authentication.users_file
+            )));
+        }
+
+        // QUIC port must be > 0 when enabled
+        if self.quic_enabled && self.quic_bind_port == 0 {
+            return Err(MirageError::config_error(
+                "quic_bind_port must be > 0 when quic_enabled is true",
+            ));
+        }
+
+        // JLS requires both password and IV
+        let has_pwd = self.camouflage.jls_password.is_some();
+        let has_iv = self.camouflage.jls_iv.is_some();
+        if has_pwd != has_iv {
+            return Err(MirageError::config_error(
+                "JLS camouflage requires both jls_password and jls_iv to be set",
+            ));
+        }
+
+        Ok(())
+    }
+}

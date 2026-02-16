@@ -74,3 +74,49 @@ pub struct ClientAuthenticationConfig {
     #[serde(default = "default_trusted_certificates")]
     pub trusted_certificates: Vec<String>,
 }
+
+impl ClientConfig {
+    /// Validates configuration at startup, returning a descriptive error for any misconfiguration.
+    pub fn validate(&self) -> crate::error::Result<()> {
+        use crate::error::MirageError;
+
+        if self.transport.protocols.is_empty() {
+            return Err(MirageError::config_error(
+                "No transport protocols specified",
+            ));
+        }
+
+        if self.transport.parallel_connections == 0 {
+            return Err(MirageError::config_error(
+                "parallel_connections must be at least 1",
+            ));
+        }
+
+        // JLS requires both password and IV
+        let has_pwd = self.camouflage.jls_password.is_some();
+        let has_iv = self.camouflage.jls_iv.is_some();
+        if has_pwd != has_iv {
+            return Err(MirageError::config_error(
+                "JLS camouflage requires both jls_password and jls_iv to be set",
+            ));
+        }
+
+        // Outer MTU must accommodate inner MTU + protocol overhead
+        if self.connection.outer_mtu < self.connection.mtu.saturating_add(80) {
+            tracing::warn!(
+                "outer_mtu ({}) is close to mtu ({}) — may cause fragmentation. Recommend outer_mtu >= mtu + 80",
+                self.connection.outer_mtu, self.connection.mtu
+            );
+        }
+
+        // Rotation requires more than 1 connection for meaningful failover
+        if self.connection.max_lifetime_s > 0 && self.transport.parallel_connections < 2 {
+            tracing::warn!(
+                "Connection rotation (max_lifetime_s={}) works best with parallel_connections >= 2",
+                self.connection.max_lifetime_s,
+            );
+        }
+
+        Ok(())
+    }
+}

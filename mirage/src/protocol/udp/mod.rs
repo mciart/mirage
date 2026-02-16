@@ -82,8 +82,16 @@ pub fn build_rustls_config(config: &ClientConfig) -> Result<rustls::ClientConfig
 
     // JLS camouflage — makes QUIC look like legitimate traffic to target_sni
     if config.camouflage.is_jls() {
-        let pwd = config.camouflage.jls_password.as_ref().unwrap();
-        let iv = config.camouflage.jls_iv.as_ref().unwrap();
+        let pwd = config
+            .camouflage
+            .jls_password
+            .as_ref()
+            .expect("JLS password required when is_jls()");
+        let iv = config
+            .camouflage
+            .jls_iv
+            .as_ref()
+            .expect("JLS IV required when is_jls()");
         client_crypto.jls_config = rustls::jls::JlsClientConfig::new(pwd, iv).enable(true);
         info!(
             "JLS camouflage enabled (target: {})",

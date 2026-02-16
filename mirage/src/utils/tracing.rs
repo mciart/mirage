@@ -14,7 +14,7 @@ pub fn log_subscriber(log_level: &str) -> impl Subscriber {
     #[cfg(not(windows))]
     let with_ansi = true;
 
-    let filter_layer = EnvFilter::try_new(log_level).unwrap();
+    let filter_layer = EnvFilter::try_new(log_level).expect("Invalid log level");
 
     SubscriberBuilder::default()
         .with_env_filter(filter_layer)

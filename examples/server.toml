@@ -32,8 +32,8 @@ users_file = "examples/users"
 # 默认 1280（IPv6 最小 MTU，减少 TCP-over-TCP 问题）
 mtu = 1280
 # 外层隧道 MTU (UDP 包大小限制)
-# 默认 1350 (兼容 PPPoE/Windows)
-outer_mtu = 1350
+# 外层隧道 MTU (UDP 包大小限制，默认 1420)
+outer_mtu = 1420
 # 开启 NODELAY
 tcp_nodelay = true
 # 连接超时时间（秒）

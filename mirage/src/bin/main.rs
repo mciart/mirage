@@ -66,6 +66,7 @@ async fn main() {
 
 async fn run_client(config_path: PathBuf, env_prefix: String) -> Result<()> {
     let config = ClientConfig::from_path(&config_path, &env_prefix)?;
+    config.validate()?;
     tracing::subscriber::set_global_default(log_subscriber(&config.log.level))?;
 
     let mut client = mirage::client::MirageClient::new(config);
@@ -105,6 +106,7 @@ async fn run_client(config_path: PathBuf, env_prefix: String) -> Result<()> {
 
 async fn run_server(config_path: PathBuf, env_prefix: String) -> Result<()> {
     let config = ServerConfig::from_path(&config_path, &env_prefix)?;
+    config.validate()?;
     tracing::subscriber::set_global_default(log_subscriber(&config.log.level))?;
 
     let server = mirage::server::MirageServer::new(config)?;

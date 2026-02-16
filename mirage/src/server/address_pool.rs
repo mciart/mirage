@@ -83,7 +83,7 @@ impl AddressPool {
         let network = if self.network_v4.contains(&address) {
             self.network_v4
         } else if self.network_v6.is_some_and(|n| n.contains(&address)) {
-            self.network_v6.unwrap()
+            self.network_v6.expect("checked with is_some_and")
         } else {
             return None;
         };

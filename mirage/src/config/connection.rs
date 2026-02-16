@@ -12,7 +12,7 @@ pub struct ConnectionConfig {
     /// The MTU for the TUN interface (default = 1280, IPv6 minimum, reduces TCP-over-TCP issues)
     #[serde(default = "default_mtu")]
     pub mtu: u16,
-    /// The Maximum Transmission Unit for the outer tunnel (UDP packets) (default = 1350)
+    /// The Maximum Transmission Unit for the outer tunnel (UDP packets) (default = 1420)
     /// This prevents packet fragmentation and avoids WSAEMSGSIZE on Windows
     #[serde(default = "default_outer_mtu")]
     pub outer_mtu: u16,

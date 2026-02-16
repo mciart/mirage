@@ -60,8 +60,14 @@ fn configure_server_crypto(
 
     // JLS camouflage — forward unauthed connections to upstream, anti-active-probing
     if camouflage.is_jls() {
-        let pwd = camouflage.jls_password.clone().unwrap();
-        let iv = camouflage.jls_iv.clone().unwrap();
+        let pwd = camouflage
+            .jls_password
+            .clone()
+            .expect("JLS password required when is_jls()");
+        let iv = camouflage
+            .jls_iv
+            .clone()
+            .expect("JLS IV required when is_jls()");
         let upstream_addr = format!("{}:443", camouflage.target_sni);
         let upstream_sni = camouflage.target_sni.clone();
         server_config.jls_config = rustls::jls::JlsServerConfig::new(
@@ -123,10 +129,16 @@ pub async fn run_quic_listener(
         let obfuscation = config.obfuscation.clone();
 
         tokio::spawn(async move {
+            let remote = connecting.remote_address();
             let connection = match connecting.await {
                 Ok(conn) => conn,
                 Err(e) => {
-                    warn!("QUIC handshake failed: {}", e);
+                    warn!(
+                        "QUIC handshake failed from {} ({}): {:?}",
+                        remote,
+                        if remote.is_ipv4() { "IPv4" } else { "IPv6" },
+                        e,
+                    );
                     return;
                 }
             };

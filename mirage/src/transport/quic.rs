@@ -72,18 +72,19 @@ pub fn common_transport_config(
 
     // 2. Increase Window Sizes
     let stream_rw = 20 * 1024 * 1024;
-    transport.stream_receive_window(u32::try_from(stream_rw).unwrap().into());
+    transport.stream_receive_window(u32::try_from(stream_rw).expect("stream_rw fits u32").into());
 
     let conn_rw = 40 * 1024 * 1024;
-    transport.receive_window(u32::try_from(conn_rw).unwrap().into());
+    transport.receive_window(u32::try_from(conn_rw).expect("conn_rw fits u32").into());
 
     // 3. Send Window
-    transport.send_window(u64::try_from(conn_rw).unwrap());
+    transport.send_window(u64::try_from(conn_rw).expect("conn_rw fits u64"));
 
     // 4. Keep-alive, timeout
     transport.keep_alive_interval(Some(std::time::Duration::from_secs(keep_alive_interval_s)));
     transport.max_idle_timeout(Some(
-        quinn::IdleTimeout::try_from(std::time::Duration::from_secs(idle_timeout_s)).unwrap(),
+        quinn::IdleTimeout::try_from(std::time::Duration::from_secs(idle_timeout_s))
+            .expect("idle timeout within range"),
     ));
 
     // 5. Datagrams
@@ -129,7 +130,8 @@ pub fn configure_client(outer_mtu: u16) -> Result<quinn::ClientConfig> {
         .with_no_client_auth();
 
     let mut client_config = quinn::ClientConfig::new(std::sync::Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap(),
+        quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+            .expect("valid QUIC crypto config"),
     ));
 
     // Apply high-performance transport config

@@ -628,19 +628,53 @@ impl MirageClient {
 
             let host = crate::protocol::udp::resolve_sni(&self.config, connection_string);
 
-            info!("Connecting via QUIC to {} (SNI: {})", server_addr, host);
+            info!(
+                "Connecting via QUIC to {} ({}, SNI: {}, JLS: {})",
+                server_addr,
+                if server_addr.is_ipv4() {
+                    "IPv4"
+                } else {
+                    "IPv6"
+                },
+                host,
+                if self.config.camouflage.is_jls() {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+            );
 
             let connection = endpoint
                 .connect(server_addr, host)
                 .map_err(|e| {
                     MirageError::connection_failed(format!(
-                        "Failed to initiate QUIC connection: {}",
+                        "Failed to initiate QUIC connection to {} ({}): {}",
+                        server_addr,
+                        if server_addr.is_ipv4() {
+                            "IPv4"
+                        } else {
+                            "IPv6"
+                        },
                         e
                     ))
                 })?
                 .await
                 .map_err(|e| {
-                    MirageError::connection_failed(format!("QUIC connection failed: {}", e))
+                    MirageError::connection_failed(format!(
+                        "QUIC handshake failed to {} ({}, JLS: {}): {:?}",
+                        server_addr,
+                        if server_addr.is_ipv4() {
+                            "IPv4"
+                        } else {
+                            "IPv6"
+                        },
+                        if self.config.camouflage.is_jls() {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        },
+                        e
+                    ))
                 })?;
 
             info!("QUIC connection established with {}", server_addr);

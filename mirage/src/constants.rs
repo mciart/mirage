@@ -15,8 +15,10 @@ pub const AUTH_MESSAGE_BUFFER_SIZE: usize = 1024;
 /// Larger values improve throughput but may increase latency.
 pub const PACKET_BUFFER_SIZE: usize = 32;
 
-/// Packet channel size used for communication between the TUN interface and TCP/TLS tunnels.
-pub const PACKET_CHANNEL_SIZE: usize = 1024 * 1024;
+/// Packet channel size used for communication between the TUN interface and tunnels.
+/// Small enough that a stalled connection fills up quickly (~0.3s at 1Gbps),
+/// allowing `try_send` to detect and skip congested channels.
+pub const PACKET_CHANNEL_SIZE: usize = 256;
 
 /// Maximum frame header size for variable-length protocol (1-3 bytes).
 /// Old fixed format was 5 bytes; new compact format uses 1-3 bytes.
