@@ -1,4 +1,4 @@
-//! QUIC protocol support for Mirage.
+//! UDP (QUIC) protocol support for Mirage.
 //!
 //! Provides functions to build QUIC client configurations including
 //! rustls crypto setup, certificate loading, and endpoint creation.

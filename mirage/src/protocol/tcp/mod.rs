@@ -1,4 +1,4 @@
-//! TCP-TLS protocol support for Mirage.
+//! TCP protocol support for Mirage.
 //!
 //! Provides functions to build BoringSSL-based TLS connections with
 //! system root cert loading and user-specified cert loading.
@@ -68,7 +68,7 @@ pub fn build_connector(config: &ClientConfig) -> Result<SslConnectorBuilder> {
     Ok(connector_builder)
 }
 
-/// Resolves the SNI host for standard TCP-TLS connections.
+/// Resolves the SNI host for standard TCP connections.
 pub fn resolve_sni<'a>(config: &'a ClientConfig, connection_string: &'a str) -> &'a str {
     if let Some(sni) = &config.transport.sni {
         debug!("Using configured SNI: {}", sni);

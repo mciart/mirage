@@ -101,7 +101,7 @@ impl TlsDispatcher {
                     for proto in alpns {
                         for valid_token in &self.valid_tokens {
                             if proto.as_bytes().ct_eq(valid_token.as_bytes()).into() {
-                                debug!("Reality Match: SNI={} ALPN={} -> VPN", sni, proto);
+                                debug!("Camouflage Match: SNI={} ALPN={} -> VPN", sni, proto);
                                 return Ok(DispatchResult::Accept(stream));
                             }
                         }
@@ -109,7 +109,7 @@ impl TlsDispatcher {
                 }
 
                 info!(
-                    "Reality Probe Detected: SNI={} No Valid Auth Token -> Proxying to {}",
+                    "Camouflage Probe Detected: SNI={} No Valid Auth Token -> Proxying to {}",
                     sni, self.target_sni
                 );
                 return Ok(DispatchResult::Proxy(stream, self.target_sni.clone()));

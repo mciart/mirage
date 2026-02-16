@@ -1,13 +1,13 @@
 //! TLS certificate verification bypass for testing.
 //!
 //! **WARNING**: This should ONLY be used for testing or when connecting through
-//! Reality tunnels where the server uses its own certificate.
+//! camouflage tunnels where the server uses its own certificate.
 
 /// A `ServerCertVerifier` that accepts any certificate without verification.
 ///
 /// # Security Warning
 /// This completely disables TLS certificate validation. Only use this
-/// in testing environments or with protocols like Reality where certificate
+/// in testing environments or with protocols like camouflage where certificate
 /// verification is handled differently.
 #[derive(Debug)]
 pub struct NoVerifier;

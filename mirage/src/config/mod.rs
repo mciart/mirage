@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(config.camouflage.target_sni, "www.google.com");
         assert_eq!(config.camouflage.short_ids, vec!["abcd1234"]);
         assert_eq!(config.transport.parallel_connections, 2);
-        assert_eq!(config.transport.dual_stack, true);
+        assert!(config.transport.dual_stack);
         assert_eq!(config.static_client_ip, None);
         assert_eq!(config.static_client_ip_v6, None);
     }

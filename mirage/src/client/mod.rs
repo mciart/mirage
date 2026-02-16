@@ -388,9 +388,9 @@ impl MirageClient {
 
                             let tls_stream: Option<TransportStream> = if use_camouflage {
                                 // For rotation, we need to build the connector
-                                match crate::protocol::tcp_tls::build_connector(&config_clone) {
+                                match crate::protocol::tcp::build_connector(&config_clone) {
                                     Ok(mut builder) => {
-                                        match crate::protocol::reality::configure(
+                                        match crate::protocol::camouflage::configure(
                                             &mut builder,
                                             &config_clone,
                                         ) {
@@ -424,7 +424,10 @@ impl MirageClient {
                                                 }
                                             }
                                             Err(e) => {
-                                                warn!("Rotation Reality configure failed: {}", e);
+                                                warn!(
+                                                    "Rotation camouflage configure failed: {}",
+                                                    e
+                                                );
                                                 None
                                             }
                                         }
@@ -436,11 +439,9 @@ impl MirageClient {
                                 }
                             } else {
                                 // tcp-tls
-                                let host = crate::protocol::tcp_tls::resolve_sni(
-                                    &config_clone,
-                                    &conn_string,
-                                );
-                                match crate::protocol::tcp_tls::build_connector(&config_clone) {
+                                let host =
+                                    crate::protocol::tcp::resolve_sni(&config_clone, &conn_string);
+                                match crate::protocol::tcp::build_connector(&config_clone) {
                                     Ok(mut builder) => {
                                         let _ = builder.set_alpn_protos(b"\x02h2\x08http/1.1");
                                         let connector = builder.build();
@@ -706,19 +707,19 @@ impl MirageClient {
                     );
                     self.quic_connection = None;
                     let endpoint =
-                        crate::protocol::quic::create_endpoint(&self.config, server_addr)?;
+                        crate::protocol::udp::create_endpoint(&self.config, server_addr)?;
                     self.quic_endpoint = Some(endpoint.clone());
                     endpoint
                 } else {
                     endpoint.clone()
                 }
             } else {
-                let endpoint = crate::protocol::quic::create_endpoint(&self.config, server_addr)?;
+                let endpoint = crate::protocol::udp::create_endpoint(&self.config, server_addr)?;
                 self.quic_endpoint = Some(endpoint.clone());
                 endpoint
             };
 
-            let host = crate::protocol::quic::resolve_sni(&self.config, connection_string);
+            let host = crate::protocol::udp::resolve_sni(&self.config, connection_string);
 
             info!("Connecting via QUIC to {} (SNI: {})", server_addr, host);
 
@@ -761,13 +762,13 @@ impl MirageClient {
 
         debug!("TCP connection established to {}", server_addr);
 
-        let mut connector_builder = crate::protocol::tcp_tls::build_connector(&self.config)?;
+        let mut connector_builder = crate::protocol::tcp::build_connector(&self.config)?;
 
         let sni = if self.config.camouflage.is_mirage() {
-            crate::protocol::reality::configure(&mut connector_builder, &self.config)?
+            crate::protocol::camouflage::configure(&mut connector_builder, &self.config)?
         } else {
             // Standard TCP/TLS (no camouflage)
-            let host = crate::protocol::tcp_tls::resolve_sni(&self.config, connection_string);
+            let host = crate::protocol::tcp::resolve_sni(&self.config, connection_string);
             connector_builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
             host.to_string()
         };
@@ -777,7 +778,7 @@ impl MirageClient {
             .configure()
             .map_err(|e| MirageError::system(format!("Failed to configure SSL: {e}")))?;
 
-        // For Reality mode or insecure mode, disable hostname verification as well
+        // For camouflage mode or insecure mode, disable hostname verification as well
         // SslVerifyMode::NONE only disables certificate chain validation,
         // but hostname verification is a separate check that must also be disabled.
         if self.config.camouflage.is_mirage() || self.config.transport.insecure {

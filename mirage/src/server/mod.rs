@@ -185,7 +185,7 @@ impl MirageServer {
                     let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
                     let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
 
-                    // Dispatch traffic (Reality / Standard / Proxy)
+                    // Dispatch traffic (Camouflage / Standard / Proxy)
                     let dispatcher = TlsDispatcher::new(&self.config);
 
                     // Dispatch logic needs to be robust against probing
