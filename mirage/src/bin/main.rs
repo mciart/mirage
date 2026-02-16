@@ -165,7 +165,15 @@ fn run_users(add: bool, delete: bool, users_file_path: PathBuf) -> Result<()> {
         }
     }
 
-    let mut users = load_users_file(&users_file_path)?;
+    let mut users = match load_users_file(&users_file_path) {
+        Ok(u) => u,
+        Err(_) if add => {
+            // If adding and file doesn't exist, start fresh
+            eprintln!("Users file not found, creating new one.");
+            DashMap::new()
+        }
+        Err(e) => return Err(e),
+    };
 
     users = match (add, delete) {
         (true, false) => add_user(users)?,

@@ -19,18 +19,14 @@ fn set_protection_active(active: bool) {
         .store(active, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Firewall rule names for cleanup
-const FW_BLOCK_UDP: &str = "Mirage-BlockDNS-UDP";
-const FW_BLOCK_TCP: &str = "Mirage-BlockDNS-TCP";
-const FW_ALLOW_UDP: &str = "Mirage-AllowVPNDNS-UDP";
-const FW_ALLOW_TCP: &str = "Mirage-AllowVPNDNS-TCP";
-
-/// Adds DNS servers to the TUN interface and enables full DNS leak prevention.
+/// Adds DNS servers to the TUN interface and enables NRPT leak prevention.
 ///
-/// Three layers of protection:
+/// Two layers of protection:
 /// 1. Set DNS on TUN adapter (WinTun API)
 /// 2. NRPT rule via PowerShell (forces all DNS through VPN servers)
-/// 3. Firewall rules to block DNS on non-VPN paths
+///
+/// Note: Windows Firewall rules are NOT used because block rules override
+/// allow rules, which would break VPN DNS resolution.
 pub fn add_dns_servers(dns_servers: &[IpAddr], interface_name: &str) -> Result<()> {
     // Step 1: Set DNS on TUN adapter
     let wintun = unsafe {
@@ -53,19 +49,14 @@ pub fn add_dns_servers(dns_servers: &[IpAddr], interface_name: &str) -> Result<(
         warn!("Failed to add NRPT rule: {}", e);
     }
 
-    // Step 3: Add firewall rules to block non-VPN DNS traffic
-    if let Err(e) = add_dns_firewall_rules(dns_servers) {
-        warn!("Failed to add DNS firewall rules: {}", e);
-    }
-
-    // Step 4: Flush + re-register DNS
+    // Step 3: Flush + re-register DNS
     flush_dns_cache();
 
     set_protection_active(true);
     Ok(())
 }
 
-/// Removes DNS leak prevention (NRPT + firewall rules).
+/// Removes DNS leak prevention (NRPT rules).
 pub fn delete_dns_servers() -> Result<()> {
     if !is_protection_active() {
         return Ok(());
@@ -75,9 +66,6 @@ pub fn delete_dns_servers() -> Result<()> {
     if let Err(e) = remove_nrpt_rule() {
         warn!("Failed to remove NRPT rule: {}", e);
     }
-
-    // Remove firewall rules
-    remove_dns_firewall_rules();
 
     // Flush DNS cache to restore normal resolution
     flush_dns_cache();
@@ -149,105 +137,6 @@ fn remove_nrpt_rule() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Adds Windows Firewall rules to block DNS traffic except to VPN DNS servers.
-///
-/// This is a belt-and-suspenders approach alongside NRPT, catching cases where
-/// applications bypass the system DNS resolver (e.g., browsers with built-in DoH).
-fn add_dns_firewall_rules(dns_servers: &[IpAddr]) -> Result<()> {
-    let dns_ips: String = dns_servers
-        .iter()
-        .map(|ip| ip.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-
-    // Remove any stale rules first
-    remove_dns_firewall_rules();
-
-    // Allow DNS to VPN DNS servers (must be added BEFORE block rules)
-    let allow_rules = [
-        (FW_ALLOW_UDP, "udp", &dns_ips),
-        (FW_ALLOW_TCP, "tcp", &dns_ips),
-    ];
-
-    for (name, proto, ips) in &allow_rules {
-        let output = std::process::Command::new("netsh")
-            .args([
-                "advfirewall",
-                "firewall",
-                "add",
-                "rule",
-                &format!("name={}", name),
-                "dir=out",
-                &format!("protocol={}", proto),
-                "remoteport=53",
-                &format!("remoteip={}", ips),
-                "action=allow",
-            ])
-            .output();
-
-        if let Ok(o) = output {
-            if !o.status.success() {
-                warn!(
-                    "Firewall allow rule '{}' failed: {}",
-                    name,
-                    String::from_utf8_lossy(&o.stderr)
-                );
-            }
-        }
-    }
-
-    // Block all other DNS
-    let block_rules = [(FW_BLOCK_UDP, "udp"), (FW_BLOCK_TCP, "tcp")];
-
-    for (name, proto) in &block_rules {
-        let output = std::process::Command::new("netsh")
-            .args([
-                "advfirewall",
-                "firewall",
-                "add",
-                "rule",
-                &format!("name={}", name),
-                "dir=out",
-                &format!("protocol={}", proto),
-                "remoteport=53",
-                "action=block",
-            ])
-            .output();
-
-        if let Ok(o) = output {
-            if !o.status.success() {
-                warn!(
-                    "Firewall block rule '{}' failed: {}",
-                    name,
-                    String::from_utf8_lossy(&o.stderr)
-                );
-            }
-        }
-    }
-
-    info!(
-        "DNS firewall rules added (allow: {}, block: all others)",
-        dns_ips
-    );
-    Ok(())
-}
-
-/// Removes all Mirage DNS firewall rules.
-fn remove_dns_firewall_rules() {
-    for name in [FW_BLOCK_UDP, FW_BLOCK_TCP, FW_ALLOW_UDP, FW_ALLOW_TCP] {
-        let _ = std::process::Command::new("netsh")
-            .args([
-                "advfirewall",
-                "firewall",
-                "delete",
-                "rule",
-                &format!("name={}", name),
-            ])
-            .output();
-    }
-    debug!("DNS firewall rules removed");
 }
 
 /// Flushes the Windows DNS resolver cache and re-registers DNS.
