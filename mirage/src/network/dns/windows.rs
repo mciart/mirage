@@ -5,11 +5,11 @@ use tracing::{debug, info, warn};
 use wintun_bindings::Adapter;
 
 /// Fixed GUID for our NRPT rule — same across sessions for predictable cleanup.
-const NRPT_RULE_GUID: &str = "{4D6172-6167-6500-0000-4D6972616765}";
+const NRPT_RULE_GUID: &str = "{4D617261-6765-0000-0000-4D6972616765}";
 
 /// Registry path for DNS policy configuration (NRPT)
 const NRPT_BASE_PATH: &str =
-    r"SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig";
+    r"HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig";
 
 /// Track whether NRPT rule is active (for cleanup on drop/panic)
 static NRPT_ACTIVE: OnceLock<std::sync::atomic::AtomicBool> = OnceLock::new();
@@ -73,23 +73,19 @@ pub fn delete_dns_servers() -> Result<()> {
     Ok(())
 }
 
-/// Adds an NRPT (Name Resolution Policy Table) rule via Windows Registry.
+/// Adds an NRPT (Name Resolution Policy Table) rule via `reg.exe`.
 ///
-/// This creates a registry key under DnsPolicyConfig that forces Windows to
-/// route ALL DNS queries (Name=".") through the specified VPN DNS servers,
-/// preventing DNS leaks through non-VPN interfaces (Smart Multi-Homed Name Resolution).
+/// Creates a registry key that forces Windows to route ALL DNS queries
+/// through the specified VPN DNS servers, preventing DNS leaks.
 ///
 /// Registry structure:
 /// ```text
-/// HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig\{GUID}
-///   Name              = "."                           (REG_SZ)
-///   GenericDNSServers = "1.1.1.1,8.8.8.8"            (REG_SZ)
-///   ConfigOptions     = 0x8                           (REG_DWORD)
+/// HKLM\...\DnsPolicyConfig\{GUID}
+///   Name              = "."                       (REG_SZ)
+///   GenericDNSServers = "1.1.1.1;8.8.8.8"        (REG_SZ)
+///   ConfigOptions     = 0x8                       (REG_DWORD)
 /// ```
 fn add_nrpt_rule(dns_servers: &[IpAddr]) -> Result<()> {
-    use windows::core::PCSTR;
-    use windows::Win32::System::Registry::*;
-
     let dns_list: String = dns_servers
         .iter()
         .map(|ip| ip.to_string())
@@ -97,72 +93,55 @@ fn add_nrpt_rule(dns_servers: &[IpAddr]) -> Result<()> {
         .join(";");
 
     let key_path = format!("{}\\{}", NRPT_BASE_PATH, NRPT_RULE_GUID);
-    let key_path_cstr = format!("{}\0", key_path);
 
-    unsafe {
-        // Create or open the registry key
-        let mut hkey = HKEY::default();
-        let mut disposition = 0u32;
+    // Create key and set values using reg.exe (works on all Windows versions)
+    // reg add "KEY" /v Name /t REG_SZ /d "." /f
+    let commands = [
+        vec![
+            "reg", "add", &key_path, "/v", "Name", "/t", "REG_SZ", "/d", ".", "/f",
+        ],
+        vec![
+            "reg",
+            "add",
+            &key_path,
+            "/v",
+            "GenericDNSServers",
+            "/t",
+            "REG_SZ",
+            "/d",
+            &dns_list,
+            "/f",
+        ],
+        vec![
+            "reg",
+            "add",
+            &key_path,
+            "/v",
+            "ConfigOptions",
+            "/t",
+            "REG_DWORD",
+            "/d",
+            "8",
+            "/f",
+        ],
+    ];
 
-        let result = RegCreateKeyExA(
-            HKEY_LOCAL_MACHINE,
-            PCSTR(key_path_cstr.as_ptr()),
-            0,
-            None,
-            REG_OPTION_NON_VOLATILE,
-            KEY_ALL_ACCESS,
-            None,
-            &mut hkey,
-            Some(&mut disposition),
-        );
+    for cmd in &commands {
+        let output = std::process::Command::new(cmd[0])
+            .args(&cmd[1..])
+            .output()
+            .map_err(|e| crate::error::DnsError::PlatformError {
+                message: format!("Failed to run reg.exe: {}", e),
+            })?;
 
-        if result.is_err() {
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!("reg.exe command failed: {}", stderr);
             return Err(crate::error::DnsError::PlatformError {
-                message: format!("Failed to create NRPT registry key: {:?}", result),
+                message: format!("NRPT registry write failed: {}", stderr),
             }
             .into());
         }
-
-        // Set Name = "." (match all domains)
-        let name_value = ".\0";
-        let result = RegSetValueExA(
-            hkey,
-            PCSTR(b"Name\0".as_ptr()),
-            0,
-            REG_SZ,
-            Some(name_value.as_bytes()),
-        );
-        if result.is_err() {
-            warn!("Failed to set NRPT Name value: {:?}", result);
-        }
-
-        // Set GenericDNSServers = "ip1;ip2"
-        let dns_value = format!("{}\0", dns_list);
-        let result = RegSetValueExA(
-            hkey,
-            PCSTR(b"GenericDNSServers\0".as_ptr()),
-            0,
-            REG_SZ,
-            Some(dns_value.as_bytes()),
-        );
-        if result.is_err() {
-            warn!("Failed to set NRPT GenericDNSServers value: {:?}", result);
-        }
-
-        // Set ConfigOptions = 0x8 (enforce NRPT policy)
-        let config_options: u32 = 0x8;
-        let result = RegSetValueExA(
-            hkey,
-            PCSTR(b"ConfigOptions\0".as_ptr()),
-            0,
-            REG_DWORD,
-            Some(&config_options.to_ne_bytes()),
-        );
-        if result.is_err() {
-            warn!("Failed to set NRPT ConfigOptions value: {:?}", result);
-        }
-
-        let _ = RegCloseKey(hkey);
     }
 
     set_nrpt_active(true);
@@ -178,19 +157,24 @@ fn remove_nrpt_rule() -> Result<()> {
         return Ok(());
     }
 
-    use windows::core::PCSTR;
-    use windows::Win32::System::Registry::*;
+    let key_path = format!("{}\\{}", NRPT_BASE_PATH, NRPT_RULE_GUID);
 
-    let key_path = format!("{}\\{}\0", NRPT_BASE_PATH, NRPT_RULE_GUID);
+    let output = std::process::Command::new("reg")
+        .args(["delete", &key_path, "/f"])
+        .output();
 
-    unsafe {
-        let result = RegDeleteKeyA(HKEY_LOCAL_MACHINE, PCSTR(key_path.as_ptr()));
-
-        if result.is_err() {
-            // Key might not exist, that's fine
-            debug!("NRPT key deletion result: {:?}", result);
-        } else {
+    match output {
+        Ok(o) if o.status.success() => {
             info!("NRPT DNS leak prevention rule removed");
+        }
+        Ok(o) => {
+            debug!(
+                "NRPT key deletion result: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+        Err(e) => {
+            debug!("Failed to run reg.exe for NRPT cleanup: {}", e);
         }
     }
 
@@ -199,11 +183,7 @@ fn remove_nrpt_rule() -> Result<()> {
 }
 
 /// Flushes the Windows DNS resolver cache.
-///
-/// This ensures NRPT rule changes take effect immediately without waiting
-/// for cached DNS entries to expire.
 fn flush_dns_cache() {
-    // Use DnsFlushResolverCache via ipconfig /flushdns
     match std::process::Command::new("ipconfig")
         .arg("/flushdns")
         .output()
