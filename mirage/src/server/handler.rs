@@ -18,7 +18,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{channel, Sender};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::connection;
 
@@ -173,12 +173,28 @@ where
     }
 
     // Cleanup on disconnect
-    connection_queues.remove(&client_ip);
-    address_pool.release_address(&client_ip);
+    // Only the primary connection owns the address pool lease and session.
+    // Secondary (rotated) connections must NOT remove global routing state,
+    // because other connections in the same session still depend on it.
+    if !is_secondary {
+        connection_queues.remove(&client_ip);
+        address_pool.release_address(&client_ip);
 
-    if let Some(v6) = client_address_v6 {
-        connection_queues.remove(&v6.addr());
-        address_pool.release_address(&v6.addr());
+        if let Some(v6) = client_address_v6 {
+            connection_queues.remove(&v6.addr());
+            address_pool.release_address(&v6.addr());
+        }
+
+        session_queues.remove(&session_id);
+        info!(
+            "Primary connection for {} disconnected, session {:02x?} cleaned up",
+            client_ip, session_id
+        );
+    } else {
+        debug!(
+            "Secondary connection for {} disconnected (session {:02x?} still active)",
+            client_ip, session_id
+        );
     }
 
     relay_result
