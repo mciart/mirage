@@ -210,7 +210,8 @@ impl quinn::AsyncUdpSocket for NoGsoSocket {
         // UdpSocketState::send uses WSASendMsg with ECN/IP_PKTINFO control messages
         // that some Windows network drivers reject with WSAEMSGSIZE (error 10040)
         // even for normal-sized packets. Plain send_to avoids this.
-        self.io.try_send_to(&transmit.contents, transmit.destination)?;
+        self.io
+            .try_send_to(&transmit.contents, transmit.destination)?;
         Ok(())
     }
 
