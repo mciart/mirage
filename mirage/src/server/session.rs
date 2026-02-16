@@ -25,7 +25,7 @@ impl SessionDispatcher {
     pub async fn run(mut self) {
         debug!("SessionDispatcher started");
 
-        let mut robin_idx = 0;
+        let mut robin_idx: usize = 0;
 
         loop {
             tokio::select! {
@@ -36,58 +36,63 @@ impl SessionDispatcher {
                         continue;
                     }
 
-                    // Round-Robin distribution
-                    let start_len = self.connections.len();
+                    // Round-Robin distribution using try_send (non-blocking).
+                    // CRITICAL: We must NOT use send().await here because if one
+                    // connection's channel is full (slow/dying QUIC stream), it would
+                    // block the entire dispatcher and freeze ALL connections.
+                    let num_conns = self.connections.len();
                     let mut sent = false;
-                    let mut attempts = 0;
+                    let mut has_closed = false;
 
-                    while attempts < start_len {
-                        robin_idx = (robin_idx + 1) % self.connections.len();
+                    for attempt in 0..num_conns {
+                        let idx = (robin_idx + attempt) % num_conns;
 
-                        // Try sending to the selected connection
-                        // try_send is generally better for dispatching to avoid blocking if one connection is full
-                        // But send().await ensures backpressure propagation.
-                        // Given we want Aggregation, blocking on one full connection is bad.
-                        // Ideally we should skip full connections.
-                        // But Sender doesn't expose is_full easily without try_send.
+                        if self.connections[idx].is_closed() {
+                            has_closed = true;
+                            continue;
+                        }
 
-                        // We use `send` for now. If one connection stalls, it might block the dispatcher
-                        // which blocks the TUN reader. This is acceptable for now.
-                        // Better approach: use `try_send` and if full, try next.
-
-                         match self.connections[robin_idx].send(packet.clone()).await {
+                        match self.connections[idx].try_send(packet.clone()) {
                             Ok(_) => {
+                                robin_idx = (idx + 1) % num_conns;
                                 sent = true;
                                 break;
                             }
-                            Err(_) => {
-                                // Channel closed (connection dropped)
-                                // We'll clean up closed connections later
-                                attempts += 1;
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                // Channel full — skip this connection, try next
+                                debug!("SessionDispatcher: connection {} channel full, skipping", idx);
+                                continue;
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                has_closed = true;
+                                continue;
                             }
                         }
                     }
 
-                    // Periodic cleanup of closed connections (e.g. every packet or when failure happens)
-                     if !sent || attempts > 0 {
-                          // Simple cleanup: retain only open channels
-                          let old_len = self.connections.len();
-                          self.connections.retain(|tx| !tx.is_closed());
-                          if self.connections.len() < old_len {
-                               debug!("Cleaned up {} closed connections in session", old_len - self.connections.len());
-                          }
+                    if !sent {
+                        debug!("SessionDispatcher: no available connections for packet, dropped");
+                    }
 
-                          if self.connections.is_empty() {
-                              robin_idx = 0;
-                          } else {
-                              robin_idx %= self.connections.len();
-                          }
-                     }
+                    // Clean up closed connections
+                    if has_closed {
+                        let old_len = self.connections.len();
+                        self.connections.retain(|tx| !tx.is_closed());
+                        if self.connections.len() < old_len {
+                            debug!("Cleaned up {} closed connections in session", old_len - self.connections.len());
+                        }
+                        if self.connections.is_empty() {
+                            robin_idx = 0;
+                        } else {
+                            robin_idx %= self.connections.len();
+                        }
+                    }
                 }
 
                 // Handle new connection registration
                 Some(conn_tx) = self.register_rx.recv() => {
-                    debug!("SessionDispatcher: Registering new connection sender");
+                    debug!("SessionDispatcher: Registering new connection sender (total: {})",
+                        self.connections.len() + 1);
                     self.connections.push(conn_tx);
                 }
 

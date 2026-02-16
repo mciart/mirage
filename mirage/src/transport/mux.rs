@@ -417,6 +417,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     let writer = &writers[current];
                     let mut w = writer.lock().await;
 
+                    let write_start = Instant::now();
                     let mut failed = false;
                     for packet in &packets {
                         if w.send_packet_no_flush(packet).await.is_err() {
@@ -427,6 +428,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
 
                     if !failed && w.flush().await.is_err() {
                         failed = true;
+                    }
+
+                    let write_elapsed = write_start.elapsed();
+                    if write_elapsed > Duration::from_millis(500) {
+                        warn!(
+                            "Mux active-standby: write to connection {} took {:?} ({} packets)",
+                            current,
+                            write_elapsed,
+                            packets.len()
+                        );
                     }
 
                     if failed {
