@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/mirage/badge.svg)](https://docs.rs/mirage/)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENCE)
 
-> **Mirage** 是一款基于 Rust 开发的下一代隐匿 L3 VPN，集成 **BoringSSL** (Chrome 同源)、**Mirage 伪装协议** (SNI 伪装 + 抗主动探测)，以及智能流量混淆。
+> **Mirage** 是一款基于 Rust 开发的下一代隐匿 L3 VPN，集成 **BoringSSL** (Chrome 同源)、**Mirage 伪装协议** (TCP SNI 伪装 + 抗主动探测)、**JLS** (QUIC 层伪装 + 0-RTT)，以及智能流量混淆。
 
 <img src="docs/gui.png" alt="GUI" width="800">
 
@@ -21,11 +21,15 @@
 - 验证通过 → 进入 VPN 隧道
 - 验证失败 → 无缝代理到真实网站 (如 `www.microsoft.com`)，探测者只看到合法内容
 
-> **注**: 当前 Mirage 伪装仅在 TCP+TLS 层实现。QUIC 层的伪装 (JLS) 正在开发中 — 见 [路线图](#路线图)。
+### 🔮 JLS QUIC 伪装
+在 QUIC 层集成 **JLS** (rustls-jls)，实现类似 Reality 的完整伪装：
+- 无需目标网站证书即可伪装任意域名
+- 未认证连接自动转发到真实上游网站，抗主动探测
+- 0-RTT 超低延迟
 
 ### 🚀 高性能双协议传输
 - **TCP 模式**: Length-Prefixed 帧协议 + BBR 拥塞控制 + TCP_QUICKACK + Smart Batching
-- **QUIC 模式**: h3 伪装 + 0-RTT 快速握手 + 端口跳跃 (Port Hopping)
+- **QUIC 模式**: JLS 伪装 + 0-RTT 快速握手 + 端口跳跃 (Port Hopping)
 - **协议优先级回退**: `protocols = ["udp", "tcp"]`，先尝试 QUIC，失败自动回退 TCP
 
 ### 🌊 流量混淆
@@ -47,7 +51,7 @@
 | **传输层** | TCP/TLS + QUIC + 优先级回退 | TCP/TLS, QUIC, WS, gRPC |
 | **TLS 库** | **BoringSSL** (Chrome 同源) | uTLS (Go) |
 | **TCP 伪装** | **Mirage 协议** (SNI + 抗主动探测) | Reality |
-| **QUIC 伪装** | 标准 h3 (JLS 开发中) | 无 |
+| **QUIC 伪装** | **JLS** (无需证书 + 抗主动探测 + 0-RTT) | 无 |
 | **VPN 层级** | **L3 VPN** (原生 ICMP/TCP/UDP) | L4 代理 (SOCKS/HTTP) |
 | **流量混淆** | Padding + Jitter + Heartbeat | Vision 流控 |
 | **抗封锁** | Port Hopping + Dual Stack + 连接轮换 | CDN (WS/gRPC) |
@@ -116,6 +120,9 @@ dual_stack = true
 mode = "mirage"
 target_sni = "www.microsoft.com"
 short_ids = ["abcd1234deadbeef"]
+# JLS 伪装 (启用 QUIC/UDP 传输时填写，客户端和服务端必须一致)
+# jls_password = "your-jls-password"
+# jls_iv = "your-jls-iv"
 
 [obfuscation]
 enabled = true
@@ -148,6 +155,8 @@ users_file = "users"
 mode = "mirage"
 target_sni = "www.microsoft.com"
 short_ids = ["abcd1234deadbeef"]
+# jls_password = "your-jls-password"
+# jls_iv = "your-jls-iv"
 
 [obfuscation]
 enabled = true
@@ -209,7 +218,7 @@ mirage users --delete users   # 删除用户
 - [x] **Phase 3**: 流量混淆 (Padding, Jitter, Heartbeat)
 - [x] **Phase 4**: QUIC 传输 (h3 伪装, 0-RTT, Port Hopping)
 - [x] **Phase 5**: 双栈聚合 + 连接轮换
-- [ ] **Phase 6**: **JLS 集成** — QUIC 层 Mirage 伪装 (无需证书, 0-RTT, 抗主动探测)
+- [x] **Phase 6**: **JLS 集成** — QUIC 层 Mirage 伪装 (无需证书, 0-RTT, 抗主动探测)
 - [ ] **Phase 7**: CDN 支持 (WebSocket, gRPC)
 
 ---

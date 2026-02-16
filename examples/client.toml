@@ -57,6 +57,10 @@ mode = "mirage"
 target_sni = "www.microsoft.com"
 # 客户端认证 ShortId (取列表第一个)
 short_ids = ["abcd1234deadbeef"]
+# JLS 伪装密码 (启用 QUIC/UDP 传输时填写，客户端和服务端必须一致)
+# jls_password = "your-jls-password"
+# JLS 初始化向量 (启用 QUIC/UDP 传输时填写，客户端和服务端必须一致)
+# jls_iv = "your-jls-iv"
 
 # ========== 连接管理 ==========
 [connection]

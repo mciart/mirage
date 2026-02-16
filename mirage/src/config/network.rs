@@ -65,15 +65,22 @@ pub enum CamouflageMode {
 /// Camouflage configuration for SNI impersonation
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct CamouflageConfig {
-    /// Camouflage mode: "none" or "mirage"
+    /// Camouflage mode: "none", "mirage", or "jls"
     #[serde(default = "default_camouflage_mode")]
     pub mode: String,
     /// Target SNI to impersonate (e.g., "www.microsoft.com")
+    /// Also used as JLS upstream SNI when mode = "jls"
     #[serde(default = "default_camouflage_sni")]
     pub target_sni: String,
     /// Short IDs for client identification (hex strings)
     #[serde(default)]
     pub short_ids: Vec<String>,
+    /// JLS password for QUIC camouflage (must match on client and server)
+    #[serde(default)]
+    pub jls_password: Option<String>,
+    /// JLS initialization vector (must match on client and server)
+    #[serde(default)]
+    pub jls_iv: Option<String>,
 }
 
 impl Default for CamouflageConfig {
@@ -82,6 +89,8 @@ impl Default for CamouflageConfig {
             mode: default_camouflage_mode(),
             target_sni: default_camouflage_sni(),
             short_ids: Vec::new(),
+            jls_password: None,
+            jls_iv: None,
         }
     }
 }
@@ -98,5 +107,10 @@ impl CamouflageConfig {
     /// Returns true if mirage camouflage is enabled
     pub fn is_mirage(&self) -> bool {
         matches!(self.camouflage_mode(), CamouflageMode::Mirage)
+    }
+
+    /// Returns true if JLS camouflage is enabled (jls_password + jls_iv both set)
+    pub fn is_jls(&self) -> bool {
+        self.jls_password.is_some() && self.jls_iv.is_some()
     }
 }

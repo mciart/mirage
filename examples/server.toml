@@ -61,12 +61,17 @@ jitter_max_ms = 0
 # 伪装模式: "none" (标准 TLS) 或 "mirage" (SNI 伪装 + 反主动探测)
 mode = "mirage"
 # 伪装的目标域名 (SNI) -> 建议选择大厂域名
+# JLS 模式下同时作为 upstream 转发地址 (自动拼接 :443)
 target_sni = "www.microsoft.com"
 # 客户端认证 ShortId 列表 (十六进制)，对应客户端配置
 short_ids = [
     "abcd1234deadbeef",
     "0011223344556677"
 ]
+# JLS 伪装密码 (启用 QUIC/UDP 传输时填写，客户端和服务端必须一致)
+# jls_password = "your-jls-password"
+# JLS 初始化向量 (启用 QUIC/UDP 传输时填写，客户端和服务端必须一致)
+# jls_iv = "your-jls-iv"
 
 # ========== NAT ==========
 [nat]

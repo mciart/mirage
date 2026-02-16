@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::auth::server_auth::AuthServer;
+use crate::config::CamouflageConfig;
 use crate::config::ServerConfig;
 use crate::network::packet::Packet;
 use crate::server::address_pool::AddressPool;
@@ -24,6 +25,7 @@ type SessionQueues = Arc<DashMap<[u8; 8], SessionContext>>;
 fn configure_server_crypto(
     cert_path: &std::path::Path,
     key_path: &std::path::Path,
+    camouflage: &CamouflageConfig,
 ) -> Result<rustls::ServerConfig> {
     let cert_file = std::fs::File::open(cert_path).map_err(|e| {
         MirageError::config_error(format!("Failed to open cert file {:?}: {}", cert_path, e))
@@ -56,6 +58,23 @@ fn configure_server_crypto(
         .map(|p| p.to_vec())
         .collect();
 
+    // JLS camouflage — forward unauthed connections to upstream, anti-active-probing
+    if camouflage.is_jls() {
+        let pwd = camouflage.jls_password.clone().unwrap();
+        let iv = camouflage.jls_iv.clone().unwrap();
+        let upstream_addr = format!("{}:443", camouflage.target_sni);
+        let upstream_sni = camouflage.target_sni.clone();
+        server_config.jls_config = rustls::jls::JlsServerConfig::new(
+            pwd,
+            iv,
+            Some(upstream_addr.clone()),
+            Some(upstream_sni),
+        )
+        .enable(true)
+        .into();
+        info!("JLS camouflage enabled (upstream: {})", upstream_addr);
+    }
+
     Ok(server_config)
 }
 
@@ -71,8 +90,11 @@ pub async fn run_quic_listener(
     let bind_addr = SocketAddr::new(config.bind_address, config.quic_bind_port);
 
     // Configure crypto
-    let crypto_config =
-        configure_server_crypto(&config.certificate_file, &config.certificate_key_file)?;
+    let crypto_config = configure_server_crypto(
+        &config.certificate_file,
+        &config.certificate_key_file,
+        &config.camouflage,
+    )?;
     let server_crypto =
         quinn::crypto::rustls::QuicServerConfig::try_from(crypto_config).map_err(|e| {
             MirageError::config_error(format!("Failed to create QUIC server crypto: {}", e))

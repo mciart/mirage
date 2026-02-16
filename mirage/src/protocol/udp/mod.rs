@@ -80,6 +80,17 @@ pub fn build_rustls_config(config: &ClientConfig) -> Result<rustls::ClientConfig
             .set_certificate_verifier(std::sync::Arc::new(NoVerifier));
     }
 
+    // JLS camouflage — makes QUIC look like legitimate traffic to target_sni
+    if config.camouflage.is_jls() {
+        let pwd = config.camouflage.jls_password.as_ref().unwrap();
+        let iv = config.camouflage.jls_iv.as_ref().unwrap();
+        client_crypto.jls_config = rustls::jls::JlsClientConfig::new(pwd, iv).enable(true);
+        info!(
+            "JLS camouflage enabled (target: {})",
+            config.camouflage.target_sni
+        );
+    }
+
     Ok(client_crypto)
 }
 
@@ -210,9 +221,24 @@ impl quinn::AsyncUdpSocket for NoGsoSocket {
         // UdpSocketState::send uses WSASendMsg with ECN/IP_PKTINFO control messages
         // that some Windows network drivers reject with WSAEMSGSIZE (error 10040)
         // even for normal-sized packets. Plain send_to avoids this.
-        self.io
-            .try_send_to(&transmit.contents, transmit.destination)?;
-        Ok(())
+        match self
+            .io
+            .try_send_to(&transmit.contents, transmit.destination)
+        {
+            Ok(_) => Ok(()),
+            // Catch WSAEMSGSIZE (10040): packet too large for the socket buffer.
+            // This can happen transiently during connection rotation on Windows IPv4.
+            // Convert to WouldBlock so quinn retries instead of logging an ERROR.
+            Err(e) if e.raw_os_error() == Some(10040) => {
+                debug!(
+                    "Suppressed WSAEMSGSIZE for {} byte packet to {}",
+                    transmit.contents.len(),
+                    transmit.destination
+                );
+                Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn poll_recv(

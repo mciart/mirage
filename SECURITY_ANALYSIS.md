@@ -4,9 +4,9 @@
 
 | 检测手段 | 对策 | 状态 |
 |---------|------|------|
-| **SNI 阻断** | Mirage 伪装 (TCP) / JLS (QUIC, 开发中) | ✅ TCP / 🔜 QUIC |
+| **SNI 阻断** | Mirage 伪装 (TCP) / JLS (QUIC) | ✅ |
 | **TLS 指纹识别** | BoringSSL (Chrome 同源指纹) | ✅ |
-| **主动探测 (Active Probing)** | ShortID 验证 + 反向代理到真实网站 | ✅ TCP |
+| **主动探测 (Active Probing)** | ShortID 验证 (TCP) + JLS 上游转发 (QUIC) | ✅ |
 | **包长度分析** | 加权拟态轮廓 (Weighted Traffic Mimicry) | ✅ |
 | **时序关联分析** | 智能时序抖动 (Jitter) | ✅ |
 | **静默连接检测** | 应用层心跳 (Heartbeat) | ✅ |
@@ -28,31 +28,23 @@ TCP+TLS 连接具备完整的抗检测能力：
 3. **ALPN ShortID 认证**: 通过 ALPN 扩展携带认证令牌，验证失败则反向代理到真实网站
 4. **抗主动探测**: 探测者无论怎样尝试都只能看到真实网站的响应
 
-### QUIC 层: 标准 h3 ⚠️ (JLS 开发中)
+### QUIC 层: JLS 伪装 ✅
 
-当前 QUIC 连接使用 **标准 rustls**，具备：
-- h3 ALPN 伪装 (看起来像 HTTP/3 流量)
-- 端口跳跃 (Port Hopping)
-- 0-RTT 快速重连
+QUIC 连接集成 **JLS (rustls-jls + quinn-jls)**，实现 QUIC 层完整伪装：
 
-**缺失**:
-- ❌ 无 SNI 伪装 (使用真实服务器域名)
-- ❌ 无 Chrome TLS 指纹 (rustls 指纹特征明显)
-- ❌ 无抗主动探测 (服务端使用自有证书)
+- JLS 认证：通过 `jls_password` + `jls_iv` 进行客户端/服务端双向验证
+- 抗主动探测：未通过 JLS 认证的连接自动转发到上游真实网站 (如 `www.microsoft.com:443`)
+- h3 ALPN 伪装 + 端口跳跃 (Port Hopping) + 0-RTT 快速重连
 
-### JLS 集成: QUIC 层完整伪装 🔜
+| 特性 | TCP (Mirage 伪装) | QUIC (JLS 伪装) |
+|------|-------------------|-----------------|
+| SNI 伪装 | ✅ | ✅ |
+| 无需证书 | ✅ | ✅ |
+| 抗主动探测 | ✅ 反向代理 | ✅ 上游转发 |
+| TLS 指纹 | ✅ Chrome (BoringSSL) | ✅ JLS |
+| 延迟 | 1-RTT | **0-RTT** |
 
-**JLS (JLS Library for Stealth)** 是一个独立库，在 QUIC 层实现了类似 Reality 的完整伪装：
-
-| 特性 | TCP (Mirage 伪装) | QUIC (当前) | QUIC + JLS (规划中) |
-|------|-------------------|-------------|-------------------|
-| SNI 伪装 | ✅ | ❌ | ✅ |
-| 无需证书 | ✅ | ❌ 需自有证书 | ✅ |
-| 抗主动探测 | ✅ | ❌ | ✅ |
-| TLS 指纹 | ✅ Chrome | ❌ rustls | ✅ 浏览器级 |
-| 延迟 | 1-RTT | 0-RTT | **0-RTT** |
-
-JLS 集成后，**两种协议都将具备完整的抗检测能力**，QUIC 还额外拥有 0-RTT 超低延迟优势。
+**两种协议都具备完整的抗检测能力**，QUIC 还额外拥有 0-RTT 超低延迟优势。
 
 ---
 
@@ -74,9 +66,9 @@ JLS 集成后，**两种协议都将具备完整的抗检测能力**，QUIC 还�
 - **Xray**: L4 代理 (SOCKS/HTTP)
 - **Mirage**: **L3 VPN** — 原生 ICMP/TCP/UDP，双栈聚合
 
-### 5. QUIC 伪装 — JLS 集成后 Mirage 全面领先
+### 5. QUIC 伪装 — Mirage 全面领先
 - **Xray**: QUIC 无 Reality 伪装
-- **Mirage + JLS**: QUIC 层完整伪装 + 0-RTT + Port Hopping
+- **Mirage**: JLS QUIC 层完整伪装 + 0-RTT + Port Hopping
 
 ---
 
