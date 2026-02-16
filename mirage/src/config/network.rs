@@ -109,8 +109,9 @@ impl CamouflageConfig {
         matches!(self.camouflage_mode(), CamouflageMode::Mirage)
     }
 
-    /// Returns true if JLS camouflage is enabled (jls_password + jls_iv both set)
+    /// Returns true if JLS camouflage is enabled
+    /// Requires mirage mode + jls_password + jls_iv all set
     pub fn is_jls(&self) -> bool {
-        self.jls_password.is_some() && self.jls_iv.is_some()
+        self.is_mirage() && self.jls_password.is_some() && self.jls_iv.is_some()
     }
 }
