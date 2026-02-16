@@ -168,9 +168,10 @@ fn create_platform_endpoint(bind_addr: std::net::SocketAddr) -> Result<quinn::En
 /// QUIC segments into a single syscall. This wrapper overrides `max_transmit_segments()`
 /// to return 1, forcing quinn to send each QUIC packet individually.
 #[cfg(target_os = "windows")]
+#[derive(Debug)]
 struct NoGsoSocket {
     inner: quinn::udp::UdpSocketState,
-    io: tokio::net::UdpSocket,
+    io: std::sync::Arc<tokio::net::UdpSocket>,
 }
 
 #[cfg(target_os = "windows")]
@@ -189,22 +190,23 @@ impl NoGsoSocket {
         let io = tokio::net::UdpSocket::from_std(socket).map_err(|e| {
             MirageError::connection_failed(format!("Failed to create tokio socket: {}", e))
         })?;
-        Ok(Self { inner: state, io })
+        Ok(Self {
+            inner: state,
+            io: std::sync::Arc::new(io),
+        })
     }
 }
 
 #[cfg(target_os = "windows")]
 impl quinn::AsyncUdpSocket for NoGsoSocket {
     fn create_io_poller(self: std::sync::Arc<Self>) -> std::pin::Pin<Box<dyn quinn::UdpPoller>> {
-        // Use a simple poller that checks socket writability
         Box::pin(UdpPollHelper {
             io: self.io.clone(),
         })
     }
 
     fn try_send(&self, transmit: &quinn::udp::Transmit<'_>) -> std::io::Result<()> {
-        // Delegate to inner state, which can handle individual (non-GSO) sends
-        let io_ref = quinn::udp::UdpSockRef::from(&self.io);
+        let io_ref = quinn::udp::UdpSockRef::from(self.io.as_ref());
         self.inner.send(io_ref, transmit)
     }
 
@@ -216,7 +218,7 @@ impl quinn::AsyncUdpSocket for NoGsoSocket {
     ) -> std::task::Poll<std::io::Result<usize>> {
         loop {
             match self.io.try_io(tokio::io::Interest::READABLE, || {
-                let io_ref = quinn::udp::UdpSockRef::from(&self.io);
+                let io_ref = quinn::udp::UdpSockRef::from(self.io.as_ref());
                 self.inner.recv(io_ref, bufs, meta)
             }) {
                 Ok(count) => return std::task::Poll::Ready(Ok(count)),
@@ -237,8 +239,6 @@ impl quinn::AsyncUdpSocket for NoGsoSocket {
     }
 
     /// **The key override**: return 1 to disable GSO batching.
-    /// This forces quinn to send each QUIC packet as an individual sendmsg() call,
-    /// preventing WSAEMSGSIZE errors on Windows.
     fn max_transmit_segments(&self) -> usize {
         1
     }
@@ -254,8 +254,9 @@ impl quinn::AsyncUdpSocket for NoGsoSocket {
 
 /// Simple UDP poller for the NoGsoSocket
 #[cfg(target_os = "windows")]
+#[derive(Debug)]
 struct UdpPollHelper {
-    io: tokio::net::UdpSocket,
+    io: std::sync::Arc<tokio::net::UdpSocket>,
 }
 
 #[cfg(target_os = "windows")]
