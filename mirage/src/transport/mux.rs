@@ -20,7 +20,7 @@ use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use rand::Rng;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
@@ -182,6 +182,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             Self::tun_writer_task(iface_writer, inbound_rx).await
         }));
 
+        // Shared dead-writer tracking between distributor and rotation supervisor
+        let dead_writers: Arc<Vec<AtomicBool>> = Arc::new(
+            (0..self.writers.len())
+                .map(|_| AtomicBool::new(false))
+                .collect(),
+        );
+
         // Spawn outbound task (TUN → network writers)
         let writers = self.writers.clone();
         let mode = self.mode.clone();
@@ -192,6 +199,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         let robin_idx_clone = robin_idx.clone();
         let active_idx_clone = active_idx.clone();
         let obfuscation_clone = obfuscation.clone();
+        let dead_writers_clone = dead_writers.clone();
 
         tasks.push(tokio::spawn(async move {
             Self::outbound_distributor_task(
@@ -201,6 +209,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 robin_idx_clone,
                 active_idx_clone,
                 obfuscation_clone,
+                dead_writers_clone,
             )
             .await
         }));
@@ -214,6 +223,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             let conn_request_tx = self.conn_request_tx.clone();
             let inbound_tx_for_rotation = inbound_tx.clone();
 
+            let dead_writers_for_rotation = dead_writers.clone();
+
             tasks.push(tokio::spawn(async move {
                 Self::rotation_supervisor(
                     rotation_config,
@@ -222,6 +233,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     lifetimes_initial,
                     conn_request_tx,
                     inbound_tx_for_rotation,
+                    dead_writers_for_rotation,
                 )
                 .await
             }));
@@ -298,6 +310,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
     }
 
     /// Outbound distributor: reads packets from TUN and distributes to network writers.
+    ///
+    /// Tracks dead writers to avoid spamming errors on dropped connections.
+    /// Dead writers are skipped until rotation replaces them.
     async fn outbound_distributor_task(
         interface: Arc<Interface<impl InterfaceIO>>,
         writers: Vec<Arc<Mutex<FramedWriter<WriteHalf<S>>>>>,
@@ -305,6 +320,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         robin_idx: Arc<AtomicUsize>,
         active_idx: Arc<AtomicUsize>,
         _obfuscation: ObfuscationConfig,
+        dead_writers: Arc<Vec<AtomicBool>>,
     ) -> Result<()> {
         debug!(
             "Mux outbound distributor started: {} writers, mode={:?}",
@@ -323,25 +339,70 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 continue;
             }
 
+            // Check if all writers are dead
+            let alive_count = dead_writers
+                .iter()
+                .filter(|d| !d.load(Ordering::Relaxed))
+                .count();
+            if alive_count == 0 {
+                warn!("All mux writers are dead, stopping distributor");
+                return Err(MirageError::system("All mux connections lost"));
+            }
+
             match mode {
                 MuxMode::RoundRobin => {
-                    // Distribute each packet to the next writer in round-robin order
                     for packet in packets {
-                        let idx = robin_idx.fetch_add(1, Ordering::Relaxed) % num_writers;
-                        let writer = &writers[idx];
-                        let mut w = writer.lock().await;
-                        if let Err(e) = w.send_packet_no_flush(&packet).await {
-                            warn!("Mux writer {} send error: {}", idx, e);
-                            // Don't fail immediately — other writers may still work
-                            continue;
-                        }
-                        if let Err(e) = w.flush().await {
-                            warn!("Mux writer {} flush error: {}", idx, e);
+                        // Find the next alive writer
+                        let mut attempts = 0;
+                        loop {
+                            let idx = robin_idx.fetch_add(1, Ordering::Relaxed) % num_writers;
+                            attempts += 1;
+                            if attempts > num_writers {
+                                // All writers exhausted for this packet
+                                warn!("No alive writers for packet, dropping");
+                                break;
+                            }
+                            if dead_writers[idx].load(Ordering::Relaxed) {
+                                continue; // Skip dead writer
+                            }
+
+                            let writer = &writers[idx];
+                            let mut w = writer.lock().await;
+                            if let Err(e) = w.send_packet_no_flush(&packet).await {
+                                warn!("Mux writer {} failed, marking dead: {}", idx, e);
+                                dead_writers[idx].store(true, Ordering::Relaxed);
+                                continue;
+                            }
+                            if let Err(e) = w.flush().await {
+                                warn!("Mux writer {} flush failed, marking dead: {}", idx, e);
+                                dead_writers[idx].store(true, Ordering::Relaxed);
+                                continue;
+                            }
+                            break; // Successfully sent
                         }
                     }
                 }
                 MuxMode::ActiveStandby => {
                     let current = active_idx.load(Ordering::Relaxed) % num_writers;
+
+                    if dead_writers[current].load(Ordering::Relaxed) {
+                        // Find next alive writer
+                        let mut found = false;
+                        for offset in 1..num_writers {
+                            let next = (current + offset) % num_writers;
+                            if !dead_writers[next].load(Ordering::Relaxed) {
+                                active_idx.store(next, Ordering::Relaxed);
+                                found = true;
+                                break;
+                            }
+                        }
+                        if !found {
+                            warn!("All mux writers are dead (active-standby), stopping");
+                            return Err(MirageError::system("All mux connections lost"));
+                        }
+                        continue; // Retry with new active writer
+                    }
+
                     let writer = &writers[current];
                     let mut w = writer.lock().await;
 
@@ -357,22 +418,30 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                         failed = true;
                     }
 
-                    if failed && num_writers > 1 {
-                        // Failover to next connection
-                        let next = (current + 1) % num_writers;
-                        info!(
-                            "Mux active-standby: connection {} failed, switching to {}",
-                            current, next
+                    if failed {
+                        warn!(
+                            "Mux active-standby: connection {} failed, marking dead",
+                            current
                         );
-                        active_idx.store(next, Ordering::Relaxed);
-                        drop(w); // release lock on failed writer
+                        dead_writers[current].store(true, Ordering::Relaxed);
 
-                        let writer = &writers[next];
-                        let mut w = writer.lock().await;
-                        for packet in &packets {
-                            let _ = w.send_packet_no_flush(packet).await;
+                        // Find next alive writer and retry
+                        for offset in 1..num_writers {
+                            let next = (current + offset) % num_writers;
+                            if !dead_writers[next].load(Ordering::Relaxed) {
+                                info!("Mux active-standby: switching to connection {}", next);
+                                active_idx.store(next, Ordering::Relaxed);
+                                drop(w);
+
+                                let writer = &writers[next];
+                                let mut w = writer.lock().await;
+                                for packet in &packets {
+                                    let _ = w.send_packet_no_flush(packet).await;
+                                }
+                                let _ = w.flush().await;
+                                break;
+                            }
                         }
-                        let _ = w.flush().await;
                     }
                 }
             }
@@ -387,6 +456,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         initial_lifetimes: Vec<Duration>,
         conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
         inbound_tx: mpsc::Sender<Packet>,
+        dead_writers: Arc<Vec<AtomicBool>>,
     ) -> Result<()> {
         // Use mutable local copies for tracking
         let num_connections = writers.len();
@@ -446,6 +516,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                         let mut w = writers[expire_idx].lock().await;
                         *w = FramedWriter::new(new_writer);
                     }
+
+                    // Mark this writer as alive again
+                    dead_writers[expire_idx].store(false, Ordering::Relaxed);
 
                     // Spawn a new inbound reader for the replacement connection
                     let tx = inbound_tx.clone();

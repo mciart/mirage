@@ -74,7 +74,7 @@ impl MirageClient {
 
         // Connect to server via TCP/TLS (Primary Connection)
         // Try all resolved addresses for each protocol before falling back
-        let (tls_stream, remote_addr, _protocol): (TransportStream, SocketAddr, String) =
+        let (tls_stream, remote_addr, protocol): (TransportStream, SocketAddr, String) =
             self.connect_to_server(&resolved_addrs).await?;
 
         // Anti-Loop & Excluded Routes: Add exclusion routes via the gateway used to reach them
@@ -360,6 +360,7 @@ impl MirageClient {
             let pool_addrs_clone = pool_addrs.clone();
             let conn_string = self.config.server.to_connection_string();
             let config_clone = self.config.clone();
+            let active_protocol = protocol.clone(); // Protocol used for primary connection
 
             // We need a separate task since connect_to_server needs &mut self
             // Instead, we replicate the connection logic in a standalone async block
@@ -370,122 +371,23 @@ impl MirageClient {
                     rotation_idx += 1;
 
                     info!(
-                        "Connection factory: establishing rotation connection to {}",
-                        target_addr
+                        "Connection factory: establishing rotation connection to {} ({})",
+                        target_addr, active_protocol
                     );
 
-                    // Connect
-                    let tcp_result = TcpStream::connect(target_addr).await;
-                    let stream: Option<TransportStream> = match tcp_result {
-                        Ok(tcp_stream) => {
-                            let _ = tcp_stream.set_nodelay(transport_config.tcp_nodelay);
-                            let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
-                            let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
-                            let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
-
-                            // Determine if camouflage is enabled
-                            let use_camouflage = config_clone.camouflage.is_mirage();
-
-                            let tls_stream: Option<TransportStream> = if use_camouflage {
-                                // For rotation, we need to build the connector
-                                match crate::protocol::tcp::build_connector(&config_clone) {
-                                    Ok(mut builder) => {
-                                        match crate::protocol::camouflage::configure(
-                                            &mut builder,
-                                            &config_clone,
-                                        ) {
-                                            Ok(sni) => {
-                                                let connector = builder.build();
-                                                match connector.configure() {
-                                                    Ok(mut ssl_config) => {
-                                                        ssl_config.set_verify_hostname(false);
-                                                        match tokio_boring::connect(
-                                                            ssl_config, &sni, tcp_stream,
-                                                        )
-                                                        .await
-                                                        {
-                                                            Ok(tls) => {
-                                                                Some(Box::new(tls)
-                                                                    as TransportStream)
-                                                            }
-                                                            Err(e) => {
-                                                                warn!("Rotation TLS handshake failed: {}", e);
-                                                                None
-                                                            }
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        warn!(
-                                                            "Rotation SSL configure failed: {}",
-                                                            e
-                                                        );
-                                                        None
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                warn!(
-                                                    "Rotation camouflage configure failed: {}",
-                                                    e
-                                                );
-                                                None
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        warn!("Rotation connector build failed: {}", e);
-                                        None
-                                    }
-                                }
-                            } else {
-                                // tcp-tls
-                                let host =
-                                    crate::protocol::tcp::resolve_sni(&config_clone, &conn_string);
-                                match crate::protocol::tcp::build_connector(&config_clone) {
-                                    Ok(mut builder) => {
-                                        let _ = builder.set_alpn_protos(b"\x02h2\x08http/1.1");
-                                        let connector = builder.build();
-                                        match connector.configure() {
-                                            Ok(mut ssl_config) => {
-                                                if config_clone.transport.insecure {
-                                                    ssl_config.set_verify_hostname(false);
-                                                }
-                                                match tokio_boring::connect(
-                                                    ssl_config, host, tcp_stream,
-                                                )
-                                                .await
-                                                {
-                                                    Ok(tls) => {
-                                                        Some(Box::new(tls) as TransportStream)
-                                                    }
-                                                    Err(e) => {
-                                                        warn!(
-                                                            "Rotation TLS handshake failed: {}",
-                                                            e
-                                                        );
-                                                        None
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                warn!("Rotation SSL configure failed: {}", e);
-                                                None
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        warn!("Rotation connector build failed: {}", e);
-                                        None
-                                    }
-                                }
-                            };
-
-                            tls_stream
-                        }
-                        Err(e) => {
-                            warn!("Rotation TCP connect failed: {}", e);
-                            None
-                        }
+                    let stream: Option<TransportStream> = if active_protocol == "udp" {
+                        // --- QUIC Rotation ---
+                        Self::create_quic_rotation_stream(&config_clone, target_addr, &conn_string)
+                            .await
+                    } else {
+                        // --- TCP Rotation ---
+                        Self::create_tcp_rotation_stream(
+                            &config_clone,
+                            &transport_config,
+                            target_addr,
+                            &conn_string,
+                        )
+                        .await
                     };
 
                     // If we got a stream, authenticate it as secondary
@@ -796,5 +698,147 @@ impl MirageClient {
         );
 
         Ok(Box::new(tls_stream))
+    }
+
+    /// Creates a TCP+TLS stream for connection rotation.
+    /// Self-contained — does not require &mut self.
+    async fn create_tcp_rotation_stream(
+        config: &ClientConfig,
+        transport_config: &crate::config::TransportConfig,
+        target_addr: SocketAddr,
+        conn_string: &str,
+    ) -> Option<TransportStream> {
+        let tcp_stream = match TcpStream::connect(target_addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Rotation TCP connect failed: {}", e);
+                return None;
+            }
+        };
+
+        let _ = tcp_stream.set_nodelay(transport_config.tcp_nodelay);
+        let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
+        let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
+        let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
+
+        let use_camouflage = config.camouflage.is_mirage();
+
+        if use_camouflage {
+            let mut builder = match crate::protocol::tcp::build_connector(config) {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!("Rotation connector build failed: {}", e);
+                    return None;
+                }
+            };
+            let sni = match crate::protocol::camouflage::configure(&mut builder, config) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("Rotation camouflage configure failed: {}", e);
+                    return None;
+                }
+            };
+            let connector = builder.build();
+            let ssl_config = match connector.configure() {
+                Ok(mut cfg) => {
+                    cfg.set_verify_hostname(false);
+                    cfg
+                }
+                Err(e) => {
+                    warn!("Rotation SSL configure failed: {}", e);
+                    return None;
+                }
+            };
+            match tokio_boring::connect(ssl_config, &sni, tcp_stream).await {
+                Ok(tls) => Some(Box::new(tls) as TransportStream),
+                Err(e) => {
+                    warn!("Rotation TLS handshake failed: {}", e);
+                    None
+                }
+            }
+        } else {
+            let host = crate::protocol::tcp::resolve_sni(config, conn_string);
+            let mut builder = match crate::protocol::tcp::build_connector(config) {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!("Rotation connector build failed: {}", e);
+                    return None;
+                }
+            };
+            let _ = builder.set_alpn_protos(b"\x02h2\x08http/1.1");
+            let connector = builder.build();
+            let ssl_config = match connector.configure() {
+                Ok(mut cfg) => {
+                    if config.transport.insecure {
+                        cfg.set_verify_hostname(false);
+                    }
+                    cfg
+                }
+                Err(e) => {
+                    warn!("Rotation SSL configure failed: {}", e);
+                    return None;
+                }
+            };
+            match tokio_boring::connect(ssl_config, host, tcp_stream).await {
+                Ok(tls) => Some(Box::new(tls) as TransportStream),
+                Err(e) => {
+                    warn!("Rotation TLS handshake failed: {}", e);
+                    None
+                }
+            }
+        }
+    }
+
+    /// Creates a QUIC bi-stream for connection rotation.
+    /// Creates a fresh QUIC endpoint and connection each time to get a new source port
+    /// (effectively port hopping on rotation).
+    async fn create_quic_rotation_stream(
+        config: &ClientConfig,
+        target_addr: SocketAddr,
+        conn_string: &str,
+    ) -> Option<TransportStream> {
+        // Create a fresh endpoint (new source port each time = implicit port hop)
+        let endpoint = match crate::protocol::udp::create_endpoint(config, target_addr) {
+            Ok(e) => e,
+            Err(e) => {
+                warn!("Rotation QUIC endpoint creation failed: {}", e);
+                return None;
+            }
+        };
+
+        let host = crate::protocol::udp::resolve_sni(config, conn_string);
+
+        info!(
+            "Rotation: connecting via QUIC to {} (SNI: {})",
+            target_addr, host
+        );
+
+        // Establish QUIC connection
+        let connection = match endpoint.connect(target_addr, host) {
+            Ok(connecting) => match connecting.await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    warn!("Rotation QUIC connection failed: {}", e);
+                    return None;
+                }
+            },
+            Err(e) => {
+                warn!("Rotation QUIC connect initiation failed: {}", e);
+                return None;
+            }
+        };
+
+        // Open a bi-directional stream
+        match connection.open_bi().await {
+            Ok((send, recv)) => {
+                info!("Rotation: QUIC stream opened to {}", target_addr);
+                let stream = QuicStream::new(send, recv);
+                Some(Box::new(stream) as TransportStream)
+            }
+            Err(e) => {
+                warn!("Rotation QUIC open_bi failed: {}", e);
+                None
+            }
+        }
     }
 }
