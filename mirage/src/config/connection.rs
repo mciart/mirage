@@ -60,10 +60,20 @@ pub struct ConnectionConfig {
     /// QUIC supports native multiplexing, so 1 is usually enough, but more can help with QoS
     #[serde(default = "default_parallel_connections")]
     pub quic_parallel_connections: u8,
-    /// Enable connection warmup (pre-establish standby connections)
-    /// Reduces latency when switching connections
-    #[serde(default = "default_false_fn")]
-    pub warmup_connections: bool,
+
+    /// Max lifetime for a single underlying connection (seconds, 0 = disabled, default = 300)
+    /// After this time, the connection will be gracefully replaced with a new one.
+    /// This counters firewall detection based on long-lived connections.
+    #[serde(default = "default_connection_max_lifetime_s")]
+    pub connection_max_lifetime_s: u64,
+    /// Random jitter added to max lifetime to avoid synchronized rotation (seconds, default = 60)
+    #[serde(default = "default_connection_lifetime_jitter_s")]
+    pub connection_lifetime_jitter_s: u64,
+    /// Multiplexing mode for parallel connections (default = "round_robin")
+    /// "round_robin" - packet-level distribution across all connections (XMUX-style)
+    /// "active_standby" - use one connection, switch on failure (legacy)
+    #[serde(default = "default_mux_mode")]
+    pub mux_mode: String,
     /// Obfuscation configuration (padding, timing)
     #[serde(default)]
     pub obfuscation: ObfuscationConfig,
@@ -87,7 +97,10 @@ impl Default for ConnectionConfig {
             dual_stack_enabled: default_false_fn(),
             parallel_connections: default_parallel_connections(),
             quic_parallel_connections: default_parallel_connections(),
-            warmup_connections: default_false_fn(),
+
+            connection_max_lifetime_s: default_connection_max_lifetime_s(),
+            connection_lifetime_jitter_s: default_connection_lifetime_jitter_s(),
+            mux_mode: default_mux_mode(),
             obfuscation: ObfuscationConfig::default(),
         }
     }

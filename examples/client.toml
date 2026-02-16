@@ -62,9 +62,24 @@ quic_parallel_connections = 1
 # IPv4/IPv6 双栈并发聚合 (默认: false)
 # 开启后将同时使用 IPv4 和 IPv6 连接，并在它们之间进行负载均衡
 dual_stack_enabled = false
-# 连接预热 (默认: false)
-# 启用后在启动时预建立备用连接，减少切换延迟
-warmup_connections = false
+
+
+
+# 连接最大生存时间 (秒, 0 = 禁用, 默认: 300)
+# 超过此时间的底层连接会被静默替换为新连接
+# 可有效对抗防火墙基于长连接时长的代理检测 (如 Geedge Networks)
+# VPN 连接不会中断，因为 TUN 接口的 IP 地址不变
+connection_max_lifetime_s = 300
+
+# 连接寿命随机抖动 (秒, 默认: 60)
+# 防止多条连接同时轮换产生流量特征
+connection_lifetime_jitter_s = 60
+
+# 多路复用模式 (默认: "round_robin")
+# "round_robin" - 包级别轮询分发到所有连接 (类似 XMUX, 更好的混淆和带宽聚合)
+# "active_standby" - 仅使用一条连接, 故障时切换到备用 (旧行为)
+mux_mode = "round_robin"
+
 # 仅供测试：禁用 TLS 证书验证（适用于自签名证书）
 # 警告：不安全！
 insecure = false

@@ -108,3 +108,15 @@ pub fn default_jitter_min() -> u64 {
 pub fn default_jitter_max() -> u64 {
     20
 }
+
+pub fn default_connection_max_lifetime_s() -> u64 {
+    300 // 5 minutes default to counter long-connection fingerprinting
+}
+
+pub fn default_connection_lifetime_jitter_s() -> u64 {
+    60 // ±60s randomization to avoid synchronized rotation
+}
+
+pub fn default_mux_mode() -> String {
+    "round_robin".to_string()
+}

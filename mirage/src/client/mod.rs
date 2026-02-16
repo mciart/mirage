@@ -250,9 +250,13 @@ impl MirageClient {
             self.config.connection.parallel_connections
         };
 
-        let relayer = if target_parallel_connections > 1 {
-            // --- Parallel Connections Logic ---
-            use crate::client::connection_pool::ConnectionPool;
+        // Determine if we should use the MuxController
+        let use_mux =
+            target_parallel_connections > 1 || self.config.connection.connection_max_lifetime_s > 0;
+
+        let relayer = if use_mux {
+            // --- MuxController Logic ---
+            use crate::transport::mux::{MuxController, MuxMode, RotationConfig};
 
             // Determine addresses to use for pool connections
             let mut pool_addrs = Vec::new();
@@ -340,25 +344,197 @@ impl MirageClient {
                 }
             }
 
-            if connections.len() > 1 {
-                let pool = ConnectionPool::new(session_id, connections);
-                let (writers, readers) = pool.take_writers();
-                ClientRelayer::start_pooled(
-                    interface,
-                    writers,
-                    readers,
-                    self.config.connection.obfuscation.clone(),
-                )?
+            let mode = MuxMode::from_str(&self.config.connection.mux_mode);
+            let rotation_config = RotationConfig {
+                max_lifetime_s: self.config.connection.connection_max_lifetime_s,
+                lifetime_jitter_s: self.config.connection.connection_lifetime_jitter_s,
+            };
+
+            // Create the connection factory channel for rotation
+            let (conn_request_tx, mut conn_request_rx) = tokio::sync::mpsc::channel::<
+                crate::transport::mux::ConnectionRequest<TransportStream>,
+            >(4);
+
+            // Spawn the connection factory background task
+            // This task handles rotation requests from MuxController
+            let auth_config = self.config.authentication.clone();
+            let conn_config = self.config.connection.clone();
+            let static_ip = self.config.static_client_ip;
+            let static_ip_v6 = self.config.static_client_ip_v6;
+            let pool_addrs_clone = pool_addrs.clone();
+            let conn_string = if self.config.connection_string.contains(':') {
+                self.config.connection_string.clone()
             } else {
-                // Determine if we have the primary connection back (we should)
-                let (reader, writer) = connections.pop().expect("Primary connection missing");
-                ClientRelayer::start(
-                    interface,
-                    reader,
-                    writer,
-                    self.config.connection.obfuscation.clone(),
-                )?
-            }
+                format!("{}:443", self.config.connection_string)
+            };
+            let config_clone = self.config.clone();
+
+            // We need a separate task since connect_to_server needs &mut self
+            // Instead, we replicate the connection logic in a standalone async block
+            tokio::spawn(async move {
+                let mut rotation_idx: usize = 0;
+                while let Some(response_tx) = conn_request_rx.recv().await {
+                    let target_addr = pool_addrs_clone[rotation_idx % pool_addrs_clone.len()];
+                    rotation_idx += 1;
+
+                    info!(
+                        "Connection factory: establishing rotation connection to {}",
+                        target_addr
+                    );
+
+                    // Connect
+                    let tcp_result = TcpStream::connect(target_addr).await;
+                    let stream: Option<TransportStream> = match tcp_result {
+                        Ok(tcp_stream) => {
+                            let _ = tcp_stream.set_nodelay(conn_config.tcp_nodelay);
+                            let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
+                            let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
+                            let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
+
+                            // Determine protocol
+                            let protocol = config_clone
+                                .connection
+                                .enabled_protocols
+                                .first()
+                                .map(|s| s.as_str())
+                                .unwrap_or("tcp-tls");
+
+                            let tls_stream: Option<TransportStream> = if protocol == "reality" {
+                                // For rotation, we need to build the connector
+                                match crate::protocol::tcp_tls::build_connector(&config_clone) {
+                                    Ok(mut builder) => {
+                                        match crate::protocol::reality::configure(
+                                            &mut builder,
+                                            &config_clone,
+                                        ) {
+                                            Ok(sni) => {
+                                                let connector = builder.build();
+                                                match connector.configure() {
+                                                    Ok(mut ssl_config) => {
+                                                        ssl_config.set_verify_hostname(false);
+                                                        match tokio_boring::connect(
+                                                            ssl_config, &sni, tcp_stream,
+                                                        )
+                                                        .await
+                                                        {
+                                                            Ok(tls) => {
+                                                                Some(Box::new(tls)
+                                                                    as TransportStream)
+                                                            }
+                                                            Err(e) => {
+                                                                warn!("Rotation TLS handshake failed: {}", e);
+                                                                None
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        warn!(
+                                                            "Rotation SSL configure failed: {}",
+                                                            e
+                                                        );
+                                                        None
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!("Rotation Reality configure failed: {}", e);
+                                                None
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Rotation connector build failed: {}", e);
+                                        None
+                                    }
+                                }
+                            } else {
+                                // tcp-tls
+                                let host = crate::protocol::tcp_tls::resolve_sni(
+                                    &config_clone,
+                                    &conn_string,
+                                );
+                                match crate::protocol::tcp_tls::build_connector(&config_clone) {
+                                    Ok(mut builder) => {
+                                        let _ = builder.set_alpn_protos(b"\x02h2\x08http/1.1");
+                                        let connector = builder.build();
+                                        match connector.configure() {
+                                            Ok(mut ssl_config) => {
+                                                if config_clone.connection.insecure {
+                                                    ssl_config.set_verify_hostname(false);
+                                                }
+                                                match tokio_boring::connect(
+                                                    ssl_config, host, tcp_stream,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(tls) => {
+                                                        Some(Box::new(tls) as TransportStream)
+                                                    }
+                                                    Err(e) => {
+                                                        warn!(
+                                                            "Rotation TLS handshake failed: {}",
+                                                            e
+                                                        );
+                                                        None
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!("Rotation SSL configure failed: {}", e);
+                                                None
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Rotation connector build failed: {}", e);
+                                        None
+                                    }
+                                }
+                            };
+
+                            tls_stream
+                        }
+                        Err(e) => {
+                            warn!("Rotation TCP connect failed: {}", e);
+                            None
+                        }
+                    };
+
+                    // If we got a stream, authenticate it as secondary
+                    let result = if let Some(stream) = stream {
+                        let (r, w) = tokio::io::split(stream);
+                        let secondary_auth = AuthClient::new(
+                            Box::new(UsersFileClientAuthenticator::new(
+                                &auth_config,
+                                static_ip,
+                                static_ip_v6,
+                            )),
+                            Duration::from_secs(conn_config.connection_timeout_s),
+                        );
+                        match secondary_auth
+                            .authenticate_secondary(r, w, session_id)
+                            .await
+                        {
+                            Ok((reader, writer)) => {
+                                info!("Rotation: new connection authenticated successfully");
+                                Some((reader, writer))
+                            }
+                            Err(e) => {
+                                warn!("Rotation authentication failed: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    let _ = response_tx.send(result);
+                }
+            });
+
+            let mux = MuxController::new(connections, mode, rotation_config, conn_request_tx);
+
+            ClientRelayer::start_mux(interface, mux, self.config.connection.obfuscation.clone())?
         } else {
             // --- Single Connection Logic ---
             ClientRelayer::start(

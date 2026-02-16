@@ -362,4 +362,26 @@ impl ClientRelayer {
 
         result
     }
+
+    /// Creates a client relayer backed by the MuxController for XMUX-style multiplexing
+    /// and connection rotation.
+    pub fn start_mux<
+        I: InterfaceIO + 'static,
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    >(
+        interface: Interface<I>,
+        mux: crate::transport::mux::MuxController<S>,
+        obfuscation: crate::config::ObfuscationConfig,
+    ) -> Result<Self> {
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let interface = Arc::new(interface);
+
+        let relayer_task =
+            tokio::spawn(async move { mux.run(interface, shutdown_rx, obfuscation).await });
+
+        Ok(Self {
+            relayer_task,
+            shutdown_tx,
+        })
+    }
 }
