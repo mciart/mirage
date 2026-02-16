@@ -167,12 +167,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         let (inbound_tx, inbound_rx) = mpsc::channel::<Packet>(4096);
 
         // Spawn inbound reader tasks for all initial connections
+        // Track their JoinHandles so we can abort them on rotation
+        let mut reader_handles: Vec<Option<tokio::task::JoinHandle<Result<()>>>> =
+            Vec::with_capacity(self.readers.len());
         for (i, reader) in self.readers.iter_mut().enumerate() {
             if let Some(reader) = reader.take() {
                 let tx = inbound_tx.clone();
-                tasks.push(tokio::spawn(async move {
-                    Self::inbound_reader_task(i, reader, tx).await
-                }));
+                let handle =
+                    tokio::spawn(async move { Self::inbound_reader_task(i, reader, tx).await });
+                reader_handles.push(Some(handle));
+            } else {
+                reader_handles.push(None);
             }
         }
 
@@ -234,9 +239,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     conn_request_tx,
                     inbound_tx_for_rotation,
                     dead_writers_for_rotation,
+                    reader_handles,
                 )
                 .await
             }));
+        } else {
+            // Not rotating — push reader handles into tasks so they're awaited
+            for handle in reader_handles {
+                if let Some(h) = handle {
+                    tasks.push(h);
+                }
+            }
         }
 
         interface.configure()?;
@@ -457,6 +470,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
         inbound_tx: mpsc::Sender<Packet>,
         dead_writers: Arc<Vec<AtomicBool>>,
+        mut reader_handles: Vec<Option<tokio::task::JoinHandle<Result<()>>>>,
     ) -> Result<()> {
         // Use mutable local copies for tracking
         let num_connections = writers.len();
@@ -520,17 +534,28 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     // Mark this writer as alive again
                     dead_writers[expire_idx].store(false, Ordering::Relaxed);
 
+                    // Abort the old reader task to release old QUIC streams/endpoint
+                    if let Some(old_handle) = reader_handles[expire_idx].take() {
+                        old_handle.abort();
+                        debug!(
+                            "Rotation: aborted old reader task for connection {}",
+                            expire_idx
+                        );
+                    }
+
                     // Spawn a new inbound reader for the replacement connection
                     let tx = inbound_tx.clone();
                     let conn_id = expire_idx;
-                    tokio::spawn(async move {
+                    let new_handle = tokio::spawn(async move {
                         if let Err(e) =
                             Self::inbound_reader_task(conn_id, FramedReader::new(new_reader), tx)
                                 .await
                         {
                             debug!("Rotated inbound reader {} ended: {}", conn_id, e);
                         }
+                        Ok(())
                     });
+                    reader_handles[expire_idx] = Some(new_handle);
 
                     // Update birth time and lifetime for this slot
                     current_birth_times[expire_idx] = Instant::now();
