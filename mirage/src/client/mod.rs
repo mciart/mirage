@@ -350,6 +350,13 @@ impl MirageClient {
                 crate::transport::mux::ConnectionRequest<TransportStream>,
             >(4);
 
+            // Build slot → address mapping so each slot always rotates to the same address
+            let mut slot_addrs = Vec::with_capacity(num_parallel);
+            slot_addrs.push(remote_addr); // Slot 0 = primary connection address
+            for i in 1..num_parallel {
+                slot_addrs.push(pool_addrs[i % pool_addrs.len()]);
+            }
+
             // Spawn the connection factory background task
             // This task handles rotation requests from MuxController
             let auth_config = self.config.authentication.clone();
@@ -357,7 +364,6 @@ impl MirageClient {
             let transport_config = self.config.transport.clone();
             let static_ip = self.config.static_client_ip;
             let static_ip_v6 = self.config.static_client_ip_v6;
-            let pool_addrs_clone = pool_addrs.clone();
             let conn_string = self.config.server.to_connection_string();
             let config_clone = self.config.clone();
             let active_protocol = protocol.clone(); // Protocol used for primary connection
@@ -365,14 +371,13 @@ impl MirageClient {
             // We need a separate task since connect_to_server needs &mut self
             // Instead, we replicate the connection logic in a standalone async block
             tokio::spawn(async move {
-                let mut rotation_idx: usize = 0;
-                while let Some(response_tx) = conn_request_rx.recv().await {
-                    let target_addr = pool_addrs_clone[rotation_idx % pool_addrs_clone.len()];
-                    rotation_idx += 1;
+                while let Some((slot_idx, response_tx)) = conn_request_rx.recv().await {
+                    // Use the same address this slot was originally connected to
+                    let target_addr = slot_addrs[slot_idx % slot_addrs.len()];
 
                     info!(
-                        "Connection factory: establishing rotation connection to {} ({})",
-                        target_addr, active_protocol
+                        "Connection factory: establishing rotation connection to {} ({}) for slot {}",
+                        target_addr, active_protocol, slot_idx
                     );
 
                     let stream: Option<TransportStream> = if active_protocol == "udp" {

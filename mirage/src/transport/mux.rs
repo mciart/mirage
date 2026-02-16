@@ -87,8 +87,8 @@ impl RotationConfig {
 }
 
 /// A request to the client to establish a new secondary connection.
-/// The oneshot sender is used to return the new connection's read/write halves.
-pub type ConnectionRequest<S> = oneshot::Sender<Option<(ReadHalf<S>, WriteHalf<S>)>>;
+/// Contains (slot_index, response_channel) so the factory knows which address to use.
+pub type ConnectionRequest<S> = (usize, oneshot::Sender<Option<(ReadHalf<S>, WriteHalf<S>)>>);
 
 /// Manages multiple connections with packet distribution and rotation.
 ///
@@ -510,9 +510,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 expire_idx
             );
 
-            // Request a new connection from the client
+            // Request a new connection from the client, including the slot index
             let (response_tx, response_rx) = oneshot::channel();
-            if conn_request_tx.send(response_tx).await.is_err() {
+            if conn_request_tx
+                .send((expire_idx, response_tx))
+                .await
+                .is_err()
+            {
                 warn!("Rotation supervisor: connection request channel closed, stopping rotation");
                 return Ok(());
             }
