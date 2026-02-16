@@ -9,11 +9,13 @@ mod connection;
 pub(crate) mod defaults;
 mod network;
 mod server;
+mod transport;
 
-pub use client::{ClientAuthenticationConfig, ClientConfig};
+pub use client::{ClientAuthenticationConfig, ClientConfig, ServerEndpoint};
 pub use connection::{ConnectionConfig, ObfuscationConfig};
-pub use network::{LogConfig, NatConfig, NetworkConfig, RealityConfig};
+pub use network::{CamouflageConfig, CamouflageMode, LogConfig, NatConfig, NetworkConfig};
 pub use server::{ServerAuthenticationConfig, ServerConfig};
+pub use transport::{TransportConfig, TransportProtocol};
 
 use crate::error::{ConfigError, Result};
 use figment::{
@@ -85,13 +87,18 @@ mod tests {
 
             [connection]
             mtu = 1500
-            connection_timeout_s = 45
+            timeout_s = 45
             keep_alive_interval_s = 20
             send_buffer_size = 4194304
             recv_buffer_size = 4194304
             tcp_nodelay = true
 
-            [reality]
+            [obfuscation]
+            enabled = true
+            padding_probability = 0.1
+
+            [camouflage]
+            mode = "mirage"
             target_sni = "www.google.com"
             short_ids = ["abcd1234"]
 
@@ -106,13 +113,17 @@ mod tests {
 
         assert_eq!(config.name, "mirage-server");
         assert_eq!(config.bind_port, 443);
-        assert_eq!(config.reality.target_sni, "www.google.com");
+        assert_eq!(config.camouflage.target_sni, "www.google.com");
+        assert_eq!(config.camouflage.mode, "mirage");
+        assert_eq!(config.obfuscation.padding_probability, 0.1);
     }
 
     #[test]
     fn parse_client_config_full() {
         let toml = r#"
-            connection_string = "example.com:443"
+            [server]
+            host = "example.com"
+            port = 443
 
             [authentication]
             auth_type = "UsersFile"
@@ -120,16 +131,25 @@ mod tests {
             password = "testpass"
             trusted_certificate_paths = ["/path/to/cert1.pem"]
 
+            [transport]
+            protocols = ["tcp"]
+            parallel_connections = 2
+            dual_stack = true
+
             [connection]
             mtu = 1500
-            connection_timeout_s = 45
+            timeout_s = 45
             keep_alive_interval_s = 20
+
+            [obfuscation]
+            enabled = true
 
             [network]
             routes = ["10.0.1.0/24", "192.168.0.0/16"]
             dns_servers = ["8.8.8.8", "8.8.4.4"]
 
-            [reality]
+            [camouflage]
+            mode = "mirage"
             target_sni = "www.google.com"
             short_ids = ["abcd1234"]
 
@@ -142,9 +162,13 @@ mod tests {
             .extract()
             .expect("Failed to parse client config");
 
-        assert_eq!(config.connection_string, "example.com:443");
-        assert_eq!(config.reality.target_sni, "www.google.com");
-        assert_eq!(config.reality.short_ids, vec!["abcd1234"]);
+        assert_eq!(config.server.host, "example.com");
+        assert_eq!(config.server.port, 443);
+        assert_eq!(config.server.to_connection_string(), "example.com:443");
+        assert_eq!(config.camouflage.target_sni, "www.google.com");
+        assert_eq!(config.camouflage.short_ids, vec!["abcd1234"]);
+        assert_eq!(config.transport.parallel_connections, 2);
+        assert_eq!(config.transport.dual_stack, true);
         assert_eq!(config.static_client_ip, None);
         assert_eq!(config.static_client_ip_v6, None);
     }

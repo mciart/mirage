@@ -411,16 +411,16 @@ impl MirageGui {
 
             column![
                 self.build_owned_config_field(
-                    "Connection String".to_string(),
-                    config.connection_string.clone()
+                    "Server".to_string(),
+                    config.server.to_connection_string()
                 ),
                 self.build_owned_config_field(
                     "Username".to_string(),
                     config.authentication.username.clone()
                 ),
                 self.build_owned_config_field(
-                    "Reality SNI".to_string(),
-                    config.reality.target_sni.clone()
+                    "Camouflage SNI".to_string(),
+                    config.camouflage.target_sni.clone()
                 ),
                 self.build_owned_config_field("Routes".to_string(), routes_display),
                 self.build_owned_config_field("DNS Servers".to_string(), dns_servers_display),

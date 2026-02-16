@@ -73,14 +73,21 @@ pub fn default_trusted_certificates() -> Vec<String> {
     Vec::new()
 }
 
-pub fn default_reality_sni() -> String {
+pub fn default_camouflage_sni() -> String {
     "www.microsoft.com".to_string()
 }
 
-pub fn default_enabled_protocols() -> Vec<String> {
-    vec!["reality".to_string()]
+pub fn default_camouflage_mode() -> String {
+    "mirage".to_string()
 }
 
+pub fn default_server_port() -> u16 {
+    443
+}
+
+pub fn default_protocols() -> Vec<super::TransportProtocol> {
+    vec![super::TransportProtocol::Tcp]
+}
 pub fn default_parallel_connections() -> u8 {
     1 // Default to single connection for backward compatibility
 }

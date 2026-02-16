@@ -100,7 +100,7 @@ impl MirageServer {
             authenticator,
             self.config.tunnel_network,
             self.config.tunnel_network_v6,
-            Duration::from_secs(self.config.connection.connection_timeout_s),
+            Duration::from_secs(self.config.connection.timeout_s),
         ));
 
         let (sender, receiver) = channel(PACKET_CHANNEL_SIZE);
@@ -197,7 +197,7 @@ impl MirageServer {
                     let session_queues = self.session_queues.clone();
                     let address_pool = self.address_pool.clone();
                     let acceptor = acceptor.clone();
-                    let obfuscation = self.config.connection.obfuscation.clone();
+                    let obfuscation = self.config.obfuscation.clone();
 
                     connection_tasks.push(tokio::spawn(async move {
                         match dispatcher.dispatch(tcp_stream).await {

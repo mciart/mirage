@@ -1,58 +1,89 @@
-# Mirage VPN Security Analysis & Xray Comparison
+# Mirage VPN — 安全与隐匿性分析
 
-## 深度对比评估 (Deep Dive Comparison)
+## 检测手段与对策矩阵
 
-Mirage VPN 目前在**直连隐匿性**（Stealth）上，已经达到了与 Xray (VLESS/VMess + Reality) 相同甚至超越的顶尖水平。
+| 检测手段 | 对策 | 状态 |
+|---------|------|------|
+| **SNI 阻断** | Mirage 伪装 (TCP) / JLS (QUIC, 开发中) | ✅ TCP / 🔜 QUIC |
+| **TLS 指纹识别** | BoringSSL (Chrome 同源指纹) | ✅ |
+| **主动探测 (Active Probing)** | ShortID 验证 + 反向代理到真实网站 | ✅ TCP |
+| **包长度分析** | 加权拟态轮廓 (Weighted Traffic Mimicry) | ✅ |
+| **时序关联分析** | 智能时序抖动 (Jitter) | ✅ |
+| **静默连接检测** | 应用层心跳 (Heartbeat) | ✅ |
+| **长连接指纹** | 连接轮换 (max_lifetime + jitter) | ✅ |
+| **UDP 长连接阻断** | QUIC Port Hopping | ✅ |
+| **单栈封锁** | IPv4/IPv6 双栈聚合 | ✅ |
+| **CDN 封锁** | WebSocket/gRPC | ⏳ 计划中 |
 
-### 1. 握手隐匿性 (Handshake) —— **打平**
-*   **Xray (Reality)**: 模拟真实的 TLS 握手，盗取目标网站的证书特征。
-*   **Mirage (Reality)**: 采用了完全相同的原理。通过 `SslStream` 和伪装 SNI，Mirage 呈现的也是标准的 HTTPS 流量。
-*   **结论**: **平手**。GFW 看到的都只是在访问一个正常的海外网站。
+---
 
-### 2. 流量特征隐匿性 (Traffic Fingerprint) —— **Mirage 略优**
-*   **Xray**: 虽然有 Vision 流控，但对包长度的随机化处理主要依赖于具体配置和协议。
-*   **Mirage**:
-    *   **Padding (Weighted Traffic Mimicry)**: 采用高级的**加权拟态轮廓**，模拟真实 HTTPS 流量的三态分布。
-    *   **Jitter**: Mirage 的随机时序抖动专门针对"关联分析"。
-    *   **Heartbeat**: 空闲时自动保活，防止因"长连接零吞吐"被识别。
-*   **结论**: **Mirage 在抗深度分析上更进一步**。
+## 伪装能力分析
 
-### 3. 生存能力 (Resurrect/CDN) —— **Mirage 进化**
-*   **Xray**: 支持 WebSocket / gRPC，可以套 Cloudflare CDN。
-*   **Mirage**:
-    *   **Port Hopping (QUIC)**: 独有的端口跳跃技术，每隔 N 秒（如 30s）自动轮换 UDP 端口，利用 QUIC 连接迁移特性保持会话不断。这有效规避了针对长连接 UDP 的 QoS 和阻断。
-    *   **Dual Stack (双栈)**: 当 IPv4 被干扰时，自动回退或并发使用 IPv6 链路，利用两条完全不同的网络路径提高生存率。
-    *   **CDN**: 目前尚未支持 WebSocket (Planned)，仍需 TCP 直连。
-*   **结论**: **Mirage 在直连抗封锁上通过 Port Hopping 和 Dual Stack 建立了多重防线**。
+### TCP 层: Mirage 伪装 ✅
 
-### 4. 协议层级与体验 (Layer & UX) —— **Mirage 胜出**
-*   **Xray**: 本质上是 **L4 代理** (SOCKS/HTTP)。
-*   **Mirage**: 是真正的 **L3 VPN (HTTPS/QUIC VPN)**，支持原生 ICMP，支持 **双栈聚合 (IPv4+IPv6)**。
-*   **结论**: **Mirage 提供更底层、更完整的网络体验**。
+TCP+TLS 连接具备完整的抗检测能力：
 
-### 5. 性能优化 (Performance) —— **Mirage 胜出**
-*   **Xray**: 默认配置，依赖 Go 运行时。
-*   **Mirage**:
-    *   **多 TCP/QUIC 连接池**: 支持同时维护多条 TCP 和 QUIC 连接，自动负载均衡。
-    *   **QUIC 0-RTT**: 极速重连与连接复用
-    *   **Full-Duplex Aggregation**: 服务端和客户端双向聚合 IPv4/IPv6 带宽，压榨线路极限。
-    *   **TCP BBR / 4MB Buffer**: 工业级内核调优
-*   **结论**: **Mirage 性能优化达到工业级水准**。
+1. **BoringSSL 原生指纹**: Chrome 同源库，指纹无法与真实浏览器区分
+2. **SNI 伪装**: ClientHello 中呈现目标网站的 SNI (如 `www.microsoft.com`)
+3. **ALPN ShortID 认证**: 通过 ALPN 扩展携带认证令牌，验证失败则反向代理到真实网站
+4. **抗主动探测**: 探测者无论怎样尝试都只能看到真实网站的响应
 
-### 总结
+### QUIC 层: 标准 h3 ⚠️ (JLS 开发中)
 
-Mirage 具备对抗 GFW 所有主流检测手段的能力：
-1.  **SNI 阻断/检测** -> Reality
-2.  **TLS 指纹识别** -> BoringSSL + Reality
-3.  **包长度分析** -> Padding
-4.  **时序关联分析** -> Jitter
-5.  **静默连接检测** -> Heartbeat
-6.  **带宽限制/连接中断** -> 连接池 + Dual Stack
-7.  **UDP QoS/长连接阻断** -> QUIC Port Hopping
+当前 QUIC 连接使用 **标准 rustls**，具备：
+- h3 ALPN 伪装 (看起来像 HTTP/3 流量)
+- 端口跳跃 (Port Hopping)
+- 0-RTT 快速重连
 
-**技术细节**：
-- **Protocol V2**: `[Length: 2B][Type: 1B][Payload]` (紧凑帧头，仅 3 字节)
-- **Padding**: 三态加权分布，模拟真实协议特征
-- **Jitter**: 随机睡眠 0-20ms
-- **Port Hopping**: QUIC 连接每 30s 轮换端口
-- **Dual Stack**: 同时并发使用 IPv4/IPv6
+**缺失**:
+- ❌ 无 SNI 伪装 (使用真实服务器域名)
+- ❌ 无 Chrome TLS 指纹 (rustls 指纹特征明显)
+- ❌ 无抗主动探测 (服务端使用自有证书)
+
+### JLS 集成: QUIC 层完整伪装 🔜
+
+**JLS (JLS Library for Stealth)** 是一个独立库，在 QUIC 层实现了类似 Reality 的完整伪装：
+
+| 特性 | TCP (Mirage 伪装) | QUIC (当前) | QUIC + JLS (规划中) |
+|------|-------------------|-------------|-------------------|
+| SNI 伪装 | ✅ | ❌ | ✅ |
+| 无需证书 | ✅ | ❌ 需自有证书 | ✅ |
+| 抗主动探测 | ✅ | ❌ | ✅ |
+| TLS 指纹 | ✅ Chrome | ❌ rustls | ✅ 浏览器级 |
+| 延迟 | 1-RTT | 0-RTT | **0-RTT** |
+
+JLS 集成后，**两种协议都将具备完整的抗检测能力**，QUIC 还额外拥有 0-RTT 超低延迟优势。
+
+---
+
+## 与 Xray 深度对比
+
+### 1. 握手隐匿性 — 打平
+- **Xray (Reality)**: 模拟真实 TLS 握手，盗取目标网站证书特征
+- **Mirage**: 完全相同的原理 + BoringSSL 原生 Chrome 指纹
+
+### 2. 流量特征 — Mirage 略优
+- **Xray**: Vision 流控，配置依赖性强
+- **Mirage**: 加权拟态轮廓 (3 态分布) + Jitter + Heartbeat，开箱即用
+
+### 3. 生存能力 — 各有侧重
+- **Xray**: WebSocket / gRPC + CDN 支持
+- **Mirage**: Port Hopping + Dual Stack + 连接轮换，直连抗封锁更强
+
+### 4. 协议层级 — Mirage 胜出
+- **Xray**: L4 代理 (SOCKS/HTTP)
+- **Mirage**: **L3 VPN** — 原生 ICMP/TCP/UDP，双栈聚合
+
+### 5. QUIC 伪装 — JLS 集成后 Mirage 全面领先
+- **Xray**: QUIC 无 Reality 伪装
+- **Mirage + JLS**: QUIC 层完整伪装 + 0-RTT + Port Hopping
+
+---
+
+## 协议技术细节
+
+- **帧格式**: `[Length: 2B][Type: 1B][Payload]` — 紧凑仅 3 字节开销
+- **Padding**: 三态加权分布 (60% 小包 / 30% 中包 / 10% 大包)
+- **Jitter**: 随机化 0-20ms 发包间隔
+- **Port Hopping**: QUIC 每 N 秒轮换 UDP 端口 (默认 0 = 禁用)
+- **连接轮换**: max_lifetime_s (默认 300s) + lifetime_jitter_s (±60s)

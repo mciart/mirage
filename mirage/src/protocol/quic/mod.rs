@@ -73,7 +73,7 @@ pub fn build_rustls_config(config: &ClientConfig) -> Result<rustls::ClientConfig
         .collect();
 
     // Insecure mode
-    if config.connection.insecure {
+    if config.transport.insecure {
         warn!("QUIC certificate verification DISABLED - this is unsafe!");
         client_crypto
             .dangerous()
@@ -99,7 +99,7 @@ pub fn create_endpoint(
     let mut client_config = quinn::ClientConfig::new(std::sync::Arc::new(client_crypto));
     let transport_config = common_transport_config(
         config.connection.keep_alive_interval_s,
-        config.connection.connection_timeout_s,
+        config.connection.timeout_s,
         config.connection.outer_mtu,
     );
     client_config.transport_config(std::sync::Arc::new(transport_config));
@@ -125,7 +125,7 @@ pub fn create_endpoint(
 
 /// Resolves the SNI host for QUIC connections.
 pub fn resolve_sni<'a>(config: &'a ClientConfig, connection_string: &'a str) -> &'a str {
-    if let Some(sni) = &config.connection.sni {
+    if let Some(sni) = &config.transport.sni {
         debug!("Using configured SNI for QUIC: {}", sni);
         sni.as_str()
     } else {

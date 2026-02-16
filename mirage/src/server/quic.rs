@@ -82,7 +82,7 @@ pub async fn run_quic_listener(
     // Tuning
     let transport = crate::transport::quic::common_transport_config(
         config.connection.keep_alive_interval_s,
-        config.connection.connection_timeout_s,
+        config.connection.timeout_s,
         config.connection.outer_mtu,
     );
     server_config.transport_config(Arc::new(transport));
@@ -98,7 +98,7 @@ pub async fn run_quic_listener(
         let connection_queues = connection_queues.clone();
         let session_queues = session_queues.clone();
         let address_pool = address_pool.clone();
-        let obfuscation = config.connection.obfuscation.clone();
+        let obfuscation = config.obfuscation.clone();
 
         tokio::spawn(async move {
             let connection = match connecting.await {

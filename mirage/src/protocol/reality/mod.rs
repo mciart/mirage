@@ -30,13 +30,13 @@ pub fn configure(
     connector_builder.set_verify(SslVerifyMode::NONE);
     debug!("Reality mode: Certificate verification disabled (expected)");
 
-    let sni = &config.reality.target_sni;
+    let sni = &config.camouflage.target_sni;
     debug!("Using SNI (Reality): {}", sni);
 
     crate::crypto::impersonate::apply_chrome_fingerprint(connector_builder)?;
 
     let mut protocols_to_send: Vec<Vec<u8>> = TLS_ALPN_PROTOCOLS.iter().cloned().collect();
-    if let Some(token) = config.reality.short_ids.first() {
+    if let Some(token) = config.camouflage.short_ids.first() {
         protocols_to_send.push(token.as_bytes().to_vec());
     }
 

@@ -21,10 +21,10 @@ pub fn build_connector(config: &ClientConfig) -> Result<SslConnectorBuilder> {
 
     debug!(
         "Certificate verification config: insecure={}",
-        config.connection.insecure
+        config.transport.insecure
     );
 
-    if config.connection.insecure {
+    if config.transport.insecure {
         warn!("TLS certificate verification DISABLED - this is unsafe!");
         connector_builder.set_verify(SslVerifyMode::NONE);
     } else {
@@ -70,7 +70,7 @@ pub fn build_connector(config: &ClientConfig) -> Result<SslConnectorBuilder> {
 
 /// Resolves the SNI host for standard TCP-TLS connections.
 pub fn resolve_sni<'a>(config: &'a ClientConfig, connection_string: &'a str) -> &'a str {
-    if let Some(sni) = &config.connection.sni {
+    if let Some(sni) = &config.transport.sni {
         debug!("Using configured SNI: {}", sni);
         sni.as_str()
     } else {

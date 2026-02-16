@@ -1,11 +1,16 @@
-# Mirage 服务器的连接地址和端口
-connection_string = "mirage:443"
+# ========== 服务器 ==========
+[server]
+# 服务器地址 (域名或 IP)
+host = "mirage"
+# 服务器端口 (默认: 443)
+port = 443
 
-# 静态 IP 配置 (可选)
-# 请求服务器分配指定的内网 IP。如果已被占用，连接将被拒绝。
+# ========== 静态 IP 配置 (可选) ==========
+# 请求服务器分配指定的内网 IP，如果已被占用，连接将被拒绝
 # static_client_ip = "10.11.12.13"
 # static_client_ip_v6 = "fd00::fd00"
 
+# ========== 认证 ==========
 [authentication]
 # 认证使用的用户名
 username = "test"
@@ -18,6 +23,42 @@ password = "test"
 #     "-----BEGIN CERTIFICATE-----\n..."
 # ]
 
+# ========== 传输层 ==========
+[transport]
+# 传输协议优先级列表: "tcp" (TCP+TLS) 和/或 "udp" (QUIC)
+# 按顺序尝试，第一个协议优先，失败后回退到下一个
+# 例如 ["udp", "tcp"] 表示优先使用 QUIC，失败后回退到 TCP+TLS
+protocols = ["tcp"]
+# 并行连接数 (1-4, 默认: 1)
+# 多连接可提高带宽聚合，但占用更多资源
+parallel_connections = 1
+# IPv4/IPv6 双栈并发聚合 (默认: false)
+# 开启后将同时使用 IPv4 和 IPv6 连接，并在它们之间进行负载均衡
+dual_stack = false
+# 自定义 SNI (Server Name Indication)
+# 如果指定，将使用此域名进行 TLS/QUIC 握手，而不是 server.host 中的地址
+# 这允许你直接连接到 IP (如 CDN 节点) 但伪装成正确的域名
+# sni = "www.example.com"
+# 仅供测试：禁用 TLS 证书验证（适用于自签名证书）
+# 警告：不安全！
+insecure = false
+# 开启 TCP NODELAY (默认: true)
+tcp_nodelay = true
+# 端口跳跃间隔 (秒, 0 = 禁用, 默认: 0)
+# 使用 UDP (QUIC) 时，每隔指定秒数自动轮换 UDP 端口
+# 可有效对抗 ISP 对长 UDP 连接的阻断 (QoS)
+port_hopping_interval_s = 0
+
+# ========== 伪装层 ==========
+[camouflage]
+# 伪装模式: "none" (标准 TLS) 或 "mirage" (SNI 伪装 + 反主动探测)
+mode = "mirage"
+# 伪装目标 SNI (必须与 Server 一致)
+target_sni = "www.microsoft.com"
+# 客户端认证 ShortId (取列表第一个)
+short_ids = ["abcd1234deadbeef"]
+
+# ========== 连接管理 ==========
 [connection]
 # 隧道和生成的 TUN 接口使用的 MTU
 # 默认 1280（IPv6 最小 MTU，减少 TCP-over-TCP 问题）
@@ -26,63 +67,27 @@ mtu = 1280
 # 默认 1420，建议保持此值或根据网络状况微调
 # 如果想要启用巨型帧优化(Jumbo Frames)，可以将 mtu 设为 65535，outer_mtu 保持 1420
 outer_mtu = 1420
-# 开启 NODELAY
-tcp_nodelay = true
 # 连接超时时间（秒）
-# 连接超时时间（秒）
-connection_timeout_s = 30
+timeout_s = 30
 # 连接失败后的重试间隔（秒）
 retry_interval_s = 5
-
-# 自定义 SNI (Server Name Indication)
-# 如果指定，将使用此域名进行 TLS/QUIC 握手，而不是 connection_string 中的地址
-# 这允许你直接连接到 IP (如 CDN 节点) 但伪装成正确的域名
-# sni = "www.example.com"
-
-# 开启的协议优先顺序 (支持: "reality", "tcp-tls", "quic")
-# 客户端将按照列表顺序尝试连接
-enabled_protocols = ["reality", "tcp-tls", "quic"]
 # 心跳保活间隔（秒）
 keep_alive_interval_s = 25
-# 端口跳跃间隔 (0 为禁用, 默认: 0)
-# 当使用 QUIC 时，每隔指定秒数 (如 30) 自动轮换 UDP 端口
-# 可有效对抗 ISP 对长 UDP 连接的阻断 (QoS)
-port_hopping_interval_s = 30
-
-# 并行 TCP 连接数 (1-4, 默认: 1)
-# 多连接可提高带宽聚合，但占用更多资源
-parallel_connections = 1
-
-# 并行 QUIC 连接数 (1-4, 默认: 1)
-# QUIC 原生支持多路复用，通常不需要太多连接，但在高丢包环境下多连接可抗 QoS
-# 比如要同时IPv4和IPv6连接，可以配置quic_parallel_connections = 2
-# 如果超过2会使用解析的IP进行多连接
-quic_parallel_connections = 1
-
-# IPv4/IPv6 双栈并发聚合 (默认: false)
-# 开启后将同时使用 IPv4 和 IPv6 连接，并在它们之间进行负载均衡
-dual_stack_enabled = false
-
 # 连接最大生存时间 (秒, 0 = 禁用, 默认: 300)
 # 超过此时间的底层连接会被静默替换为新连接
 # 可有效对抗防火墙基于长连接时长的代理检测 (如 Geedge Networks)
 # VPN 连接不会中断，因为 TUN 接口的 IP 地址不变
-connection_max_lifetime_s = 300
-
+max_lifetime_s = 300
 # 连接寿命随机抖动 (秒, 默认: 60)
 # 防止多条连接同时轮换产生流量特征
-connection_lifetime_jitter_s = 60
-
+lifetime_jitter_s = 60
 # 多路复用模式 (默认: "round_robin")
 # "round_robin" - 包级别轮询分发到所有连接 (类似 XMUX, 更好的混淆和带宽聚合)
 # "active_standby" - 仅使用一条连接, 故障时切换到备用 (旧行为)
 mux_mode = "round_robin"
 
-# 仅供测试：禁用 TLS 证书验证（适用于自签名证书）
-# 警告：不安全！
-insecure = false
-
-[connection.obfuscation]
+# ========== 流量混淆 ==========
+[obfuscation]
 # 是否启用流量混淆 (默认: true)
 enabled = true
 # 发送随机填充包的概率 (0.0-1.0, 默认: 0.05)
@@ -95,11 +100,10 @@ padding_max = 1200
 # Jitter (抖动) 延迟范围 (毫秒)
 # 模拟网络自然波动，打乱时序特征
 # 建议 0-20ms，过大会影响性能
-# 最小值
 jitter_min_ms = 0
-# 最大值
 jitter_max_ms = 0
 
+# ========== 网络 ==========
 [network]
 # 需要通过隧道路由的网段列表 (CIDR 格式)
 routes = [
@@ -122,12 +126,7 @@ dns_servers = [
     "2606:4700:4700::1111"
 ]
 
-[reality]
-# 目标 SNI (必须与 Server 一致)
-target_sni = "www.microsoft.com"
-# 客户端认证 ShortId (取列表第一个)
-short_ids = ["abcd1234deadbeef"]
-
+# ========== 日志 ==========
 [log]
 # 日志级别 (trace, debug, info, warn, error)
 level = "info"

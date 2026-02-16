@@ -5,24 +5,50 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use super::defaults::*;
-use super::{AuthType, ConnectionConfig, LogConfig, NetworkConfig, RealityConfig};
+use super::{
+    AuthType, CamouflageConfig, ConnectionConfig, LogConfig, NetworkConfig, ObfuscationConfig,
+    TransportConfig,
+};
+
+/// Server endpoint configuration
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ServerEndpoint {
+    /// Server hostname or IP address
+    pub host: String,
+    /// Server port (default = 443)
+    #[serde(default = "default_server_port")]
+    pub port: u16,
+}
+
+impl ServerEndpoint {
+    /// Returns the connection string in "host:port" format
+    pub fn to_connection_string(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+}
 
 /// Mirage client configuration
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ClientConfig {
-    /// Connection string to be used to connect to a Mirage server (host:port)
-    pub connection_string: String,
+    /// Server endpoint (host + port)
+    pub server: ServerEndpoint,
     /// Authentication configuration
     pub authentication: ClientAuthenticationConfig,
-    /// TCP/TLS connection configuration
+    /// Transport layer configuration (protocol, parallel connections, etc.)
+    #[serde(default)]
+    pub transport: TransportConfig,
+    /// Connection management configuration
     #[serde(default)]
     pub connection: ConnectionConfig,
+    /// Traffic obfuscation configuration
+    #[serde(default)]
+    pub obfuscation: ObfuscationConfig,
     /// Network configuration
     #[serde(default)]
     pub network: NetworkConfig,
-    /// Reality configuration (SNI camouflage)
+    /// Camouflage configuration (SNI impersonation)
     #[serde(default)]
-    pub reality: RealityConfig,
+    pub camouflage: CamouflageConfig,
     /// Logging configuration
     pub log: LogConfig,
     /// Static IPv4 address to request (optional)

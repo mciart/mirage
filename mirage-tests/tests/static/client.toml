@@ -1,4 +1,6 @@
-connection_string = "localhost:55155"
+[server]
+host = "localhost"
+port = 55155
 
 [authentication]
 username = "test"

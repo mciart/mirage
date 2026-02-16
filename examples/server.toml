@@ -1,6 +1,6 @@
-# 服务器实例名称（目前未用作接口名称）
+# 服务器实例名称
 name = "tun0"
-# TLS 使用的证书路径 (Fallback/Standard 模式)
+# TLS 使用的证书路径
 certificate_file = "examples/cert/server_cert.pem"
 # TLS 使用的私钥路径
 certificate_key_file = "examples/cert/server_key.pem"
@@ -9,7 +9,7 @@ bind_address = "::0"
 # IPv4: bind_address = "0.0.0.0"
 # 隧道绑定的端口
 bind_port = 443
-# QUIC 监听端口 (UDP)
+# QUIC 监听 (UDP)
 quic_enabled = true
 quic_bind_port = 443
 # 隧道端点地址和分配给客户端的地址池基准地址
@@ -21,10 +21,12 @@ tunnel_network_v6 = "fd00::1/64"
 # 是否隔离客户端（客户端之间无法互相访问）
 isolate_clients = true
 
+# ========== 认证 ==========
 [authentication]
 # 包含用户凭据的文件路径
 users_file = "examples/users"
 
+# ========== 连接管理 ==========
 [connection]
 # 隧道和生成的 TUN 接口使用的 MTU
 # 默认 1280（IPv6 最小 MTU，减少 TCP-over-TCP 问题）
@@ -34,10 +36,11 @@ mtu = 1280
 outer_mtu = 1350
 # 开启 NODELAY
 tcp_nodelay = true
-# 是否复用套接字 (SO_REUSEADDR)
-reuse_socket = true
+# 连接超时时间（秒）
+timeout_s = 30
 
-[connection.obfuscation]
+# ========== 流量混淆 ==========
+[obfuscation]
 # 是否启用流量混淆 (默认: true)
 enabled = true
 # 发送随机填充包的概率 (0.0-1.0, 默认: 0.05)
@@ -50,29 +53,31 @@ padding_max = 1200
 # Jitter (抖动) 延迟范围 (毫秒)
 # 模拟网络自然波动，打乱时序特征
 # 建议 0-20ms，过大会影响性能
-# 最小值
 jitter_min_ms = 0
-# 最大值
 jitter_max_ms = 0
 
-[reality]
+# ========== 伪装层 ==========
+[camouflage]
+# 伪装模式: "none" (标准 TLS) 或 "mirage" (SNI 伪装 + 反主动探测)
+mode = "mirage"
 # 伪装的目标域名 (SNI) -> 建议选择大厂域名
 target_sni = "www.microsoft.com"
 # 客户端认证 ShortId 列表 (十六进制)，对应客户端配置
 short_ids = [
-    "abcd1234deadbeef", 
+    "abcd1234deadbeef",
     "0011223344556677"
 ]
 
+# ========== NAT ==========
 [nat]
 # IPv4 出站网口 (例如 eth0)，设置后自动启用 Masquerade 和转发
 # 如果留空或注释，则不进行任何自动网络配置（需手动配置 iptables）
 # ipv4_interface = "eth0"
-
 # IPv6 出站网口 (例如 eth0)，设置后自动启用 Masquerade 和转发
 # 如果留空或注释，则不进行任何自动网络配置
 # ipv6_interface = "eth0"
 
+# ========== 日志 ==========
 [log]
 # 日志级别 (trace, debug, info, warn, error)
 level = "info"

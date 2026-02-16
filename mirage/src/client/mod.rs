@@ -9,7 +9,7 @@ mod relayer;
 use crate::auth::client_auth::AuthClient;
 use crate::auth::users_file::UsersFileClientAuthenticator;
 
-use crate::config::ClientConfig;
+use crate::config::{ClientConfig, TransportProtocol};
 use crate::network::interface::{Interface, InterfaceIO};
 use crate::network::route::{add_routes, get_gateway_for, ExclusionRouteGuard, RouteTarget};
 use crate::{MirageError, Result};
@@ -74,7 +74,7 @@ impl MirageClient {
 
         // Connect to server via TCP/TLS (Primary Connection)
         // Try all resolved addresses for each protocol before falling back
-        let (tls_stream, remote_addr, protocol): (TransportStream, SocketAddr, String) =
+        let (tls_stream, remote_addr, _protocol): (TransportStream, SocketAddr, String) =
             self.connect_to_server(&resolved_addrs).await?;
 
         // Anti-Loop & Excluded Routes: Add exclusion routes via the gateway used to reach them
@@ -203,7 +203,7 @@ impl MirageClient {
         ));
         let auth_client = AuthClient::new(
             authenticator,
-            Duration::from_secs(self.config.connection.connection_timeout_s),
+            Duration::from_secs(self.config.connection.timeout_s),
         );
 
         let session = auth_client.authenticate(read_half, write_half).await?;
@@ -212,7 +212,7 @@ impl MirageClient {
         info!("Session ID: {:02x?}", session.session_id);
         info!(
             "Parallel connections configured: {}",
-            self.config.connection.parallel_connections
+            self.config.transport.parallel_connections
         );
         info!("Received client address: {} (v4)", session.client_address);
         if let Some(v6) = session.client_address_v6 {
@@ -243,16 +243,11 @@ impl MirageClient {
         let primary_writer = session.writer;
         let session_id = session.session_id;
 
-        // Determine parallel connection count based on protocol
-        let target_parallel_connections = if protocol == "quic" {
-            self.config.connection.quic_parallel_connections
-        } else {
-            self.config.connection.parallel_connections
-        };
+        // Unified parallel connection count
+        let target_parallel_connections = self.config.transport.parallel_connections;
 
         // Determine if we should use the MuxController
-        let use_mux =
-            target_parallel_connections > 1 || self.config.connection.connection_max_lifetime_s > 0;
+        let use_mux = target_parallel_connections > 1 || self.config.connection.max_lifetime_s > 0;
 
         let relayer = if use_mux {
             // --- MuxController Logic ---
@@ -260,7 +255,7 @@ impl MirageClient {
 
             // Determine addresses to use for pool connections
             let mut pool_addrs = Vec::new();
-            if self.config.connection.dual_stack_enabled && resolved_addrs.len() > 1 {
+            if self.config.transport.dual_stack && resolved_addrs.len() > 1 {
                 // Dual Stack: Interleave v4 and v6 addresses
                 let v4_addrs: Vec<_> = resolved_addrs
                     .iter()
@@ -317,7 +312,7 @@ impl MirageClient {
                                 self.config.static_client_ip,
                                 self.config.static_client_ip_v6,
                             )),
-                            Duration::from_secs(self.config.connection.connection_timeout_s),
+                            Duration::from_secs(self.config.connection.timeout_s),
                         );
 
                         // Secondary connections just need to join the session
@@ -346,8 +341,8 @@ impl MirageClient {
 
             let mode = MuxMode::parse(&self.config.connection.mux_mode);
             let rotation_config = RotationConfig {
-                max_lifetime_s: self.config.connection.connection_max_lifetime_s,
-                lifetime_jitter_s: self.config.connection.connection_lifetime_jitter_s,
+                max_lifetime_s: self.config.connection.max_lifetime_s,
+                lifetime_jitter_s: self.config.connection.lifetime_jitter_s,
             };
 
             // Create the connection factory channel for rotation
@@ -359,14 +354,11 @@ impl MirageClient {
             // This task handles rotation requests from MuxController
             let auth_config = self.config.authentication.clone();
             let conn_config = self.config.connection.clone();
+            let transport_config = self.config.transport.clone();
             let static_ip = self.config.static_client_ip;
             let static_ip_v6 = self.config.static_client_ip_v6;
             let pool_addrs_clone = pool_addrs.clone();
-            let conn_string = if self.config.connection_string.contains(':') {
-                self.config.connection_string.clone()
-            } else {
-                format!("{}:443", self.config.connection_string)
-            };
+            let conn_string = self.config.server.to_connection_string();
             let config_clone = self.config.clone();
 
             // We need a separate task since connect_to_server needs &mut self
@@ -386,20 +378,15 @@ impl MirageClient {
                     let tcp_result = TcpStream::connect(target_addr).await;
                     let stream: Option<TransportStream> = match tcp_result {
                         Ok(tcp_stream) => {
-                            let _ = tcp_stream.set_nodelay(conn_config.tcp_nodelay);
+                            let _ = tcp_stream.set_nodelay(transport_config.tcp_nodelay);
                             let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
                             let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
                             let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
 
-                            // Determine protocol
-                            let protocol = config_clone
-                                .connection
-                                .enabled_protocols
-                                .first()
-                                .map(|s| s.as_str())
-                                .unwrap_or("tcp-tls");
+                            // Determine if camouflage is enabled
+                            let use_camouflage = config_clone.camouflage.is_mirage();
 
-                            let tls_stream: Option<TransportStream> = if protocol == "reality" {
+                            let tls_stream: Option<TransportStream> = if use_camouflage {
                                 // For rotation, we need to build the connector
                                 match crate::protocol::tcp_tls::build_connector(&config_clone) {
                                     Ok(mut builder) => {
@@ -459,7 +446,7 @@ impl MirageClient {
                                         let connector = builder.build();
                                         match connector.configure() {
                                             Ok(mut ssl_config) => {
-                                                if config_clone.connection.insecure {
+                                                if config_clone.transport.insecure {
                                                     ssl_config.set_verify_hostname(false);
                                                 }
                                                 match tokio_boring::connect(
@@ -509,7 +496,7 @@ impl MirageClient {
                                 static_ip,
                                 static_ip_v6,
                             )),
-                            Duration::from_secs(conn_config.connection_timeout_s),
+                            Duration::from_secs(conn_config.timeout_s),
                         );
                         match secondary_auth
                             .authenticate_secondary(r, w, session_id)
@@ -534,14 +521,14 @@ impl MirageClient {
 
             let mux = MuxController::new(connections, mode, rotation_config, conn_request_tx);
 
-            ClientRelayer::start_mux(interface, mux, self.config.connection.obfuscation.clone())?
+            ClientRelayer::start_mux(interface, mux, self.config.obfuscation.clone())?
         } else {
             // --- Single Connection Logic ---
             ClientRelayer::start(
                 interface,
                 primary_reader,
                 primary_writer,
-                self.config.connection.obfuscation.clone(),
+                self.config.obfuscation.clone(),
             )?
         };
 
@@ -579,11 +566,7 @@ impl MirageClient {
     /// Resolves the server address, potentially returning multiple IP addresses (IPv4 and IPv6)
     /// if Dual Stack is enabled.
     async fn resolve_server_address(&self) -> Result<Vec<SocketAddr>> {
-        let connection_string = if self.config.connection_string.contains(':') {
-            self.config.connection_string.clone()
-        } else {
-            format!("{}:443", self.config.connection_string)
-        };
+        let connection_string = self.config.server.to_connection_string();
 
         let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&connection_string)
             .await
@@ -611,21 +594,17 @@ impl MirageClient {
         &mut self,
         resolved_addrs: &[SocketAddr],
     ) -> Result<(TransportStream, SocketAddr, String)> {
-        let connection_string = if self.config.connection_string.contains(':') {
-            self.config.connection_string.clone()
-        } else {
-            format!("{}:443", self.config.connection_string)
-        };
+        let connection_string = self.config.server.to_connection_string();
 
-        let protocols = self.config.connection.enabled_protocols.clone();
+        let protocols = self.config.transport.protocols.clone();
         if protocols.is_empty() {
             return Err(MirageError::config_error(
-                "No enabled protocols specified in configuration",
+                "No transport protocols specified in configuration",
             ));
         }
 
         info!(
-            "Connection Strategy: Resolved addresses: {:?}, Enabled protocols: {:?}",
+            "Connection Strategy: Resolved addresses: {:?}, Protocols: {:?}",
             resolved_addrs, protocols
         );
 
@@ -672,18 +651,18 @@ impl MirageClient {
     async fn connect_with_protocol(
         &mut self,
         server_addr: SocketAddr,
-        protocol: &str,
+        protocol: &TransportProtocol,
         connection_string: &str,
     ) -> Result<TransportStream> {
         info!("Connecting: {} ({})", connection_string, protocol);
 
-        if protocol == "quic" {
+        if matches!(protocol, TransportProtocol::Udp) {
             // Check for Port Hopping Rotation
             if let Some(last_refresh) = self.last_quic_refresh {
-                if self.config.connection.port_hopping_interval_s > 0
+                if self.config.transport.port_hopping_interval_s > 0
                     && last_refresh.elapsed()
                         > std::time::Duration::from_secs(
-                            self.config.connection.port_hopping_interval_s,
+                            self.config.transport.port_hopping_interval_s,
                         )
                 {
                     info!("Port Hopping: Rotating QUIC connection and endpoint to new port...");
@@ -773,7 +752,7 @@ impl MirageClient {
         }
 
         let tcp_stream = TcpStream::connect(server_addr).await?;
-        tcp_stream.set_nodelay(self.config.connection.tcp_nodelay)?;
+        tcp_stream.set_nodelay(self.config.transport.tcp_nodelay)?;
 
         // Apply TCP optimizations (Linux only)
         let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
@@ -784,10 +763,10 @@ impl MirageClient {
 
         let mut connector_builder = crate::protocol::tcp_tls::build_connector(&self.config)?;
 
-        let sni = if protocol == "reality" {
+        let sni = if self.config.camouflage.is_mirage() {
             crate::protocol::reality::configure(&mut connector_builder, &self.config)?
         } else {
-            // Standard TCP/TLS
+            // Standard TCP/TLS (no camouflage)
             let host = crate::protocol::tcp_tls::resolve_sni(&self.config, connection_string);
             connector_builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
             host.to_string()
@@ -801,7 +780,7 @@ impl MirageClient {
         // For Reality mode or insecure mode, disable hostname verification as well
         // SslVerifyMode::NONE only disables certificate chain validation,
         // but hostname verification is a separate check that must also be disabled.
-        if protocol == "reality" || self.config.connection.insecure {
+        if self.config.camouflage.is_mirage() || self.config.transport.insecure {
             ssl_config.set_verify_hostname(false);
             debug!("Hostname verification disabled");
         }

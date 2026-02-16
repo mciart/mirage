@@ -6,7 +6,9 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use super::defaults::*;
-use super::{AuthType, ConnectionConfig, LogConfig, NatConfig, RealityConfig};
+use super::{
+    AuthType, CamouflageConfig, ConnectionConfig, LogConfig, NatConfig, ObfuscationConfig,
+};
 
 /// Mirage server configuration
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -38,12 +40,15 @@ pub struct ServerConfig {
     pub isolate_clients: bool,
     /// Authentication configuration
     pub authentication: ServerAuthenticationConfig,
-    /// Miscellaneous connection configuration
+    /// Connection management configuration
     #[serde(default)]
     pub connection: ConnectionConfig,
-    /// Reality configuration (SNI camouflage)
+    /// Traffic obfuscation configuration
     #[serde(default)]
-    pub reality: RealityConfig,
+    pub obfuscation: ObfuscationConfig,
+    /// Camouflage configuration (SNI impersonation)
+    #[serde(default)]
+    pub camouflage: CamouflageConfig,
     /// Logging configuration
     pub log: LogConfig,
     /// NAT configuration

@@ -13,7 +13,7 @@ use tracing::{error, info};
 #[derive(Parser)]
 #[command(
     name = "mirage",
-    about = "Mirage VPN - Reality-based VPN with XTLS-Vision"
+    about = "Mirage VPN - Stealth L3 VPN with Camouflage and Traffic Obfuscation"
 )]
 enum Cli {
     /// Run as VPN client

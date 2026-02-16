@@ -51,22 +51,52 @@ pub struct NatConfig {
     pub ipv6_interface: Option<String>,
 }
 
-/// Reality protocol configuration for SNI camouflage
+/// Camouflage mode selection
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CamouflageMode {
+    /// No camouflage, standard TLS
+    None,
+    /// Mirage camouflage (SNI impersonation, anti-active-probing)
+    #[default]
+    Mirage,
+}
+
+/// Camouflage configuration for SNI impersonation
 #[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct RealityConfig {
+pub struct CamouflageConfig {
+    /// Camouflage mode: "none" or "mirage"
+    #[serde(default = "default_camouflage_mode")]
+    pub mode: String,
     /// Target SNI to impersonate (e.g., "www.microsoft.com")
-    #[serde(default = "default_reality_sni")]
+    #[serde(default = "default_camouflage_sni")]
     pub target_sni: String,
     /// Short IDs for client identification (hex strings)
     #[serde(default)]
     pub short_ids: Vec<String>,
 }
 
-impl Default for RealityConfig {
+impl Default for CamouflageConfig {
     fn default() -> Self {
         Self {
-            target_sni: default_reality_sni(),
+            mode: default_camouflage_mode(),
+            target_sni: default_camouflage_sni(),
             short_ids: Vec::new(),
         }
+    }
+}
+
+impl CamouflageConfig {
+    /// Returns the parsed camouflage mode
+    pub fn camouflage_mode(&self) -> CamouflageMode {
+        match self.mode.as_str() {
+            "none" => CamouflageMode::None,
+            _ => CamouflageMode::Mirage,
+        }
+    }
+
+    /// Returns true if mirage camouflage is enabled
+    pub fn is_mirage(&self) -> bool {
+        matches!(self.camouflage_mode(), CamouflageMode::Mirage)
     }
 }

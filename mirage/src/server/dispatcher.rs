@@ -22,10 +22,10 @@ pub struct TlsDispatcher {
 
 impl TlsDispatcher {
     pub fn new(config: &ServerConfig) -> Self {
-        let valid_tokens = config.reality.short_ids.clone();
+        let valid_tokens = config.camouflage.short_ids.clone();
 
         Self {
-            target_sni: config.reality.target_sni.clone(),
+            target_sni: config.camouflage.target_sni.clone(),
             valid_tokens,
         }
     }
