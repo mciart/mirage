@@ -28,7 +28,7 @@ password = "test"
 # 传输协议优先级列表: "tcp" (TCP+TLS) 和/或 "udp" (QUIC)
 # 按顺序尝试，第一个协议优先，失败后回退到下一个
 # 例如 ["udp", "tcp"] 表示优先使用 QUIC，失败后回退到 TCP+TLS
-protocols = ["tcp"]
+protocols = ["udp", "tcp"]
 # 并行连接数 (1-4, 默认: 1)
 # 多连接可提高带宽聚合，但占用更多资源
 parallel_connections = 1

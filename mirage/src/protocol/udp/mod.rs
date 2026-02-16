@@ -206,8 +206,12 @@ impl quinn::AsyncUdpSocket for NoGsoSocket {
     }
 
     fn try_send(&self, transmit: &quinn::udp::Transmit<'_>) -> std::io::Result<()> {
-        let io_ref = quinn::udp::UdpSockRef::from(self.io.as_ref());
-        self.inner.send(io_ref, transmit)
+        // Use plain send_to instead of UdpSocketState::send().
+        // UdpSocketState::send uses WSASendMsg with ECN/IP_PKTINFO control messages
+        // that some Windows network drivers reject with WSAEMSGSIZE (error 10040)
+        // even for normal-sized packets. Plain send_to avoids this.
+        self.io.try_send_to(&transmit.contents, transmit.destination)?;
+        Ok(())
     }
 
     fn poll_recv(
