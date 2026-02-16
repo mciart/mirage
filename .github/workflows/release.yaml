@@ -9,6 +9,11 @@ on:
         description: 'Virtual version tag for testing (e.g. v0.0.1-test)'
         required: false
         default: 'v0.0.0-test'
+      skip_docker:
+        description: 'Skip Docker image build'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   publish-crate:
@@ -313,7 +318,7 @@ jobs:
 
   build-docker-image:
     name: Build Docker image
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' && inputs.skip_docker != true
     runs-on: ubuntu-latest
     steps:
       - uses: docker/setup-qemu-action@v3
