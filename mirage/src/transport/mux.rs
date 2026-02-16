@@ -245,10 +245,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             }));
         } else {
             // Not rotating — push reader handles into tasks so they're awaited
-            for handle in reader_handles {
-                if let Some(h) = handle {
-                    tasks.push(h);
-                }
+            for h in reader_handles.into_iter().flatten() {
+                tasks.push(h);
             }
         }
 
@@ -462,6 +460,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
     }
 
     /// Rotation supervisor: monitors connection lifetimes and triggers rotation.
+    #[allow(clippy::too_many_arguments)]
     async fn rotation_supervisor(
         rotation_config: RotationConfig,
         writers: Vec<Arc<Mutex<FramedWriter<WriteHalf<S>>>>>,
