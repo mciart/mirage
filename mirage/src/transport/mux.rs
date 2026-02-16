@@ -353,10 +353,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                         }
                     }
 
-                    if !failed {
-                        if w.flush().await.is_err() {
-                            failed = true;
-                        }
+                    if !failed && w.flush().await.is_err() {
+                        failed = true;
                     }
 
                     if failed && num_writers > 1 {
