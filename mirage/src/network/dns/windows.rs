@@ -1,7 +1,12 @@
 use crate::Result;
 use std::net::IpAddr;
+use std::os::windows::process::CommandExt;
+use std::process::Command;
 use std::sync::OnceLock;
 use tracing::{debug, info, warn};
+
+/// Windows process creation flag to suppress console window.
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 use wintun_bindings::Adapter;
 
 /// Track whether DNS leak prevention is active
@@ -90,8 +95,9 @@ fn add_nrpt_rule(dns_servers: &[IpAddr]) -> Result<()> {
         servers
     );
 
-    let output = std::process::Command::new("powershell")
+    let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| crate::error::DnsError::PlatformError {
             message: format!("Failed to run PowerShell: {}", e),
@@ -117,8 +123,9 @@ fn remove_nrpt_rule() -> Result<()> {
     let ps_cmd =
         "Get-DnsClientNrptRule | Where-Object {$_.Comment -eq 'Mirage VPN'} | Remove-DnsClientNrptRule -Force";
 
-    let output = std::process::Command::new("powershell")
+    let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", ps_cmd])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
 
     match output {
@@ -141,11 +148,13 @@ fn remove_nrpt_rule() -> Result<()> {
 
 /// Flushes the Windows DNS resolver cache and re-registers DNS.
 fn flush_dns_cache() {
-    let _ = std::process::Command::new("ipconfig")
+    let _ = Command::new("ipconfig")
         .arg("/flushdns")
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
-    let _ = std::process::Command::new("ipconfig")
+    let _ = Command::new("ipconfig")
         .arg("/registerdns")
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
     debug!("DNS cache flushed and re-registered");
 }
