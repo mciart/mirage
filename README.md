@@ -16,16 +16,11 @@
 集成 Google Chrome 同源的 **BoringSSL**，原生支持 X25519Kyber768 (后量子)、GREASE、TLS 扩展随机排列。
 任何检测者看到的都是标准 Chrome HTTPS 流量。
 
-### 🎭 Mirage 伪装协议 (TCP)
-服务端不仅是 VPN 端点，更是智能 SNI 反向代理：
-- 验证通过 → 进入 VPN 隧道
-- 验证失败 → 无缝代理到真实网站 (如 `www.microsoft.com`)，探测者只看到合法内容
-
-### 🔮 JLS QUIC 伪装
-在 QUIC 层集成 **JLS** (rustls-jls)，实现类似 Reality 的完整伪装：
-- 无需目标网站证书即可伪装任意域名
-- 未认证连接自动转发到真实上游网站，抗主动探测
-- 0-RTT 超低延迟
+### 🎭 Mirage 伪装协议
+TCP 和 QUIC 双协议均具备完整伪装能力，探测者只能看到合法流量：
+- **TCP 层**: BoringSSL (Chrome 指纹) + SNI 伪装 + ShortID 认证，验证失败反向代理到真实网站
+- **QUIC 层**: JLS 伪装 (rustls-jls) + 0-RTT 超低延迟，未认证连接自动转发到上游真实网站
+- 无需目标网站证书即可伪装任意域名，抗主动探测
 
 ### 🚀 高性能双协议传输
 - **TCP 模式**: Length-Prefixed 帧协议 + BBR 拥塞控制 + TCP_QUICKACK + Smart Batching

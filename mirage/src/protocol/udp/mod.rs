@@ -301,13 +301,13 @@ impl quinn::UdpPoller for UdpPollHelper {
 }
 
 /// Resolves the SNI host for QUIC connections.
-/// When JLS is enabled, uses the camouflage `target_sni` so the server's
-/// `check_server_name()` can verify the client is a legitimate JLS peer.
+/// When camouflage is enabled, uses `target_sni` so the connection
+/// appears to be for the camouflage domain, not the real server.
 pub fn resolve_sni<'a>(config: &'a ClientConfig, connection_string: &'a str) -> &'a str {
-    // JLS requires the SNI to match the upstream domain (target_sni)
-    if config.camouflage.is_jls() {
+    // Camouflage: use the target_sni to disguise the connection
+    if config.camouflage.is_mirage() {
         debug!(
-            "Using camouflage target_sni for JLS QUIC: {}",
+            "Using camouflage target_sni for QUIC: {}",
             config.camouflage.target_sni
         );
         return &config.camouflage.target_sni;
