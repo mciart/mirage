@@ -40,7 +40,7 @@ pub enum MuxMode {
 }
 
 impl MuxMode {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "active_standby" => Self::ActiveStandby,
             _ => Self::RoundRobin,
@@ -206,7 +206,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         }));
 
         // Connection rotation supervisor (if rotation is enabled)
-        if !self.rotation_config.is_disabled() && self.writers.len() > 0 {
+        if !self.rotation_config.is_disabled() && !self.writers.is_empty() {
             let rotation_config = self.rotation_config.clone();
             let writers_for_rotation = self.writers.clone();
             let birth_times = self.birth_times.clone();
@@ -354,7 +354,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     }
 
                     if !failed {
-                        if let Err(_) = w.flush().await {
+                        if w.flush().await.is_err() {
                             failed = true;
                         }
                     }

@@ -63,8 +63,6 @@ quic_parallel_connections = 1
 # 开启后将同时使用 IPv4 和 IPv6 连接，并在它们之间进行负载均衡
 dual_stack_enabled = false
 
-
-
 # 连接最大生存时间 (秒, 0 = 禁用, 默认: 300)
 # 超过此时间的底层连接会被静默替换为新连接
 # 可有效对抗防火墙基于长连接时长的代理检测 (如 Geedge Networks)

@@ -344,7 +344,7 @@ impl MirageClient {
                 }
             }
 
-            let mode = MuxMode::from_str(&self.config.connection.mux_mode);
+            let mode = MuxMode::parse(&self.config.connection.mux_mode);
             let rotation_config = RotationConfig {
                 max_lifetime_s: self.config.connection.connection_max_lifetime_s,
                 lifetime_jitter_s: self.config.connection.connection_lifetime_jitter_s,
