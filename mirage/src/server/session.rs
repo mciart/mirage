@@ -107,4 +107,7 @@ pub struct SessionContext {
     pub packet_tx: Sender<Bytes>,
     /// Channel to register a new connection's sender
     pub register_tx: Sender<Sender<Bytes>>,
+    /// Number of active connections in this session.
+    /// Only the last connection to exit performs cleanup.
+    pub connection_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }

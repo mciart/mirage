@@ -16,6 +16,7 @@ use crate::network::packet::Packet;
 use crate::Result;
 use bytes::Bytes;
 use dashmap::DashMap;
+use std::sync::atomic::Ordering;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, info, warn};
@@ -80,7 +81,8 @@ where
     );
 
     // Connection pooling logic
-    let (connection_receiver, is_secondary) = if let Some(context) = session_queues.get(&session_id)
+    let (connection_receiver, connection_count) = if let Some(context) =
+        session_queues.get(&session_id)
     {
         info!(
             "Secondary {} connection joining session {:02x?}",
@@ -105,7 +107,16 @@ where
             connection_queues.insert(v6.addr(), context.packet_tx.clone());
         }
 
-        (Some(conn_receiver), true)
+        // Increment connection count
+        let prev = context.connection_count.fetch_add(1, Ordering::Relaxed);
+        debug!(
+            "Session {:02x?} connection count: {} -> {}",
+            session_id,
+            prev,
+            prev + 1
+        );
+
+        (Some(conn_receiver), context.connection_count.clone())
     } else {
         // Primary connection: Create SessionDispatcher
 
@@ -131,9 +142,11 @@ where
         }
 
         // 6. Update global maps
+        let connection_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(1));
         let context = SessionContext {
             packet_tx: packet_tx.clone(),
             register_tx,
+            connection_count: connection_count.clone(),
         };
 
         let client_ip = client_address.addr();
@@ -143,13 +156,16 @@ where
         }
         session_queues.insert(session_id, context);
 
-        (Some(conn_receiver), false)
+        (Some(conn_receiver), connection_count)
     };
 
     let client_ip = client_address.addr();
+    let conn_count = connection_count.clone();
     info!(
-        "Client {} authenticated via {}, ready for data relay (secondary={})",
-        client_ip, protocol_label, is_secondary
+        "Client {} authenticated via {}, ready for data relay (connections: {})",
+        client_ip,
+        protocol_label,
+        conn_count.load(Ordering::Relaxed)
     );
 
     // Run bidirectional packet relay
@@ -172,11 +188,10 @@ where
         );
     }
 
-    // Cleanup on disconnect
-    // Only the primary connection owns the address pool lease and session.
-    // Secondary (rotated) connections must NOT remove global routing state,
-    // because other connections in the same session still depend on it.
-    if !is_secondary {
+    // Cleanup on disconnect: decrement connection count
+    // Only the LAST connection to exit performs full cleanup
+    let remaining = conn_count.fetch_sub(1, Ordering::Relaxed) - 1;
+    if remaining == 0 {
         connection_queues.remove(&client_ip);
         address_pool.release_address(&client_ip);
 
@@ -187,13 +202,13 @@ where
 
         session_queues.remove(&session_id);
         info!(
-            "Primary connection for {} disconnected, session {:02x?} cleaned up",
+            "Last connection for {} disconnected, session {:02x?} cleaned up",
             client_ip, session_id
         );
     } else {
         debug!(
-            "Secondary connection for {} disconnected (session {:02x?} still active)",
-            client_ip, session_id
+            "Connection for {} disconnected ({} remaining in session {:02x?})",
+            client_ip, remaining, session_id
         );
     }
 
