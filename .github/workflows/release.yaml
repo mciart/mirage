@@ -124,7 +124,7 @@ jobs:
           name: linux-installers
           path: artifacts/
 
-      - uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v2
         if: github.event_name == 'release'
         name: Add artifacts to release
         with:
@@ -214,7 +214,7 @@ jobs:
           name: macos-installers
           path: artifacts/
 
-      - uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v2
         if: github.event_name == 'release'
         name: Add artifacts to release
         with:
@@ -305,7 +305,7 @@ jobs:
           name: windows-installers
           path: artifacts/
 
-      - uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v2
         if: github.event_name == 'release'
         name: Add artifacts to release
         with:
@@ -313,6 +313,7 @@ jobs:
 
   build-docker-image:
     name: Build Docker image
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: docker/setup-qemu-action@v3
