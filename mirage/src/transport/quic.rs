@@ -94,17 +94,18 @@ pub fn common_transport_config(
     transport.max_concurrent_uni_streams(10_000u32.into());
 
     // 7. Outer MTU / UDP Payload Size
-    // Set explicit MTU limits to avoid WSAEMSGSIZE on Windows
+    // Strictly cap MTU to prevent WSAEMSGSIZE (error 10040) on Windows.
+    // Windows does not support UDP GSO/USO, so quinn-udp's segment batching
+    // can produce oversized sendmsg() calls. We pin min_mtu = initial_mtu = outer_mtu
+    // and cap MTU discovery to the same value, ensuring every UDP packet fits.
     let mtu = u16::max(1200, outer_mtu); // QUIC requires at least 1200
     transport.initial_mtu(mtu);
+    transport.min_mtu(mtu); // Prevent quinn from probing below our target
 
-    // Restrict MTU discovery to not exceed outer_mtu
-    // This is critical for Windows to prevent sending too large packets
-    // Check if MtuDiscoveryConfig is available in this version of Quinn,
-    // if not, we rely on initial_mtu and hopefully Quinn respects it as a soft cap or start point.
-    // In Quinn 0.11, simply setting initial_mtu might not be enough if DPLPMTUD pushes it up.
-    // We try to disable DPLPMTUD if possible or cap it.
-    transport.mtu_discovery_config(None); // Disable MTU discovery to stick to initial_mtu (safest)
+    // Cap MTU discovery upper bound to our outer_mtu (no probing above)
+    let mut mtu_config = quinn::MtuDiscoveryConfig::default();
+    mtu_config.upper_bound(mtu);
+    transport.mtu_discovery_config(Some(mtu_config));
 
     transport
 }

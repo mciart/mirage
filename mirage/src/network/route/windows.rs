@@ -34,19 +34,19 @@ pub fn delete_routes(networks: &[IpNet], target: &RouteTarget, interface_name: &
     Ok(())
 }
 
+/// Low metric for VPN routes so they take priority over system defaults.
+/// System default routes typically have metric >= 25, so metric 5 ensures
+/// our VPN routes win without destroying the originals.
+const VPN_ROUTE_METRIC: u32 = 5;
+
 fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Result<()> {
     debug!(
         "Preparing to add route: {} via {:?} on interface '{}'",
         network, target, interface_name
     );
 
-    // [强力清理] 先扫描并删除所有冲突的旧路由，防止幽灵路由阻碍
-    if let Err(e) = remove_conflicting_routes(network) {
-        warn!(
-            "Failed to clean up potential ghost routes for {}: {}",
-            network, e
-        );
-    }
+    // [安全策略] 不再删除冲突路由。改用低 Metric 让 VPN 路由优先。
+    // 原始系统路由保持不变，VPN 关闭后自动恢复。
 
     let mut route_row = MIB_IPFORWARD_ROW2::default();
     unsafe { InitializeIpForwardEntry(&mut route_row) };
@@ -137,7 +137,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         }
     }
 
-    route_row.Metric = 0;
+    route_row.Metric = VPN_ROUTE_METRIC;
     // Protocol = 3 (MIB_IPPROTO_NETMGMT) - 静态路由
     route_row.Protocol = unsafe { std::mem::transmute(3i32) };
     route_row.ValidLifetime = 0xffffffff;
@@ -168,9 +168,9 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     Ok(())
 }
 
-fn delete_route(network: &IpNet, _target: &RouteTarget, _interface_name: &str) -> Result<()> {
-    // 统一使用强力清理逻辑，确保删得干净
-    remove_conflicting_routes(network).map_err(|e| {
+fn delete_route(network: &IpNet, _target: &RouteTarget, interface_name: &str) -> Result<()> {
+    // 只删除我们添加的 VPN 路由（通过 Metric 和接口名匹配），不影响系统原始路由
+    remove_vpn_routes(network, interface_name).map_err(|e| {
         RouteError::PlatformError {
             message: format!("Delete failed: {}", e),
         }
@@ -178,13 +178,21 @@ fn delete_route(network: &IpNet, _target: &RouteTarget, _interface_name: &str) -
     })
 }
 
-/// [辅助] 扫描路由表并删除所有匹配特定目标的路由
-fn remove_conflicting_routes(network: &IpNet) -> Result<()> {
+/// [辅助] 扫描路由表，只删除我们添加的 VPN 路由（通过 Metric 匹配）
+/// 不删除系统原始路由，确保 VPN 关闭后网络自动恢复
+fn remove_vpn_routes(network: &IpNet, interface_name: &str) -> Result<()> {
     let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
 
     let family = match network {
         IpNet::V4(_) => AF_INET,
         IpNet::V6(_) => AF_INET6,
+    };
+
+    // Resolve our interface index for precise matching
+    let our_interface_index = if interface_name != "auto" {
+        get_interface_index_by_name(interface_name).ok()
+    } else {
+        None
     };
 
     unsafe {
@@ -196,11 +204,24 @@ fn remove_conflicting_routes(network: &IpNet) -> Result<()> {
                 let entry_net = sockaddr_to_ipnet(&entry.DestinationPrefix);
 
                 if entry_net == *network {
-                    debug!(
-                        "Found conflicting route: {} on interface {}. Deleting...",
-                        entry_net, entry.InterfaceIndex
-                    );
-                    let _ = DeleteIpForwardEntry2(entry);
+                    // Only delete routes that match our VPN metric or interface
+                    let is_our_route = entry.Metric == VPN_ROUTE_METRIC
+                        || our_interface_index
+                            .map(|idx| entry.InterfaceIndex == idx)
+                            .unwrap_or(false);
+
+                    if is_our_route {
+                        debug!(
+                            "Removing VPN route: {} on interface {} (metric={})",
+                            entry_net, entry.InterfaceIndex, entry.Metric
+                        );
+                        let _ = DeleteIpForwardEntry2(entry);
+                    } else {
+                        debug!(
+                            "Preserving system route: {} on interface {} (metric={})",
+                            entry_net, entry.InterfaceIndex, entry.Metric
+                        );
+                    }
                 }
             }
             FreeMibTable(table as *const _);
