@@ -4,34 +4,33 @@ use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 use wintun_bindings::Adapter;
 
-/// Fixed GUID for our NRPT rule — same across sessions for predictable cleanup.
-const NRPT_RULE_GUID: &str = "{4D617261-6765-0000-0000-4D6972616765}";
+/// Track whether DNS leak prevention is active
+static DNS_PROTECTION_ACTIVE: OnceLock<std::sync::atomic::AtomicBool> = OnceLock::new();
 
-/// Registry path for DNS policy configuration (NRPT)
-const NRPT_BASE_PATH: &str =
-    r"HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig";
-
-/// Track whether NRPT rule is active (for cleanup on drop/panic)
-static NRPT_ACTIVE: OnceLock<std::sync::atomic::AtomicBool> = OnceLock::new();
-
-fn nrpt_is_active() -> bool {
-    NRPT_ACTIVE
+fn is_protection_active() -> bool {
+    DNS_PROTECTION_ACTIVE
         .get_or_init(|| std::sync::atomic::AtomicBool::new(false))
         .load(std::sync::atomic::Ordering::Relaxed)
 }
 
-fn set_nrpt_active(active: bool) {
-    NRPT_ACTIVE
+fn set_protection_active(active: bool) {
+    DNS_PROTECTION_ACTIVE
         .get_or_init(|| std::sync::atomic::AtomicBool::new(false))
         .store(active, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Adds DNS servers to the TUN interface and enables NRPT leak prevention.
+/// Firewall rule names for cleanup
+const FW_BLOCK_UDP: &str = "Mirage-BlockDNS-UDP";
+const FW_BLOCK_TCP: &str = "Mirage-BlockDNS-TCP";
+const FW_ALLOW_UDP: &str = "Mirage-AllowVPNDNS-UDP";
+const FW_ALLOW_TCP: &str = "Mirage-AllowVPNDNS-TCP";
+
+/// Adds DNS servers to the TUN interface and enables full DNS leak prevention.
 ///
-/// This performs three steps:
-/// 1. Sets DNS servers on the TUN adapter via WinTun API
-/// 2. Adds NRPT rule to force all DNS queries through VPN DNS servers
-/// 3. Flushes the system DNS cache
+/// Three layers of protection:
+/// 1. Set DNS on TUN adapter (WinTun API)
+/// 2. NRPT rule via PowerShell (forces all DNS through VPN servers)
+/// 3. Firewall rules to block DNS on non-VPN paths
 pub fn add_dns_servers(dns_servers: &[IpAddr], interface_name: &str) -> Result<()> {
     // Step 1: Set DNS on TUN adapter
     let wintun = unsafe {
@@ -49,118 +48,89 @@ pub fn add_dns_servers(dns_servers: &[IpAddr], interface_name: &str) -> Result<(
         .set_dns_servers(dns_servers)
         .map_err(|_e| crate::error::DnsError::ConfigurationFailed)?;
 
-    // Step 2: Add NRPT rule to prevent DNS leaks
+    // Step 2: Add NRPT rule via PowerShell (officially supported, notifies DNS service)
     if let Err(e) = add_nrpt_rule(dns_servers) {
-        warn!("Failed to add NRPT rule (DNS may leak): {}", e);
+        warn!("Failed to add NRPT rule: {}", e);
     }
 
-    // Step 3: Flush DNS cache so new rules take effect immediately
+    // Step 3: Add firewall rules to block non-VPN DNS traffic
+    if let Err(e) = add_dns_firewall_rules(dns_servers) {
+        warn!("Failed to add DNS firewall rules: {}", e);
+    }
+
+    // Step 4: Flush + re-register DNS
     flush_dns_cache();
 
+    set_protection_active(true);
     Ok(())
 }
 
-/// Removes DNS servers and cleans up NRPT rules.
+/// Removes DNS leak prevention (NRPT + firewall rules).
 pub fn delete_dns_servers() -> Result<()> {
-    // Remove NRPT rule first
+    if !is_protection_active() {
+        return Ok(());
+    }
+
+    // Remove NRPT rule
     if let Err(e) = remove_nrpt_rule() {
         warn!("Failed to remove NRPT rule: {}", e);
     }
 
+    // Remove firewall rules
+    remove_dns_firewall_rules();
+
     // Flush DNS cache to restore normal resolution
     flush_dns_cache();
 
+    set_protection_active(false);
     Ok(())
 }
 
-/// Adds an NRPT (Name Resolution Policy Table) rule via `reg.exe`.
+/// Adds NRPT rule using PowerShell `Add-DnsClientNrptRule`.
 ///
-/// Creates a registry key that forces Windows to route ALL DNS queries
-/// through the specified VPN DNS servers, preventing DNS leaks.
-///
-/// Registry structure:
-/// ```text
-/// HKLM\...\DnsPolicyConfig\{GUID}
-///   Name              = "."                       (REG_SZ)
-///   GenericDNSServers = "1.1.1.1;8.8.8.8"        (REG_SZ)
-///   ConfigOptions     = 0x8                       (REG_DWORD)
-/// ```
+/// This is the officially supported API that properly notifies the DNS Client
+/// service to reload its policy table, unlike raw registry writes.
 fn add_nrpt_rule(dns_servers: &[IpAddr]) -> Result<()> {
-    let dns_list: String = dns_servers
+    let servers: String = dns_servers
         .iter()
-        .map(|ip| ip.to_string())
+        .map(|ip| format!("'{}'", ip))
         .collect::<Vec<_>>()
-        .join(";");
+        .join(",");
 
-    let key_path = format!("{}\\{}", NRPT_BASE_PATH, NRPT_RULE_GUID);
+    let ps_cmd = format!(
+        "Add-DnsClientNrptRule -Namespace '.' -NameServers {} -Comment 'Mirage VPN'",
+        servers
+    );
 
-    // Create key and set values using reg.exe (works on all Windows versions)
-    // reg add "KEY" /v Name /t REG_SZ /d "." /f
-    let commands = [
-        vec![
-            "reg", "add", &key_path, "/v", "Name", "/t", "REG_SZ", "/d", ".", "/f",
-        ],
-        vec![
-            "reg",
-            "add",
-            &key_path,
-            "/v",
-            "GenericDNSServers",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &dns_list,
-            "/f",
-        ],
-        vec![
-            "reg",
-            "add",
-            &key_path,
-            "/v",
-            "ConfigOptions",
-            "/t",
-            "REG_DWORD",
-            "/d",
-            "8",
-            "/f",
-        ],
-    ];
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+        .output()
+        .map_err(|e| crate::error::DnsError::PlatformError {
+            message: format!("Failed to run PowerShell: {}", e),
+        })?;
 
-    for cmd in &commands {
-        let output = std::process::Command::new(cmd[0])
-            .args(&cmd[1..])
-            .output()
-            .map_err(|e| crate::error::DnsError::PlatformError {
-                message: format!("Failed to run reg.exe: {}", e),
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("reg.exe command failed: {}", stderr);
-            return Err(crate::error::DnsError::PlatformError {
-                message: format!("NRPT registry write failed: {}", stderr),
-            }
-            .into());
-        }
+    if output.status.success() {
+        let dns_list = dns_servers
+            .iter()
+            .map(|ip| ip.to_string())
+            .collect::<Vec<_>>()
+            .join(";");
+        info!("NRPT DNS leak prevention enabled: all DNS → [{}]", dns_list);
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!("NRPT rule creation failed: {}", stderr);
     }
-
-    set_nrpt_active(true);
-    info!("NRPT DNS leak prevention enabled: all DNS → [{}]", dns_list);
 
     Ok(())
 }
 
-/// Removes the NRPT rule from the registry.
+/// Removes all Mirage NRPT rules.
 fn remove_nrpt_rule() -> Result<()> {
-    if !nrpt_is_active() {
-        debug!("NRPT rule not active, skipping removal");
-        return Ok(());
-    }
+    let ps_cmd =
+        "Get-DnsClientNrptRule | Where-Object {$_.Comment -eq 'Mirage VPN'} | Remove-DnsClientNrptRule -Force";
 
-    let key_path = format!("{}\\{}", NRPT_BASE_PATH, NRPT_RULE_GUID);
-
-    let output = std::process::Command::new("reg")
-        .args(["delete", &key_path, "/f"])
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", ps_cmd])
         .output();
 
     match output {
@@ -169,37 +139,124 @@ fn remove_nrpt_rule() -> Result<()> {
         }
         Ok(o) => {
             debug!(
-                "NRPT key deletion result: {}",
+                "NRPT removal result: {}",
                 String::from_utf8_lossy(&o.stderr)
             );
         }
         Err(e) => {
-            debug!("Failed to run reg.exe for NRPT cleanup: {}", e);
+            warn!("Failed to remove NRPT rule: {}", e);
         }
     }
 
-    set_nrpt_active(false);
     Ok(())
 }
 
-/// Flushes the Windows DNS resolver cache.
-fn flush_dns_cache() {
-    match std::process::Command::new("ipconfig")
-        .arg("/flushdns")
-        .output()
-    {
-        Ok(output) => {
-            if output.status.success() {
-                debug!("DNS resolver cache flushed");
-            } else {
+/// Adds Windows Firewall rules to block DNS traffic except to VPN DNS servers.
+///
+/// This is a belt-and-suspenders approach alongside NRPT, catching cases where
+/// applications bypass the system DNS resolver (e.g., browsers with built-in DoH).
+fn add_dns_firewall_rules(dns_servers: &[IpAddr]) -> Result<()> {
+    let dns_ips: String = dns_servers
+        .iter()
+        .map(|ip| ip.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // Remove any stale rules first
+    remove_dns_firewall_rules();
+
+    // Allow DNS to VPN DNS servers (must be added BEFORE block rules)
+    let allow_rules = [
+        (FW_ALLOW_UDP, "udp", &dns_ips),
+        (FW_ALLOW_TCP, "tcp", &dns_ips),
+    ];
+
+    for (name, proto, ips) in &allow_rules {
+        let output = std::process::Command::new("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "add",
+                "rule",
+                &format!("name={}", name),
+                "dir=out",
+                &format!("protocol={}", proto),
+                "remoteport=53",
+                &format!("remoteip={}", ips),
+                "action=allow",
+            ])
+            .output();
+
+        if let Ok(o) = output {
+            if !o.status.success() {
                 warn!(
-                    "ipconfig /flushdns failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
+                    "Firewall allow rule '{}' failed: {}",
+                    name,
+                    String::from_utf8_lossy(&o.stderr)
                 );
             }
         }
-        Err(e) => {
-            warn!("Failed to flush DNS cache: {}", e);
+    }
+
+    // Block all other DNS
+    let block_rules = [(FW_BLOCK_UDP, "udp"), (FW_BLOCK_TCP, "tcp")];
+
+    for (name, proto) in &block_rules {
+        let output = std::process::Command::new("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "add",
+                "rule",
+                &format!("name={}", name),
+                "dir=out",
+                &format!("protocol={}", proto),
+                "remoteport=53",
+                "action=block",
+            ])
+            .output();
+
+        if let Ok(o) = output {
+            if !o.status.success() {
+                warn!(
+                    "Firewall block rule '{}' failed: {}",
+                    name,
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
         }
     }
+
+    info!(
+        "DNS firewall rules added (allow: {}, block: all others)",
+        dns_ips
+    );
+    Ok(())
+}
+
+/// Removes all Mirage DNS firewall rules.
+fn remove_dns_firewall_rules() {
+    for name in [FW_BLOCK_UDP, FW_BLOCK_TCP, FW_ALLOW_UDP, FW_ALLOW_TCP] {
+        let _ = std::process::Command::new("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
+                &format!("name={}", name),
+            ])
+            .output();
+    }
+    debug!("DNS firewall rules removed");
+}
+
+/// Flushes the Windows DNS resolver cache and re-registers DNS.
+fn flush_dns_cache() {
+    let _ = std::process::Command::new("ipconfig")
+        .arg("/flushdns")
+        .output();
+    let _ = std::process::Command::new("ipconfig")
+        .arg("/registerdns")
+        .output();
+    debug!("DNS cache flushed and re-registered");
 }
