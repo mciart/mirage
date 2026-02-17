@@ -273,6 +273,24 @@ impl MirageRuntime {
         }
     }
 
+    /// Sends multiple packets from Swift into the Rust tunnel in one batch.
+    /// Returns the number of packets successfully queued.
+    pub fn write_packets_batch(&self, packets: &[&[u8]]) -> usize {
+        if let Some(tx) = &self.packet_tx {
+            let mut sent = 0;
+            for pkt in packets {
+                if tx.try_send(pkt.to_vec()).is_ok() {
+                    sent += 1;
+                } else {
+                    break; // Channel full
+                }
+            }
+            sent
+        } else {
+            0
+        }
+    }
+
     /// Returns the client config (for reading addresses, routes, DNS, etc.)
     pub fn config(&self) -> &ClientConfig {
         &self.config

@@ -212,6 +212,44 @@ impl InterfaceIO for AppleInterfaceIO {
         }
     }
 
+    /// Drains the channel for up to 64 packets at a time.
+    /// Falls back to blocking on at least 1 packet if the channel is empty.
+    async fn read_packets(&self) -> Result<Vec<Packet>> {
+        let mut rx = self.packet_rx.lock().await;
+
+        // Wait for at least one packet
+        let first = match rx.recv().await {
+            Some(data) => data,
+            None => {
+                return Err(mirage::MirageError::system(
+                    "Packet channel closed (Swift side disconnected)",
+                ))
+            }
+        };
+
+        let mut packets = Vec::with_capacity(64);
+        packets.push(Packet::new(bytes::Bytes::from(first)));
+
+        // Drain up to 63 more without blocking
+        for _ in 0..63 {
+            match rx.try_recv() {
+                Ok(data) => packets.push(Packet::new(bytes::Bytes::from(data))),
+                Err(_) => break,
+            }
+        }
+
+        let count = packets.len() as u64;
+        let bytes: u64 = packets.iter().map(|p| p.data.len() as u64).sum();
+        self.metrics
+            .packets_received
+            .fetch_add(count, Ordering::Relaxed);
+        self.metrics
+            .bytes_received
+            .fetch_add(bytes, Ordering::Relaxed);
+
+        Ok(packets)
+    }
+
     /// Writes a packet to the Swift side via callback.
     /// Rust calls this → `write_cb` → Swift `packetFlow.writePackets()`.
     async fn write_packet(&self, packet: Packet) -> Result<()> {
@@ -223,6 +261,29 @@ impl InterfaceIO for AppleInterfaceIO {
                 .fetch_add(data.len() as u64, Ordering::Relaxed);
             unsafe {
                 cb(data.as_ptr(), data.len(), self.context);
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes multiple packets to Swift via per-packet callback.
+    /// Updates metrics in batch for efficiency.
+    async fn write_packets(&self, packets: Vec<Packet>) -> Result<()> {
+        if packets.is_empty() {
+            return Ok(());
+        }
+        if let Some(cb) = self.write_cb {
+            let count = packets.len() as u64;
+            let bytes: u64 = packets.iter().map(|p| p.data.len() as u64).sum();
+            self.metrics
+                .packets_sent
+                .fetch_add(count, Ordering::Relaxed);
+            self.metrics.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
+            for packet in &packets {
+                let data = packet.data.as_ref();
+                unsafe {
+                    cb(data.as_ptr(), data.len(), self.context);
+                }
             }
         }
         Ok(())

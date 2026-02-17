@@ -92,16 +92,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
 
-        var packetsFromRust = 0
-
         bridge.start(
             onPacketWrite: { [weak self] data in
-                // Rust → TUN: write decrypted packet to the system virtual interface
-                packetsFromRust += 1
-                if packetsFromRust <= 3 || packetsFromRust % 1000 == 0 {
-                    NSLog("[MirageTunnel] 📥 Rust→TUN packet #%d (%d bytes)", packetsFromRust, data.count)
-                }
-                // Detect IPv4 vs IPv6 from IP header version field
+                guard let self else { return }
                 let proto: NSNumber
                 if let firstByte = data.first {
                     let version = (firstByte >> 4) & 0x0F
@@ -109,7 +102,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 } else {
                     proto = NSNumber(value: AF_INET)
                 }
-                self?.packetFlow.writePackets([data], withProtocols: [proto])
+                self.packetFlow.writePackets([data], withProtocols: [proto])
             },
             onStatusChange: { [weak self] status, message in
                 NSLog("[MirageTunnel] 🔄 Rust status: %@ - %@", status.displayName, message ?? "")
@@ -286,16 +279,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     // MARK: - Packet Forwarding
 
-    private var packetsToRust = 0
-
     /// Continuously reads packets from the TUN interface and sends them to Rust.
     private func startReadingPackets() {
         packetFlow.readPackets { [weak self] packets, protocols in
             guard let self, let bridge = self.bridge else { return }
-            self.packetsToRust += packets.count
-            if self.packetsToRust <= 3 || self.packetsToRust % 1000 == 0 {
-                NSLog("[MirageTunnel] 📤 TUN→Rust: %d packets (total: %d)", packets.count, self.packetsToRust)
-            }
             for packet in packets {
                 _ = bridge.sendPacket(packet)
             }

@@ -174,6 +174,23 @@ void mirage_start(struct MirageHandle *handle,
 bool mirage_send_packet(struct MirageHandle *handle, const uint8_t *data, uintptr_t len);
 
 /**
+ * Sends multiple packets from Swift to Rust in a single FFI call.
+ *
+ * Each packet is described by a pointer in `data_ptrs[i]` and length in `data_lens[i]`.
+ * Returns the number of packets successfully queued.
+ *
+ * # Safety
+ * - `handle` must be a valid pointer from `mirage_create()`.
+ * - `data_ptrs` must point to `count` valid `*const u8` pointers.
+ * - `data_lens` must point to `count` `usize` values.
+ * - Each `data_ptrs[i]` must point to `data_lens[i]` bytes.
+ */
+uintptr_t mirage_send_packets(struct MirageHandle *handle,
+                              const uint8_t *const *data_ptrs,
+                              const uintptr_t *data_lens,
+                              uintptr_t count);
+
+/**
  * Stops the VPN connection gracefully.
  *
  * # Safety

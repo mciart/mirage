@@ -141,6 +141,42 @@ pub unsafe extern "C" fn mirage_send_packet(
     }
 }
 
+/// Sends multiple packets from Swift to Rust in a single FFI call.
+///
+/// Each packet is described by a pointer in `data_ptrs[i]` and length in `data_lens[i]`.
+/// Returns the number of packets successfully queued.
+///
+/// # Safety
+/// - `handle` must be a valid pointer from `mirage_create()`.
+/// - `data_ptrs` must point to `count` valid `*const u8` pointers.
+/// - `data_lens` must point to `count` `usize` values.
+/// - Each `data_ptrs[i]` must point to `data_lens[i]` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn mirage_send_packets(
+    handle: *mut MirageHandle,
+    data_ptrs: *const *const u8,
+    data_lens: *const usize,
+    count: usize,
+) -> usize {
+    if handle.is_null() || data_ptrs.is_null() || data_lens.is_null() || count == 0 {
+        return 0;
+    }
+    let handle = &*handle;
+    if let Some(rt) = &handle.inner {
+        let ptrs = std::slice::from_raw_parts(data_ptrs, count);
+        let lens = std::slice::from_raw_parts(data_lens, count);
+        let packets: Vec<&[u8]> = ptrs
+            .iter()
+            .zip(lens.iter())
+            .filter(|(p, l)| !p.is_null() && **l > 0)
+            .map(|(p, l)| std::slice::from_raw_parts(*p, *l))
+            .collect();
+        rt.write_packets_batch(&packets)
+    } else {
+        0
+    }
+}
+
 /// Stops the VPN connection gracefully.
 ///
 /// # Safety

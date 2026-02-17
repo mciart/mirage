@@ -98,6 +98,7 @@ final class MirageBridge {
         }
     }
 
+
     /// Stops the VPN connection gracefully.
     func stop() {
         guard let handle else { return }
