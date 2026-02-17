@@ -87,8 +87,19 @@ class VPNManager {
             return
         }
         if connectedTunnelID == tunnel.id && status != .disconnected {
+            // Same tunnel — toggle off
             disconnect()
         } else if status == .disconnected {
+            // Nothing connected — start this one
+            try await connect(tunnel: tunnel)
+        } else {
+            // Different tunnel is connected — switch: disconnect first, then connect new
+            disconnect()
+            // Wait until the tunnel is fully disconnected (up to 5 s)
+            for _ in 0..<100 {
+                if status == .disconnected { break }
+                try await Task.sleep(nanoseconds: 50_000_000) // 50 ms
+            }
             try await connect(tunnel: tunnel)
         }
     }
