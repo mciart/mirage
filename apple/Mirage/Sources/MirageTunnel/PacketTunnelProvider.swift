@@ -406,13 +406,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     // MARK: - Helpers
 
-    /// Resolves a hostname to an IPv4 address string.
+    /// Resolves a hostname to an IP address string (prefers IPv6 if available, falls back to IPv4).
     private func resolveHostname(_ hostname: String) -> String? {
-        var addr = in_addr()
-        if inet_pton(AF_INET, hostname, &addr) == 1 { return hostname }
+        // Already an IPv4 literal?
+        var addr4 = in_addr()
+        if inet_pton(AF_INET, hostname, &addr4) == 1 { return hostname }
 
+        // Already an IPv6 literal?
+        var addr6 = in6_addr()
+        if inet_pton(AF_INET6, hostname, &addr6) == 1 { return hostname }
+
+        // Resolve: try all address families (IPv4 + IPv6)
         var hints = addrinfo()
-        hints.ai_family = AF_INET
+        hints.ai_family = AF_UNSPEC
         hints.ai_socktype = SOCK_STREAM
 
         var result: UnsafeMutablePointer<addrinfo>?
@@ -421,12 +427,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         guard status == 0, let res = result else { return nil }
 
-        var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-        if res.pointee.ai_family == AF_INET {
+        if res.pointee.ai_family == AF_INET6 {
+            var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+            var sa = res.pointee.ai_addr!.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee }
+            inet_ntop(AF_INET6, &sa.sin6_addr, &buf, socklen_t(INET6_ADDRSTRLEN))
+            return String(cString: buf)
+        } else {
+            var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
             var sa = res.pointee.ai_addr!.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
             inet_ntop(AF_INET, &sa.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN))
+            return String(cString: buf)
         }
-        return String(cString: buf)
     }
 
 
