@@ -280,11 +280,30 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     // MARK: - Packet Forwarding
 
     /// Continuously reads packets from the TUN interface and sends them to Rust.
+    /// Uses batch FFI call to reduce per-packet overhead.
     private func startReadingPackets() {
         packetFlow.readPackets { [weak self] packets, protocols in
-            guard let self, let bridge = self.bridge else { return }
-            for packet in packets {
-                _ = bridge.sendPacket(packet)
+            guard let self, let bridge = self.bridge, let handle = bridge.handle else { return }
+            if packets.count == 1 {
+                // Fast path for single packet — avoid array allocation
+                _ = bridge.sendPacket(packets[0])
+            } else {
+                // Batch path: send all packets in one FFI call
+                let nsPackets = packets.map { $0 as NSData }
+                var ptrs: [UnsafePointer<UInt8>?] = nsPackets.map { nsd in
+                    nsd.length > 0 ? nsd.bytes.assumingMemoryBound(to: UInt8.self) : nil
+                }
+                var lens = nsPackets.map { UInt($0.length) }
+                ptrs.withUnsafeMutableBufferPointer { ptrsBuf in
+                    lens.withUnsafeMutableBufferPointer { lensBuf in
+                        _ = mirage_send_packets(
+                            handle,
+                            ptrsBuf.baseAddress,
+                            lensBuf.baseAddress,
+                            UInt(packets.count)
+                        )
+                    }
+                }
             }
             self.startReadingPackets()
         }

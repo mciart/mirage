@@ -8,9 +8,9 @@ class VPNManager {
     var status: NEVPNStatus = .disconnected
     var connectedTunnelID: UUID?
     var statusMessage: String?
-    var bytesSent: UInt64 = 0
-    var bytesReceived: UInt64 = 0
-    var uptime: Int = 0
+    /// High-frequency metrics — isolated in a separate observable to avoid
+    /// re-rendering the sidebar list every second when the timer fires.
+    let metrics = VPNMetrics()
     private var manager: NETunnelProviderManager?
     private var statusObserver: NSObjectProtocol?
     private var metricsTimer: Timer?
@@ -196,9 +196,9 @@ class VPNManager {
     private func stopMetricsPolling() {
         metricsTimer?.invalidate()
         metricsTimer = nil
-        bytesSent = 0
-        bytesReceived = 0
-        uptime = 0
+        metrics.bytesSent = 0
+        metrics.bytesReceived = 0
+        metrics.uptime = 0
     }
 
     private func fetchMetrics() {
@@ -209,9 +209,9 @@ class VPNManager {
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
                 else { return }
                 DispatchQueue.main.async {
-                    self?.bytesSent = (json["bytes_sent"] as? UInt64) ?? 0
-                    self?.bytesReceived = (json["bytes_received"] as? UInt64) ?? 0
-                    self?.uptime = (json["uptime"] as? Int) ?? 0
+                    self?.metrics.bytesSent = (json["bytes_sent"] as? UInt64) ?? 0
+                    self?.metrics.bytesReceived = (json["bytes_received"] as? UInt64) ?? 0
+                    self?.metrics.uptime = (json["uptime"] as? Int) ?? 0
                 }
             }
         } catch {
@@ -225,6 +225,15 @@ class VPNManager {
     var isConnecting: Bool { status == .connecting }
     var isDisconnecting: Bool { status == .disconnecting }
     var isActive: Bool { isConnected || isConnecting }
+}
+
+/// High-frequency metrics isolated from VPNManager to prevent
+/// unnecessary re-renders of views that only need connection status.
+@Observable
+class VPNMetrics {
+    var bytesSent: UInt64 = 0
+    var bytesReceived: UInt64 = 0
+    var uptime: Int = 0
 }
 
 // MARK: - Status Display Extensions

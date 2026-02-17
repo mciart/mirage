@@ -138,7 +138,7 @@ impl MirageRuntime {
         self.shutdown_tx = Some(shutdown_tx);
 
         // Create the packet channel (Swift → Rust)
-        let (packet_tx, packet_rx) = mpsc::channel::<Vec<u8>>(1024);
+        let (packet_tx, packet_rx) = mpsc::channel::<Vec<u8>>(4096);
         self.packet_tx = Some(packet_tx);
 
         // Update status to Connecting

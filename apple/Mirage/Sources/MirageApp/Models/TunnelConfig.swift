@@ -18,6 +18,10 @@ struct TunnelConfig: Identifiable, Codable, Hashable {
     }
 
     var serverDisplay: String {
+        serverHost
+    }
+
+    var serverHostPort: String {
         "\(serverHost):\(serverPort)"
     }
 

@@ -4,7 +4,7 @@ import Foundation
 /// Swift wrapper for the Mirage VPN FFI layer.
 /// Provides a safe, idiomatic Swift interface over the C functions.
 final class MirageBridge {
-    private var handle: OpaquePointer?
+    private(set) var handle: OpaquePointer?
 
     /// Current connection status
     var status: MirageVPNStatus {
