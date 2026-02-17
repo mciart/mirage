@@ -143,7 +143,8 @@ struct TunnelDetailView: View {
                 .font(.headline)
                 .foregroundStyle(.secondary)
 
-            DetailRow(label: "Server", value: tunnel.serverDisplay)
+            DetailRow(label: "Server", value: tunnel.serverHost)
+            DetailRow(label: "Port", value: "\(tunnel.serverPort)")
             DetailRow(label: "Protocol", value: tunnel.protocols)
             DetailRow(label: "MTU", value: "\(tunnel.mtu)")
             DetailRow(label: "Camouflage", value: tunnel.camouflageMode)

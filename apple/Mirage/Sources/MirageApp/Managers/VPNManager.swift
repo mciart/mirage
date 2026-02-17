@@ -165,7 +165,7 @@ class VPNManager {
 
     private func startMetricsPolling() {
         metricsTimer?.invalidate()
-        metricsTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+        metricsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             self?.fetchMetrics()
         }
         fetchMetrics() // immediate first fetch

@@ -13,10 +13,10 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
 use crate::interface::{set_init_state, AppleIOInit, AppleInterfaceIO};
+use crate::types::*;
 use crate::types::{
     copy_str_to_buf, MirageMetrics, MirageStatus, MirageTunnelConfig, MirageTunnelConfigCallback,
 };
-use crate::types::*;
 
 /// Internal state managed by the FFI handle.
 pub struct MirageRuntime {
@@ -202,9 +202,13 @@ impl MirageRuntime {
                                 .unwrap_or_else(|_| "[]".to_string());
                             copy_str_to_buf(&routes_json, &mut tc.routes_json);
 
-                            info!("Sending tunnel config: addr={}, v6={}, mtu={}",
-                                info.client_address, info.client_address_v6, info.mtu);
-                            unsafe { config_cb(&tc, ctx_clone.0); }
+                            info!(
+                                "Sending tunnel config: addr={}, v6={}, mtu={}",
+                                info.client_address, info.client_address_v6, info.mtu
+                            );
+                            unsafe {
+                                config_cb(&tc, ctx_clone.0);
+                            }
                         }
                     }
 

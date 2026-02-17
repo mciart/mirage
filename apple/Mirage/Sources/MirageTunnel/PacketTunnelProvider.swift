@@ -152,13 +152,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
                 // Extract address (strip CIDR prefix, e.g. "10.9.8.17/24" → "10.9.8.17")
                 let clientAddr = config.clientAddress.split(separator: "/").first.map(String.init) ?? "10.7.0.2"
-                let clientMask = self.cidrToSubnetMask(config.clientAddress) ?? "255.255.255.0"
                 let mtu = config.mtu > 0 ? Int(config.mtu) : 1280
 
                 let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: serverIP)
 
-                // IPv4 with server-assigned address
-                let ipv4 = NEIPv4Settings(addresses: [clientAddr], subnetMasks: [clientMask])
+                // IPv4 — use /32 mask (255.255.255.255) to avoid creating a connected route
+                // for the VPN subnet. With /24, same-subnet IPs (e.g. 10.9.8.7) trigger ARP
+                // on utun instead of routing through the tunnel.
+                let ipv4 = NEIPv4Settings(addresses: [clientAddr], subnetMasks: ["255.255.255.255"])
                 ipv4.includedRoutes = [NEIPv4Route.default()]
                 settings.ipv4Settings = ipv4
 
