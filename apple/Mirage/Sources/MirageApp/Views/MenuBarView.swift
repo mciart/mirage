@@ -1,4 +1,5 @@
-// Menu bar dropdown — quick tunnel switching
+// Menu bar dropdown — quick tunnel switching (macOS only)
+#if os(macOS)
 import SwiftUI
 import NetworkExtension
 
@@ -68,3 +69,4 @@ struct MenuBarTunnelRow: View {
         }
     }
 }
+#endif

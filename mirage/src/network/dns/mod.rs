@@ -12,3 +12,19 @@ pub use linux::{add_dns_servers, delete_dns_servers};
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::{add_dns_servers, delete_dns_servers};
+
+// iOS/tvOS/watchOS: DNS is managed by NEPacketTunnelNetworkSettings
+#[cfg(target_os = "ios")]
+pub fn add_dns_servers(
+    _dns_servers: &[std::net::IpAddr],
+    _interface_name: &str,
+) -> crate::Result<()> {
+    Ok(())
+}
+#[cfg(target_os = "ios")]
+pub fn delete_dns_servers(
+    _dns_servers: &[std::net::IpAddr],
+    _interface_name: &str,
+) -> crate::Result<()> {
+    Ok(())
+}

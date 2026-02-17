@@ -36,7 +36,11 @@ struct TunnelDetailView: View {
             .padding(24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        #if os(macOS)
         .background(Color(.windowBackgroundColor))
+        #else
+        .background(Color(.systemBackground))
+        #endif
         .alert("Connection Error", isPresented: $showError) {
             Button("OK") { }
         } message: {

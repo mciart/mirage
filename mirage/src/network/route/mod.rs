@@ -7,15 +7,45 @@ pub enum RouteTarget {
     GatewayOnInterface(IpAddr, String),
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "ios")))]
 mod posix;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "ios")))]
 pub use posix::{add_routes, delete_routes, get_default_gateway, get_gateway_for};
 
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::{add_routes, delete_routes, get_default_gateway, get_gateway_for};
+
+// iOS: routes are managed by NEPacketTunnelNetworkSettings
+#[cfg(target_os = "ios")]
+pub fn add_routes(
+    _networks: &[ipnet::IpNet],
+    _target: &RouteTarget,
+    _iface: &str,
+) -> crate::Result<()> {
+    Ok(())
+}
+#[cfg(target_os = "ios")]
+pub fn delete_routes(
+    _networks: &[ipnet::IpNet],
+    _target: &RouteTarget,
+    _iface: &str,
+) -> crate::Result<()> {
+    Ok(())
+}
+#[cfg(target_os = "ios")]
+pub fn get_default_gateway() -> crate::Result<IpAddr> {
+    Err(crate::MirageError::system(
+        "get_default_gateway not supported on iOS",
+    ))
+}
+#[cfg(target_os = "ios")]
+pub fn get_gateway_for(_target: IpAddr) -> crate::Result<RouteTarget> {
+    Err(crate::MirageError::system(
+        "get_gateway_for not supported on iOS",
+    ))
+}
 
 use ipnet::IpNet;
 use tracing::{info, warn};

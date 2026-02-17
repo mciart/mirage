@@ -1,5 +1,6 @@
 #![allow(async_fn_in_trait)]
 
+#[cfg(not(target_os = "ios"))]
 pub mod tun_rs;
 
 use crate::network::packet::Packet;

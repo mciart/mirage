@@ -1,0 +1,11 @@
+// Mirage cross-platform library search paths
+// Uses SDK conditions to ensure the correct platform's libmirage_ffi.a is linked
+
+// macOS builds: search macOS paths first
+LIBRARY_SEARCH_PATHS[sdk=macosx*] = $(inherited) $(PROJECT_DIR)/../../target/aarch64-apple-darwin/release $(PROJECT_DIR)/../../target/aarch64-apple-darwin/debug $(PROJECT_DIR)/../../target/release $(PROJECT_DIR)/../../target/debug
+
+// iOS device builds: search iOS paths only
+LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(inherited) $(PROJECT_DIR)/../../target/aarch64-apple-ios/release $(PROJECT_DIR)/../../target/aarch64-apple-ios/debug
+
+// iOS simulator builds (x86_64 / aarch64)
+LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(inherited) $(PROJECT_DIR)/../../target/aarch64-apple-ios-sim/release $(PROJECT_DIR)/../../target/aarch64-apple-ios-sim/debug $(PROJECT_DIR)/../../target/aarch64-apple-ios/release $(PROJECT_DIR)/../../target/aarch64-apple-ios/debug

@@ -1,12 +1,16 @@
 // App entry point
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 
 @main
 struct MirageApp: App {
     @State private var tunnelStore = TunnelStore()
     @State private var vpnManager = VPNManager()
+    #if os(macOS)
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    #endif
 
     var body: some Scene {
         // Main window
@@ -14,12 +18,17 @@ struct MirageApp: App {
             ContentView()
                 .environment(tunnelStore)
                 .environment(vpnManager)
+                #if os(macOS)
                 .frame(minWidth: 600, minHeight: 400)
+                #endif
         }
+        #if os(macOS)
         .windowStyle(.titleBar)
         .defaultSize(width: 720, height: 480)
+        #endif
 
-        // Menu bar icon
+        // Menu bar icon (macOS only)
+        #if os(macOS)
         MenuBarExtra {
             MenuBarView()
                 .environment(tunnelStore)
@@ -27,8 +36,10 @@ struct MirageApp: App {
         } label: {
             Image(nsImage: Self.menuBarIcon(connected: vpnManager.isConnected))
         }
+        #endif
     }
 
+    #if os(macOS)
     private static func menuBarIcon(connected: Bool) -> NSImage {
         let name = connected ? "power.circle.fill" : "power.circle"
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
@@ -37,17 +48,18 @@ struct MirageApp: App {
         image.isTemplate = true
         return image
     }
+    #endif
 }
 
-/// Handles window-close → hide-to-menu-bar behavior.
+// MARK: - macOS: Close-to-menu-bar behavior
+
+#if os(macOS)
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Observe ALL window close events via NotificationCenter
-        // (SwiftUI overrides window.delegate, so windowWillClose never fires)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(windowDidClose(_:)),
@@ -57,7 +69,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func windowDidClose(_ notification: Notification) {
-        // Small delay to let the window finish closing
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             let hasVisibleWindow = NSApplication.shared.windows.contains { window in
                 window.isVisible
@@ -71,4 +82,4 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 }
-
+#endif

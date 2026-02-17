@@ -9,6 +9,8 @@ struct TunnelListView: View {
 
     @State private var renamingTunnel: TunnelConfig?
     @State private var renameText = ""
+    @State private var showDeleteConfirm = false
+    @State private var tunnelToDelete: TunnelConfig?
 
     var body: some View {
         List(selection: $selectedTunnel) {
@@ -26,11 +28,16 @@ struct TunnelListView: View {
                     }
                     Divider()
                     Button("Delete", role: .destructive) {
-                        if tunnel.id == vpn.connectedTunnelID { vpn.disconnect() }
-                        store.remove(tunnel)
-                        if selectedTunnel?.id == tunnel.id {
-                            selectedTunnel = store.tunnels.first
-                        }
+                        tunnelToDelete = tunnel
+                        showDeleteConfirm = true
+                    }
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        tunnelToDelete = tunnel
+                        showDeleteConfirm = true
+                    } label: {
+                        Label("Delete", systemImage: "trash")
                     }
                 }
             }
@@ -46,11 +53,53 @@ struct TunnelListView: View {
                 }
             }
         }
+        #if os(macOS)
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
             bottomBar
         }
-        .navigationTitle("Tunnels")
+        #else
+        .listStyle(.insetGrouped)
+        #endif
+        .navigationTitle("Mirage")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        #if os(iOS)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: onImport) {
+                    Image(systemName: "plus")
+                }
+            }
+            ToolbarItem(placement: .topBarLeading) {
+                EditButton()
+            }
+        }
+        #endif
+        .confirmationDialog(
+            "Delete Tunnel",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let tunnel = tunnelToDelete {
+                    if tunnel.id == vpn.connectedTunnelID { vpn.disconnect() }
+                    store.remove(tunnel)
+                    if selectedTunnel?.id == tunnel.id {
+                        selectedTunnel = store.tunnels.first
+                    }
+                }
+                tunnelToDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                tunnelToDelete = nil
+            }
+        } message: {
+            if let tunnel = tunnelToDelete {
+                Text("Are you sure you want to delete \"\(tunnel.name)\"?")
+            }
+        }
         .alert("Rename Tunnel", isPresented: Binding(
             get: { renamingTunnel != nil },
             set: { if !$0 { renamingTunnel = nil } }
@@ -72,6 +121,9 @@ struct TunnelListView: View {
         }
     }
 
+    // MARK: - macOS Bottom Bar
+
+    #if os(macOS)
     private var bottomBar: some View {
         HStack(spacing: 8) {
             Button(action: onImport) {
@@ -98,6 +150,20 @@ struct TunnelListView: View {
         .padding(8)
         .background(.bar)
     }
+    #endif
+}
+
+// MARK: - Liquid Glass Modifier (iOS 26+)
+
+extension View {
+    @ViewBuilder
+    func liquidGlass() -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            self.glassEffect(.regular.interactive())
+        } else {
+            self
+        }
+    }
 }
 
 // MARK: - Tunnel Row
@@ -108,10 +174,10 @@ struct TunnelRow: View {
     let isConnecting: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Circle()
                 .fill(statusColor)
-                .frame(width: 8, height: 8)
+                .frame(width: 10, height: 10)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(tunnel.name)
@@ -124,13 +190,24 @@ struct TunnelRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+
+            Spacer()
+
+            if isConnected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.body)
+            } else if isConnecting {
+                ProgressView()
+                    .controlSize(.small)
+            }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
 
     private var statusColor: Color {
         if isConnected { .green }
         else if isConnecting { .orange }
-        else { Color(.tertiaryLabelColor) }
+        else { .gray.opacity(0.3) }
     }
 }

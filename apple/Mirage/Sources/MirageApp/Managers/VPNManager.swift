@@ -261,21 +261,4 @@ extension NEVPNStatus {
         @unknown default: "Unknown"
         }
     }
-
-    var systemImage: String {
-        switch self {
-        case .connected: "lock.shield.fill"
-        case .connecting, .reasserting: "arrow.triangle.2.circlepath"
-        case .disconnecting: "xmark.shield"
-        default: "shield.slash"
-        }
-    }
-
-    var statusColor: String {
-        switch self {
-        case .connected: "green"
-        case .connecting, .reasserting: "orange"
-        default: "secondary"
-        }
-    }
 }

@@ -26,7 +26,13 @@ struct TunnelConfig: Identifiable, Codable, Hashable {
     }
 
     var protocols: String {
-        parseTOMLValue(key: "protocols", section: "transport") ?? "tcp"
+        let raw = parseTOMLValue(key: "protocols", section: "transport") ?? "tcp"
+        // Strip TOML array formatting: ["udp", "tcp"] → udp, tcp
+        return raw
+            .replacingOccurrences(of: "[", with: "")
+            .replacingOccurrences(of: "]", with: "")
+            .replacingOccurrences(of: "\"", with: "")
+            .trimmingCharacters(in: .whitespaces)
     }
 
     var mtu: Int {

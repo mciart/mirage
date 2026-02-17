@@ -40,6 +40,10 @@ class TunnelStore {
 
     /// Imports a tunnel from a TOML file URL.
     func importFromFile(_ url: URL) throws -> TunnelConfig {
+        // Security-scoped resource access required on iOS for sandboxed file picker URLs
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+
         let content = try String(contentsOf: url, encoding: .utf8)
         let name = url.deletingPathExtension().lastPathComponent
         let tunnel = TunnelConfig(name: name, tomlContent: content)

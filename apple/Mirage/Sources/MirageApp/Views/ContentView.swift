@@ -10,6 +10,17 @@ struct ContentView: View {
     @State private var errorMessage = ""
 
     var body: some View {
+        #if os(macOS)
+        macOSLayout
+        #else
+        iOSLayout
+        #endif
+    }
+
+    // MARK: - macOS: Split View
+
+    #if os(macOS)
+    private var macOSLayout: some View {
         NavigationSplitView {
             TunnelListView(
                 selectedTunnel: $selectedTunnel,
@@ -36,6 +47,37 @@ struct ContentView: View {
             Text(errorMessage)
         }
     }
+    #endif
+
+    // MARK: - iOS: Navigation Stack
+
+    #if os(iOS)
+    private var iOSLayout: some View {
+        NavigationStack {
+            TunnelListView(
+                selectedTunnel: $selectedTunnel,
+                onImport: { showImportDialog = true }
+            )
+            .navigationDestination(item: $selectedTunnel) { tunnel in
+                TunnelDetailView(tunnel: tunnel)
+            }
+        }
+        .fileImporter(
+            isPresented: $showImportDialog,
+            allowedContentTypes: [.init(filenameExtension: "toml")!],
+            allowsMultipleSelection: false
+        ) { result in
+            handleImport(result)
+        }
+        .alert("Error", isPresented: $showError) {
+            Button("OK") {}
+        } message: {
+            Text(errorMessage)
+        }
+    }
+    #endif
+
+    // MARK: - Empty State
 
     private var emptyState: some View {
         VStack(spacing: 16) {
@@ -56,6 +98,8 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    // MARK: - Import Handler
 
     private func handleImport(_ result: Result<[URL], Error>) {
         switch result {

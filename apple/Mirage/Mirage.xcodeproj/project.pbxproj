@@ -71,6 +71,7 @@
 		C524DE863320D8184AE13E9C /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		EC2BCCF3C44F2C9A1675DF19 /* TunnelListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelListView.swift; sourceTree = "<group>"; };
 		EE02568E93053F434F591C23 /* MirageApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirageApp.swift; sourceTree = "<group>"; };
+		XCCONFIG000000000000001 /* CrossPlatform.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = CrossPlatform.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -168,6 +169,7 @@
 		CA1F54A8C4CAA0117425397F = {
 			isa = PBXGroup;
 			children = (
+				XCCONFIG000000000000001 /* CrossPlatform.xcconfig */,
 				B9F48D57148EF83D82970E3B /* Sources */,
 				1C692B0B6087FDDA64562622 /* Frameworks */,
 				3E514C3C34FE85763C0BDEC4 /* Products */,
@@ -323,6 +325,7 @@
 /* Begin XCBuildConfiguration section */
 		79C1EAB9F8AFBD873672F40F /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = XCCONFIG000000000000001 /* CrossPlatform.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MirageApp.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -332,15 +335,13 @@
 				INFOPLIST_FILE = "MirageApp-Info.plist";
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
-				INFOPLIST_KEY_CFBundleIconFile = Mirage;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/../../target/release",
-					"$(PROJECT_DIR)/../../target/debug",
+					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
 				OTHER_LDFLAGS = (
@@ -350,8 +351,11 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.mciart.mirage;
 				PRODUCT_NAME = Mirage;
 				REGISTER_APP_GROUPS = YES;
-				SDKROOT = macosx;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = BridgingHeader.h;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -411,6 +415,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -426,6 +431,7 @@
 		};
 		A132FF53313FB3009AD754F9 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = XCCONFIG000000000000001 /* CrossPlatform.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MirageTunnel.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -441,11 +447,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@executable_path/../../../../Frameworks",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/release",
-					"$(PROJECT_DIR)/../../target/release",
-					"$(PROJECT_DIR)/../../target/debug",
+					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
 				OTHER_LDFLAGS = (
@@ -455,13 +457,17 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.mciart.mirage.tunnel;
 				PRODUCT_NAME = MirageTunnel;
 				REGISTER_APP_GROUPS = YES;
-				SDKROOT = macosx;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = BridgingHeader.h;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
 		CEDA4A84C774AF9709D0DF17 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = XCCONFIG000000000000001 /* CrossPlatform.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MirageTunnel.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -477,11 +483,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@executable_path/../../../../Frameworks",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/release",
-					"$(PROJECT_DIR)/../../target/release",
-					"$(PROJECT_DIR)/../../target/debug",
+					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
 				OTHER_LDFLAGS = (
@@ -491,8 +493,11 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.mciart.mirage.tunnel;
 				PRODUCT_NAME = MirageTunnel;
 				REGISTER_APP_GROUPS = YES;
-				SDKROOT = macosx;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = BridgingHeader.h;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -560,6 +565,7 @@
 		};
 		F892431146CEB0352DEBF2E2 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = XCCONFIG000000000000001 /* CrossPlatform.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MirageApp.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -569,15 +575,13 @@
 				INFOPLIST_FILE = "MirageApp-Info.plist";
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
-				INFOPLIST_KEY_CFBundleIconFile = Mirage;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/../../target/release",
-					"$(PROJECT_DIR)/../../target/debug",
+					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
 				OTHER_LDFLAGS = (
@@ -587,8 +591,11 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.mciart.mirage;
 				PRODUCT_NAME = Mirage;
 				REGISTER_APP_GROUPS = YES;
-				SDKROOT = macosx;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = BridgingHeader.h;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
