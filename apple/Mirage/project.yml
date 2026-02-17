@@ -1,0 +1,74 @@
+name: Mirage
+options:
+  bundleIdPrefix: com.mciart.mirage
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+
+targets:
+  Mirage:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/MirageApp
+      - path: Sources/Shared
+    dependencies:
+      - target: MirageTunnel
+      - sdk: NetworkExtension.framework
+      - sdk: Security.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mciart.mirage
+        INFOPLIST_KEY_CFBundleDisplayName: Mirage
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        CODE_SIGN_ENTITLEMENTS: MirageApp.entitlements
+        PRODUCT_NAME: Mirage
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: true
+        SWIFT_OBJC_BRIDGING_HEADER: BridgingHeader.h
+        LIBRARY_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/../../target/release"
+          - "$(PROJECT_DIR)/../../target/debug"
+        HEADER_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/../../mirage-ffi/include"
+        OTHER_LDFLAGS:
+          - "-lmirage_ffi"
+          - "-lresolv"
+
+  MirageTunnel:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Sources/MirageTunnel
+      - path: Sources/Shared
+      - path: Sources/MirageApp/Managers/MirageBridge.swift
+    dependencies:
+      - sdk: NetworkExtension.framework
+      - sdk: Security.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mciart.mirage.tunnel
+        INFOPLIST_KEY_CFBundleDisplayName: MirageTunnel
+        CODE_SIGN_ENTITLEMENTS: MirageTunnel.entitlements
+        PRODUCT_NAME: MirageTunnel
+        GENERATE_INFOPLIST_FILE: true
+        SWIFT_OBJC_BRIDGING_HEADER: BridgingHeader.h
+        LIBRARY_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/../../target/release"
+          - "$(PROJECT_DIR)/../../target/debug"
+        HEADER_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/../../mirage-ffi/include"
+        OTHER_LDFLAGS:
+          - "-lmirage_ffi"
+          - "-lresolv"
+    info:
+      path: MirageTunnel-Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
