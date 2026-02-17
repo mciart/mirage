@@ -79,7 +79,15 @@ struct TunnelDetailView: View {
             Toggle(
                 isOn: Binding(
                     get: { isThisTunnelActive && vpn.isActive },
-                    set: { _ in toggleConnection() }
+                    set: { newValue in
+                        // Only act when user's intent differs from current state.
+                        // SwiftUI also calls set() to reconcile after external state changes
+                        // (e.g., extension crash → get flips to false → set(false) fires).
+                        // This guard prevents that phantom re-trigger.
+                        let current = isThisTunnelActive && vpn.isActive
+                        guard newValue != current else { return }
+                        toggleConnection()
+                    }
                 )
             ) {
                 EmptyView()

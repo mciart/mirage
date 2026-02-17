@@ -28,7 +28,16 @@ class VPNManager {
 
     // MARK: - Connect / Disconnect
 
+    /// Prevents re-entry. @ObservationIgnored so it NEVER triggers SwiftUI re-renders.
+    @ObservationIgnored private var _connectLock = false
+
     func connect(tunnel: TunnelConfig) async throws {
+        guard !_connectLock else {
+            NSLog("[Mirage] connect() BLOCKED by _connectLock")
+            return
+        }
+        _connectLock = true
+
         NSLog("[Mirage] connect() called for tunnel: %@", tunnel.name)
         statusMessage = nil
 
@@ -58,9 +67,11 @@ class VPNManager {
             NSLog("[Mirage] startVPNTunnel() called successfully")
             self.connectedTunnelID = tunnel.id
             observeStatus(manager)
+            // _connectLock stays true — cleared by observeStatus on .connected or .disconnected
         } catch {
             NSLog("[Mirage] Connection error: %@", error.localizedDescription)
             self.statusMessage = error.localizedDescription
+            _connectLock = false
             throw error
         }
     }
@@ -71,9 +82,13 @@ class VPNManager {
     }
 
     func toggle(tunnel: TunnelConfig) async throws {
+        guard !_connectLock else {
+            NSLog("[Mirage] toggle() BLOCKED by _connectLock")
+            return
+        }
         if connectedTunnelID == tunnel.id && status != .disconnected {
             disconnect()
-        } else {
+        } else if status == .disconnected {
             try await connect(tunnel: tunnel)
         }
     }
@@ -147,17 +162,24 @@ class VPNManager {
             object: manager.connection,
             queue: .main
         ) { [weak self] _ in
-            self?.status = manager.connection.status
-            if manager.connection.status == .disconnected {
+            let newStatus = manager.connection.status
+            NSLog("[Mirage] Status changed: %d", newStatus.rawValue)
+            self?.status = newStatus
+            if newStatus == .disconnected {
                 self?.connectedTunnelID = nil
                 self?.stopMetricsPolling()
-            } else if manager.connection.status == .connected {
+                self?._connectLock = false
+            } else if newStatus == .connected {
                 self?.startMetricsPolling()
+                self?._connectLock = false
             }
         }
         self.status = manager.connection.status
         if status == .connected {
             startMetricsPolling()
+            _connectLock = false
+        } else if status == .disconnected {
+            _connectLock = false
         }
     }
 

@@ -98,7 +98,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             onPacketWrite: { [weak self] data in
                 // Rust → TUN: write decrypted packet to the system virtual interface
                 packetsFromRust += 1
-                if packetsFromRust <= 5 || packetsFromRust % 100 == 0 {
+                if packetsFromRust <= 3 || packetsFromRust % 1000 == 0 {
                     NSLog("[MirageTunnel] 📥 Rust→TUN packet #%d (%d bytes)", packetsFromRust, data.count)
                 }
                 // Detect IPv4 vs IPv6 from IP header version field
@@ -118,7 +118,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     // Rust connected! Apply NE settings (already built from onTunnelConfig)
                     // and tell the system the tunnel is up.
                     guard let self else { return }
-                    guard let settings = self.pendingSettings else {
+                    guard self.pendingSettings != nil else {
                         NSLog("[MirageTunnel] ⚠️ Connected but no tunnel config received — using fallback")
                         // Fallback: use TOML-based settings
                         let fallbackSettings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: serverIP)
@@ -156,11 +156,46 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
                 let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: serverIP)
 
-                // IPv4 — use /32 mask (255.255.255.255) to avoid creating a connected route
-                // for the VPN subnet. With /24, same-subnet IPs (e.g. 10.9.8.7) trigger ARP
-                // on utun instead of routing through the tunnel.
+                // IPv4 — use /32 mask to avoid creating a connected route for the VPN subnet
                 let ipv4 = NEIPv4Settings(addresses: [clientAddr], subnetMasks: ["255.255.255.255"])
-                ipv4.includedRoutes = [NEIPv4Route.default()]
+
+                // Build routes from server config
+                var ipv4Routes: [NEIPv4Route] = []
+                var ipv6Routes: [NEIPv6Route] = []
+                for route in config.routes {
+                    let parts = route.split(separator: "/")
+                    guard let dest = parts.first.map(String.init),
+                          let prefix = parts.last.flatMap({ Int($0) })
+                    else { continue }
+
+                    if dest.contains(":") {
+                        ipv6Routes.append(NEIPv6Route(
+                            destinationAddress: dest,
+                            networkPrefixLength: prefix as NSNumber
+                        ))
+                    } else {
+                        let mask = prefix == 0 ? UInt32(0) : ~UInt32(0) << (32 - prefix)
+                        let maskStr = "\((mask >> 24) & 0xFF).\((mask >> 16) & 0xFF).\((mask >> 8) & 0xFF).\(mask & 0xFF)"
+                        ipv4Routes.append(NEIPv4Route(
+                            destinationAddress: dest,
+                            subnetMask: maskStr
+                        ))
+                    }
+                }
+                if ipv4Routes.isEmpty { ipv4Routes.append(NEIPv4Route.default()) }
+
+                // Apple NE converts 0.0.0.0/0 to split routes that EXCLUDE the local
+                // subnet's parent range (e.g., entire 10.0.0.0/8 when LAN is 10.0.0.x).
+                // Add explicit private-range routes so VPN-subnet IPs route through tunnel.
+                let privateRanges: [(String, String)] = [
+                    ("10.0.0.0", "255.0.0.0"),       // 10.0.0.0/8
+                    ("172.16.0.0", "255.240.0.0"),    // 172.16.0.0/12
+                    ("192.168.0.0", "255.255.0.0"),   // 192.168.0.0/16
+                ]
+                for (dest, mask) in privateRanges {
+                    ipv4Routes.append(NEIPv4Route(destinationAddress: dest, subnetMask: mask))
+                }
+                ipv4.includedRoutes = ipv4Routes
                 settings.ipv4Settings = ipv4
 
                 // IPv6
@@ -169,7 +204,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     let v6Host = v6Addr.split(separator: "/").first.map(String.init) ?? v6Addr
                     let v6Prefix = v6Addr.split(separator: "/").last.flatMap { Int($0) } ?? 64
                     let ipv6 = NEIPv6Settings(addresses: [v6Host], networkPrefixLengths: [v6Prefix as NSNumber])
-                    ipv6.includedRoutes = [NEIPv6Route.default()]
+                    if ipv6Routes.isEmpty { ipv6Routes.append(NEIPv6Route.default()) }
+                    ipv6.includedRoutes = ipv6Routes
                     settings.ipv6Settings = ipv6
                 }
 
@@ -257,7 +293,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         packetFlow.readPackets { [weak self] packets, protocols in
             guard let self, let bridge = self.bridge else { return }
             self.packetsToRust += packets.count
-            if self.packetsToRust <= 5 || self.packetsToRust % 100 == 0 {
+            if self.packetsToRust <= 3 || self.packetsToRust % 1000 == 0 {
                 NSLog("[MirageTunnel] 📤 TUN→Rust: %d packets (total: %d)", packets.count, self.packetsToRust)
             }
             for packet in packets {
@@ -292,13 +328,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return String(cString: buf)
     }
 
-    /// Convert CIDR notation "10.9.8.17/24" to subnet mask "255.255.255.0"
-    private func cidrToSubnetMask(_ cidr: String) -> String? {
-        let parts = cidr.split(separator: "/")
-        guard parts.count == 2, let prefix = Int(parts[1]), prefix >= 0, prefix <= 32 else { return nil }
-        let mask = prefix == 0 ? UInt32(0) : ~UInt32(0) << (32 - prefix)
-        return "\((mask >> 24) & 0xFF).\((mask >> 16) & 0xFF).\((mask >> 8) & 0xFF).\(mask & 0xFF)"
-    }
 
     /// Quick TOML key-value parser
     private func parseTOML(_ content: String) -> [String: String] {

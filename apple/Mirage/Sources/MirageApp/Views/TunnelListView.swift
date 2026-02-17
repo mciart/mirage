@@ -7,6 +7,9 @@ struct TunnelListView: View {
     @Binding var selectedTunnel: TunnelConfig?
     var onImport: () -> Void
 
+    @State private var renamingTunnel: TunnelConfig?
+    @State private var renameText = ""
+
     var body: some View {
         List(selection: $selectedTunnel) {
             ForEach(store.tunnels) { tunnel in
@@ -16,9 +19,22 @@ struct TunnelListView: View {
                     isConnecting: vpn.connectedTunnelID == tunnel.id && vpn.isConnecting
                 )
                 .tag(tunnel)
+                .contextMenu {
+                    Button("Rename…") {
+                        renameText = tunnel.name
+                        renamingTunnel = tunnel
+                    }
+                    Divider()
+                    Button("Delete", role: .destructive) {
+                        if tunnel.id == vpn.connectedTunnelID { vpn.disconnect() }
+                        store.remove(tunnel)
+                        if selectedTunnel?.id == tunnel.id {
+                            selectedTunnel = store.tunnels.first
+                        }
+                    }
+                }
             }
             .onDelete { offsets in
-                // Disconnect if deleting active tunnel
                 for i in offsets {
                     if store.tunnels[i].id == vpn.connectedTunnelID {
                         vpn.disconnect()
@@ -35,6 +51,25 @@ struct TunnelListView: View {
             bottomBar
         }
         .navigationTitle("Tunnels")
+        .alert("Rename Tunnel", isPresented: Binding(
+            get: { renamingTunnel != nil },
+            set: { if !$0 { renamingTunnel = nil } }
+        )) {
+            TextField("Name", text: $renameText)
+            Button("Cancel", role: .cancel) { renamingTunnel = nil }
+            Button("Rename") {
+                if var tunnel = renamingTunnel, !renameText.isEmpty {
+                    tunnel.name = renameText
+                    store.update(tunnel)
+                    if selectedTunnel?.id == tunnel.id {
+                        selectedTunnel = tunnel
+                    }
+                }
+                renamingTunnel = nil
+            }
+        } message: {
+            Text("Enter a new name for this tunnel.")
+        }
     }
 
     private var bottomBar: some View {
