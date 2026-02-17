@@ -2,10 +2,87 @@
 // Integrates with the Rust core via MirageBridge (libmirage_ffi)
 import NetworkExtension
 
+// MARK: - Packet Write Buffer (batches downlink packets to reduce memory pressure)
+
+/// Accumulates packets from Rust callbacks and flushes them in batches
+/// to `packetFlow.writePackets()`. This is critical on iOS where Network Extensions
+/// have a strict ~15MB memory limit — per-packet allocation causes OOM during speedtest.
+private final class PacketWriteBuffer {
+    private let lock = NSLock()
+    private var packets: [Data] = []
+    private var protocols: [NSNumber] = []
+    private let maxBatch = 64
+    private weak var provider: PacketTunnelProvider?
+    private var flushTimer: DispatchSourceTimer?
+    private let timerQueue = DispatchQueue(label: "com.mciart.mirage.flush", qos: .userInteractive)
+
+    init(provider: PacketTunnelProvider) {
+        self.provider = provider
+        packets.reserveCapacity(maxBatch)
+        protocols.reserveCapacity(maxBatch)
+
+        // 1ms flush deadline — don't hold packets too long
+        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
+        timer.schedule(deadline: .now() + .milliseconds(1), repeating: .milliseconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.flush()
+        }
+        timer.resume()
+        self.flushTimer = timer
+    }
+
+    deinit {
+        flushTimer?.cancel()
+    }
+
+    /// Adds a packet to the buffer; flushes if buffer is full
+    func append(_ data: Data) {
+        let proto: NSNumber
+        if let firstByte = data.first {
+            let version = (firstByte >> 4) & 0x0F
+            proto = (version == 6) ? NSNumber(value: AF_INET6) : NSNumber(value: AF_INET)
+        } else {
+            proto = NSNumber(value: AF_INET)
+        }
+
+        lock.lock()
+        packets.append(data)
+        protocols.append(proto)
+        let shouldFlush = packets.count >= maxBatch
+        lock.unlock()
+
+        if shouldFlush {
+            flush()
+        }
+    }
+
+    /// Flushes buffered packets to packetFlow
+    func flush() {
+        lock.lock()
+        guard !packets.isEmpty else {
+            lock.unlock()
+            return
+        }
+        let batch = packets
+        let protos = protocols
+        packets = []
+        protocols = []
+        packets.reserveCapacity(maxBatch)
+        protocols.reserveCapacity(maxBatch)
+        lock.unlock()
+
+        provider?.packetFlow.writePackets(batch, withProtocols: protos)
+    }
+}
+
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private var bridge: MirageBridge?
+    /// Batched packet writer for downlink (Rust → TUN)
+    private var writeBuffer: PacketWriteBuffer?
     /// Server-assigned NE settings, populated by onTunnelConfig before completionHandler
     private var pendingSettings: NEPacketTunnelNetworkSettings?
+    /// Memory monitoring timer
+    private var memoryTimer: DispatchSourceTimer?
 
     override func startTunnel(
         options: [String: NSObject]?,
@@ -94,15 +171,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         bridge.start(
             onPacketWrite: { [weak self] data in
-                guard let self else { return }
-                let proto: NSNumber
-                if let firstByte = data.first {
-                    let version = (firstByte >> 4) & 0x0F
-                    proto = (version == 6) ? NSNumber(value: AF_INET6) : NSNumber(value: AF_INET)
-                } else {
-                    proto = NSNumber(value: AF_INET)
-                }
-                self.packetFlow.writePackets([data], withProtocols: [proto])
+                self?.writeBuffer?.append(data)
             },
             onStatusChange: { [weak self] status, message in
                 NSLog("[MirageTunnel] 🔄 Rust status: %@ - %@", status.displayName, message ?? "")
@@ -233,8 +302,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
             NSLog("[MirageTunnel] ✅ Network settings applied — tunnel is UP")
-            self?.connectedAt = Date()
-            self?.startReadingPackets()
+            guard let self else { completeOnce(nil); return }
+            self.connectedAt = Date()
+            self.writeBuffer = PacketWriteBuffer(provider: self)
+            self.startReadingPackets()
+            self.startMemoryMonitoring()
             completeOnce(nil)
         }
     }
@@ -244,6 +316,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         completionHandler: @escaping () -> Void
     ) {
         NSLog("[MirageTunnel] stopTunnel called (reason: %d)", reason.rawValue)
+        memoryTimer?.cancel()
+        memoryTimer = nil
+        writeBuffer?.flush()
+        writeBuffer = nil
         bridge?.stop()
         bridge = nil
         completionHandler()
@@ -307,6 +383,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             self.startReadingPackets()
         }
+    }
+
+    // MARK: - Memory Monitoring
+
+    /// Periodically logs available memory to help diagnose Extension OOM kills.
+    /// iOS Network Extensions have ~15MB limit; exceeding it causes silent termination.
+    private func startMemoryMonitoring() {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + 10, repeating: 10)
+        timer.setEventHandler {
+            let available = os_proc_available_memory()
+            let availMB = Double(available) / 1_048_576.0
+            NSLog("[MirageTunnel] 📊 Memory: %.1f MB available", availMB)
+            if availMB < 5.0 {
+                NSLog("[MirageTunnel] ⚠️ LOW MEMORY WARNING: %.1f MB remaining!", availMB)
+            }
+        }
+        timer.resume()
+        self.memoryTimer = timer
     }
 
     // MARK: - Helpers
