@@ -1,5 +1,5 @@
 [workspace]
-members = ["mirage", "mirage-gui", "mirage-tests"]
+members = ["mirage", "mirage-gui", "mirage-ffi", "mirage-tests"]
 resolver = "2"
 
 [workspace.package]

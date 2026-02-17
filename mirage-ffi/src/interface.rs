@@ -1,0 +1,191 @@
+//! Apple platform `InterfaceIO` implementation.
+//!
+//! Instead of creating a real TUN device (which requires root on macOS and is impossible on iOS),
+//! this implementation uses callbacks to exchange packets with Swift's
+//! `NEPacketTunnelProvider.packetFlow`. Routes and DNS are no-ops because Apple's
+//! `NEPacketTunnelNetworkSettings` handles them declaratively.
+//!
+//! # Thread-local initialization
+//!
+//! Because `MirageClient::start<I: InterfaceIO>()` creates the interface internally via
+//! `I::create_interface()` (a static method), we use a global state holder to pass the FFI
+//! callbacks and packet channel receiver to the `create_interface` call. The flow is:
+//!
+//! 1. `MirageRuntime::start()` stores callbacks + channel in `APPLE_IO_INIT`
+//! 2. `MirageClient::start::<AppleInterfaceIO, _>()` calls `AppleInterfaceIO::create_interface()`
+//! 3. `create_interface()` takes the init state from `APPLE_IO_INIT`
+//! 4. The `AppleInterfaceIO` instance is ready to exchange packets via callbacks
+
+use std::ffi::c_void;
+use std::net::IpAddr;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex as StdMutex};
+
+use ipnet::IpNet;
+use tokio::sync::mpsc;
+use tracing::debug;
+
+use mirage::network::interface::InterfaceIO;
+use mirage::network::packet::Packet;
+use mirage::Result;
+
+use crate::runtime::MirageMetricsInner;
+use crate::types::MiragePacketWriteCallback;
+
+/// Global init state for passing FFI params into `create_interface()`.
+static APPLE_IO_INIT: StdMutex<Option<AppleIOInit>> = StdMutex::new(None);
+
+/// Initialization parameters consumed by `create_interface()`.
+pub(crate) struct AppleIOInit {
+    pub write_cb: MiragePacketWriteCallback,
+    pub context: *mut c_void,
+    pub packet_rx: mpsc::Receiver<Vec<u8>>,
+    pub metrics: Arc<MirageMetricsInner>,
+}
+
+// Safety: The context pointer lifetime is managed by Swift caller.
+unsafe impl Send for AppleIOInit {}
+
+/// Sets the init state before calling `MirageClient::start()`.
+pub(crate) fn set_init_state(init: AppleIOInit) {
+    let mut guard = APPLE_IO_INIT.lock().expect("APPLE_IO_INIT poisoned");
+    *guard = Some(init);
+}
+
+/// A virtual TUN interface that bridges Rust ↔ Swift via callbacks and channels.
+///
+/// - **Outbound (Rust → TUN → Swift)**: Calls `write_cb` to deliver packets to
+///   `packetFlow.writePackets()`
+/// - **Inbound (Swift → TUN → Rust)**: Receives packets via `packet_rx` channel,
+///   fed by `mirage_send_packet()` from Swift's `packetFlow.readPackets()` loop
+pub struct AppleInterfaceIO {
+    /// Callback to write packets out to Swift (Rust → Swift)
+    write_cb: MiragePacketWriteCallback,
+    /// Opaque Swift context pointer (passed to callbacks)
+    context: *mut c_void,
+    /// Receiver for packets from Swift (Swift → Rust)
+    packet_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>>,
+    /// Interface MTU
+    mtu: u16,
+    /// Shared metrics counters
+    metrics: Arc<MirageMetricsInner>,
+}
+
+// Safety: The context pointer is managed by the Swift caller who guarantees its lifetime.
+unsafe impl Send for AppleInterfaceIO {}
+unsafe impl Sync for AppleInterfaceIO {}
+
+impl InterfaceIO for AppleInterfaceIO {
+    /// Creates the virtual interface by consuming the init state set by `set_init_state()`.
+    fn create_interface(
+        _interface_address: IpNet,
+        _interface_address_v6: Option<IpNet>,
+        mtu: u16,
+        _tunnel_gateway: Option<IpAddr>,
+        _interface_name: Option<&str>,
+        _routes: Option<&[IpNet]>,
+        _dns_servers: Option<&[IpAddr]>,
+    ) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        let init = APPLE_IO_INIT
+            .lock()
+            .expect("APPLE_IO_INIT poisoned")
+            .take()
+            .ok_or_else(|| {
+                mirage::MirageError::system(
+                    "AppleInterfaceIO init state not set — call set_init_state() before start()",
+                )
+            })?;
+
+        debug!("AppleInterfaceIO: created virtual interface (mtu={})", mtu);
+
+        Ok(Self {
+            write_cb: init.write_cb,
+            context: init.context,
+            packet_rx: Arc::new(tokio::sync::Mutex::new(init.packet_rx)),
+            mtu,
+            metrics: init.metrics,
+        })
+    }
+
+    /// No-op: routes are configured by Swift via `NEPacketTunnelNetworkSettings`.
+    fn configure_routes(
+        &self,
+        _routes: &[IpNet],
+        _gateway_v4: Option<IpAddr>,
+        _gateway_v6: Option<IpAddr>,
+    ) -> Result<()> {
+        debug!(
+            "AppleInterfaceIO: configure_routes (no-op, handled by NEPacketTunnelNetworkSettings)"
+        );
+        Ok(())
+    }
+
+    /// No-op: DNS is configured by Swift via `NEPacketTunnelNetworkSettings`.
+    fn configure_dns(&self, _dns_servers: &[IpAddr]) -> Result<()> {
+        debug!("AppleInterfaceIO: configure_dns (no-op, handled by NEPacketTunnelNetworkSettings)");
+        Ok(())
+    }
+
+    /// No-op: route cleanup is managed by the system when the tunnel stops.
+    fn cleanup_routes(&self, _routes: &[IpNet]) -> Result<()> {
+        Ok(())
+    }
+
+    /// No-op: DNS cleanup is managed by the system when the tunnel stops.
+    fn cleanup_dns(&self, _dns_servers: &[IpAddr]) -> Result<()> {
+        Ok(())
+    }
+
+    /// No-op: the Network Extension manages the interface lifecycle.
+    fn down(&self) -> Result<()> {
+        debug!("AppleInterfaceIO: down (no-op)");
+        Ok(())
+    }
+
+    fn mtu(&self) -> u16 {
+        self.mtu
+    }
+
+    fn name(&self) -> Option<String> {
+        Some("utun-mirage".to_string())
+    }
+
+    /// Reads a packet from the Swift side (via mpsc channel).
+    /// Swift calls `mirage_send_packet()` → channel → this function.
+    async fn read_packet(&self) -> Result<Packet> {
+        let mut rx = self.packet_rx.lock().await;
+        match rx.recv().await {
+            Some(data) => {
+                self.metrics
+                    .packets_received
+                    .fetch_add(1, Ordering::Relaxed);
+                self.metrics
+                    .bytes_received
+                    .fetch_add(data.len() as u64, Ordering::Relaxed);
+                Ok(Packet::new(bytes::Bytes::from(data)))
+            }
+            None => Err(mirage::MirageError::system(
+                "Packet channel closed (Swift side disconnected)",
+            )),
+        }
+    }
+
+    /// Writes a packet to the Swift side via callback.
+    /// Rust calls this → `write_cb` → Swift `packetFlow.writePackets()`.
+    async fn write_packet(&self, packet: Packet) -> Result<()> {
+        if let Some(cb) = self.write_cb {
+            let data = packet.data.as_ref();
+            self.metrics.packets_sent.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .bytes_sent
+                .fetch_add(data.len() as u64, Ordering::Relaxed);
+            unsafe {
+                cb(data.as_ptr(), data.len(), self.context);
+            }
+        }
+        Ok(())
+    }
+}
