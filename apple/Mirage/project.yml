@@ -2,12 +2,16 @@ name: Mirage
 options:
   bundleIdPrefix: com.mciart.mirage
   deploymentTarget:
-    macOS: "13.0"
+    macOS: "14.0"
   createIntermediateGroups: true
+  generateSchemes: false
 
 settings:
   base:
     SWIFT_VERSION: "5.9"
+    DEVELOPMENT_TEAM: 99MSH62BM8
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "Apple Development"
 
 targets:
   Mirage:
@@ -56,6 +60,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: MirageTunnel
         CODE_SIGN_ENTITLEMENTS: MirageTunnel.entitlements
         PRODUCT_NAME: MirageTunnel
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: 1
         GENERATE_INFOPLIST_FILE: true
         SWIFT_OBJC_BRIDGING_HEADER: BridgingHeader.h
         LIBRARY_SEARCH_PATHS:
@@ -72,3 +78,13 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+
+schemes:
+  Mirage:
+    build:
+      targets:
+        Mirage: all
+        MirageTunnel: all
+    run:
+      config: Debug
+      executable: Mirage

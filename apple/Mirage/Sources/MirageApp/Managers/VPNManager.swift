@@ -24,26 +24,40 @@ class VPNManager {
     // MARK: - Connect / Disconnect
 
     func connect(tunnel: TunnelConfig) async throws {
-        let manager = try await loadOrCreateManager()
+        NSLog("[Mirage] connect() called for tunnel: %@", tunnel.name)
+        statusMessage = nil
 
-        let proto = NETunnelProviderProtocol()
-        proto.providerBundleIdentifier = MirageConstants.tunnelBundleID
-        proto.serverAddress = tunnel.serverDisplay
-        proto.providerConfiguration = [
-            "config_toml": tunnel.tomlContent,
-            "tunnel_id": tunnel.id.uuidString,
-        ]
+        do {
+            let manager = try await loadOrCreateManager()
+            NSLog("[Mirage] Manager loaded/created")
 
-        manager.protocolConfiguration = proto
-        manager.localizedDescription = "Mirage - \(tunnel.name)"
-        manager.isEnabled = true
+            let proto = NETunnelProviderProtocol()
+            proto.providerBundleIdentifier = MirageConstants.tunnelBundleID
+            proto.serverAddress = tunnel.serverDisplay
+            proto.providerConfiguration = [
+                "config_toml": tunnel.tomlContent,
+                "tunnel_id": tunnel.id.uuidString,
+            ]
 
-        try await manager.saveToPreferences()
-        try await manager.loadFromPreferences()
+            manager.protocolConfiguration = proto
+            manager.localizedDescription = "Mirage - \(tunnel.name)"
+            manager.isEnabled = true
 
-        try manager.connection.startVPNTunnel()
-        self.connectedTunnelID = tunnel.id
-        observeStatus(manager)
+            NSLog("[Mirage] Saving to preferences...")
+            try await manager.saveToPreferences()
+            NSLog("[Mirage] Saved. Loading from preferences...")
+            try await manager.loadFromPreferences()
+            NSLog("[Mirage] Loaded. Starting VPN tunnel...")
+
+            try manager.connection.startVPNTunnel()
+            NSLog("[Mirage] startVPNTunnel() called successfully")
+            self.connectedTunnelID = tunnel.id
+            observeStatus(manager)
+        } catch {
+            NSLog("[Mirage] Connection error: %@", error.localizedDescription)
+            self.statusMessage = error.localizedDescription
+            throw error
+        }
     }
 
     func disconnect() {
@@ -65,26 +79,54 @@ class VPNManager {
         Task {
             do {
                 let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-                if let existing = managers.first {
+                NSLog("[Mirage] Found %d existing VPN managers", managers.count)
+                for (i, mgr) in managers.enumerated() {
+                    if let proto = mgr.protocolConfiguration as? NETunnelProviderProtocol {
+                        NSLog("[Mirage] Manager[%d]: bundle=%@, desc=%@", i,
+                              proto.providerBundleIdentifier ?? "nil",
+                              mgr.localizedDescription ?? "nil")
+                    }
+                }
+
+                // Only use managers that belong to us
+                let ours = managers.first { mgr in
+                    (mgr.protocolConfiguration as? NETunnelProviderProtocol)?
+                        .providerBundleIdentifier == MirageConstants.tunnelBundleID
+                }
+                if let existing = ours {
                     self.manager = existing
                     self.status = existing.connection.status
                     observeStatus(existing)
 
-                    // Restore connected tunnel ID
                     if let proto = existing.protocolConfiguration as? NETunnelProviderProtocol,
                        let idStr = proto.providerConfiguration?["tunnel_id"] as? String {
                         self.connectedTunnelID = UUID(uuidString: idStr)
                     }
                 }
             } catch {
-                print("Failed to load VPN managers: \(error)")
+                NSLog("[Mirage] Failed to load VPN managers: %@", error.localizedDescription)
             }
         }
     }
 
     private func loadOrCreateManager() async throws -> NETunnelProviderManager {
         let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-        let mgr = managers.first ?? NETunnelProviderManager()
+        NSLog("[Mirage] loadOrCreate: %d managers found", managers.count)
+
+        // Find our existing manager by providerBundleIdentifier
+        let ours = managers.first { mgr in
+            (mgr.protocolConfiguration as? NETunnelProviderProtocol)?
+                .providerBundleIdentifier == MirageConstants.tunnelBundleID
+        }
+
+        if let existing = ours {
+            NSLog("[Mirage] Reusing existing Mirage VPN manager")
+            self.manager = existing
+            return existing
+        }
+
+        NSLog("[Mirage] Creating new NETunnelProviderManager")
+        let mgr = NETunnelProviderManager()
         self.manager = mgr
         return mgr
     }

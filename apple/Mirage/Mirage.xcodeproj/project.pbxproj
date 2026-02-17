@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -232,7 +232,16 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					00BEC0B5F47B146B548D92FF = {
+						ProvisioningStyle = Automatic;
+					};
+					B48E88F0AED84BCCAF04F865 = {
+						DevelopmentTeam = 99MSH62BM8;
+						ProvisioningStyle = Automatic;
+					};
+				};
 			};
 			buildConfigurationList = FA753B8BD8333853E63810A1 /* Build configuration list for PBXProject "Mirage" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -244,7 +253,6 @@
 			);
 			mainGroup = CA1F54A8C4CAA0117425397F;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -300,10 +308,9 @@
 				CODE_SIGN_ENTITLEMENTS = MirageApp.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/../../mirage-ffi/include",
-				);
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -321,6 +328,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mciart.mirage;
 				PRODUCT_NAME = Mirage;
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = BridgingHeader.h;
 			};
@@ -359,10 +367,15 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 99MSH62BM8;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -377,12 +390,13 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.9;
@@ -394,10 +408,11 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MirageTunnel.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 99MSH62BM8;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/../../mirage-ffi/include",
-				);
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_FILE = "MirageTunnel-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = MirageTunnel;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -409,12 +424,14 @@
 					"$(PROJECT_DIR)/../../target/release",
 					"$(PROJECT_DIR)/../../target/debug",
 				);
+				MARKETING_VERSION = 1.0.0;
 				OTHER_LDFLAGS = (
 					"-lmirage_ffi",
 					"-lresolv",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mciart.mirage.tunnel;
 				PRODUCT_NAME = MirageTunnel;
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = BridgingHeader.h;
 			};
@@ -425,10 +442,11 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MirageTunnel.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 99MSH62BM8;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/../../mirage-ffi/include",
-				);
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_FILE = "MirageTunnel-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = MirageTunnel;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -440,12 +458,14 @@
 					"$(PROJECT_DIR)/../../target/release",
 					"$(PROJECT_DIR)/../../target/debug",
 				);
+				MARKETING_VERSION = 1.0.0;
 				OTHER_LDFLAGS = (
 					"-lmirage_ffi",
 					"-lresolv",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mciart.mirage.tunnel;
 				PRODUCT_NAME = MirageTunnel;
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = BridgingHeader.h;
 			};
@@ -484,10 +504,15 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 99MSH62BM8;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -496,11 +521,12 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.9;
@@ -514,10 +540,9 @@
 				CODE_SIGN_ENTITLEMENTS = MirageApp.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/../../mirage-ffi/include",
-				);
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -535,6 +560,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mciart.mirage;
 				PRODUCT_NAME = Mirage;
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = BridgingHeader.h;
 			};

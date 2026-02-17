@@ -5,6 +5,8 @@ import NetworkExtension
 struct TunnelDetailView: View {
     @Environment(VPNManager.self) private var vpn
     let tunnel: TunnelConfig
+    @State private var errorMessage: String?
+    @State private var showError = false
 
     private var isThisTunnelActive: Bool {
         vpn.connectedTunnelID == tunnel.id
@@ -35,6 +37,11 @@ struct TunnelDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(.windowBackgroundColor))
+        .alert("Connection Error", isPresented: $showError) {
+            Button("OK") { }
+        } message: {
+            Text(errorMessage ?? "Unknown error")
+        }
     }
 
     // MARK: - Header
@@ -141,7 +148,9 @@ struct TunnelDetailView: View {
             do {
                 try await vpn.toggle(tunnel: tunnel)
             } catch {
-                print("VPN toggle failed: \(error)")
+                NSLog("[Mirage] Toggle error: %@", error.localizedDescription)
+                errorMessage = error.localizedDescription
+                showError = true
             }
         }
     }

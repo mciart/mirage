@@ -64,7 +64,7 @@ final class MirageBridge {
             // write_cb: Rust → Swift packet delivery
             { dataPtr, len, context in
                 guard let dataPtr, let context else { return }
-                let data = Data(bytes: dataPtr, count: len)
+                let data = Data(bytes: dataPtr, count: Int(len))
                 let ctx = Unmanaged<CallbackContext>.fromOpaque(context).takeUnretainedValue()
                 ctx.onPacketWrite(data)
             },
@@ -94,7 +94,7 @@ final class MirageBridge {
             guard let ptr = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
                 return false
             }
-            return mirage_send_packet(handle, ptr, buffer.count)
+            return mirage_send_packet(handle, ptr, UInt(buffer.count))
         }
     }
 
