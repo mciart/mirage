@@ -126,7 +126,6 @@ struct TunnelRow: View {
             }
         }
         .padding(.vertical, 2)
-        .drawingGroup()
     }
 
     private var statusColor: Color {

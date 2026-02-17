@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0A1B2C3D4E5F6A7B8C9D0E1F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FA /* Assets.xcassets */; };
+		B2C3D4E5F6A7B8C9D0E1F2A3 /* Mirage.icns in Resources */ = {isa = PBXBuildFile; fileRef = C3D4E5F6A7B8C9D0E1F2A3B4 /* Mirage.icns */; };
 		019CB2EA5318801793377D25 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 378C47EABCC4386F27A00398 /* Constants.swift */; };
 		11E7F3B13655B1ED2BE9ED26 /* TunnelConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 337B00D8AFC5E9BC473289CB /* TunnelConfig.swift */; };
 		2B7071FD69861C79FA97F09E /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 809B5D6DBA2FE9D606F3E9E4 /* Security.framework */; };
@@ -52,6 +54,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A1B2C3D4E5F6A7B8C9D0E1FA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C3D4E5F6A7B8C9D0E1F2A3B4 /* Mirage.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Mirage.icns; sourceTree = "<group>"; };
 		1F1B24601B3BA9FBB7FA9EBA /* Mirage.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mirage.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2137575B7D2C056A9CB676B6 /* MirageTunnel.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MirageTunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		24D0318169394E19BD9B6A47 /* VPNManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VPNManager.swift; sourceTree = "<group>"; };
@@ -103,6 +107,8 @@
 		21A32C13E0AFDDCC6D54B568 /* MirageApp */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F6A7B8C9D0E1FA /* Assets.xcassets */,
+				C3D4E5F6A7B8C9D0E1F2A3B4 /* Mirage.icns */,
 				EE02568E93053F434F591C23 /* MirageApp.swift */,
 				6A03A47A577792BD0F674DE6 /* Managers */,
 				9198639EC407B29742DDE770 /* Models */,
@@ -210,6 +216,7 @@
 			buildConfigurationList = FE72F8760A20C3845CB01CE3 /* Build configuration list for PBXNativeTarget "Mirage" */;
 			buildPhases = (
 				454DA222E1FEEBC5F51C41C4 /* Sources */,
+				E1F2A3B4C5D6E7F8A9B0C1D2 /* Resources */,
 				D685DA08310A8C12F6E29BB0 /* Frameworks */,
 				AD7B2684D149D719DF1528B1 /* Embed Foundation Extensions */,
 			);
@@ -263,6 +270,18 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		E1F2A3B4C5D6E7F8A9B0C1D2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0A1B2C3D4E5F6A7B8C9D0E1F /* Assets.xcassets in Resources */,
+				B2C3D4E5F6A7B8C9D0E1F2A3 /* Mirage.icns in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		454DA222E1FEEBC5F51C41C4 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -305,7 +324,6 @@
 		79C1EAB9F8AFBD873672F40F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = MirageApp.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -313,6 +331,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
+				INFOPLIST_KEY_CFBundleIconFile = Mirage;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -541,7 +560,6 @@
 		F892431146CEB0352DEBF2E2 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = MirageApp.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -549,6 +567,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
+				INFOPLIST_KEY_CFBundleIconFile = Mirage;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

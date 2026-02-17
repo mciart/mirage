@@ -5,6 +5,7 @@ import NetworkExtension
 struct MenuBarView: View {
     @Environment(TunnelStore.self) private var store
     @Environment(VPNManager.self) private var vpn
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,6 +28,12 @@ struct MenuBarView: View {
             }
 
             Divider()
+
+            Button("Show Window") {
+                NSApplication.shared.setActivationPolicy(.regular)
+                openWindow(id: "main")
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
 
             Button("Quit Mirage") {
                 vpn.disconnect()
