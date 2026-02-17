@@ -329,6 +329,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "MirageApp-Info.plist";
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
 				INFOPLIST_KEY_CFBundleIconFile = Mirage;
@@ -565,6 +566,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "MirageApp-Info.plist";
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
 				INFOPLIST_KEY_CFBundleIconFile = Mirage;
