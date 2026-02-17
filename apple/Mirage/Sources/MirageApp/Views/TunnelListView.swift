@@ -112,19 +112,21 @@ struct TunnelRow: View {
             Circle()
                 .fill(statusColor)
                 .frame(width: 8, height: 8)
-                .animation(.easeInOut(duration: 0.3), value: isConnected)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(tunnel.name)
                     .font(.body)
                     .fontWeight(isConnected ? .semibold : .regular)
+                    .lineLimit(1)
 
                 Text(tunnel.serverDisplay)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
         .padding(.vertical, 2)
+        .drawingGroup()
     }
 
     private var statusColor: Color {
