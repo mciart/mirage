@@ -390,6 +390,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// Periodically logs available memory to help diagnose Extension OOM kills.
     /// iOS Network Extensions have ~15MB limit; exceeding it causes silent termination.
     private func startMemoryMonitoring() {
+        #if os(iOS)
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         timer.schedule(deadline: .now() + 10, repeating: 10)
         timer.setEventHandler {
@@ -402,6 +403,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         timer.resume()
         self.memoryTimer = timer
+        #endif
     }
 
     // MARK: - Helpers
