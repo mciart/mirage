@@ -153,19 +153,6 @@ struct TunnelListView: View {
     #endif
 }
 
-// MARK: - Liquid Glass Modifier (iOS 26+)
-
-extension View {
-    @ViewBuilder
-    func liquidGlass() -> some View {
-        if #available(iOS 26.0, macOS 26.0, *) {
-            self.glassEffect(.regular.interactive())
-        } else {
-            self
-        }
-    }
-}
-
 // MARK: - Tunnel Row
 
 struct TunnelRow: View {

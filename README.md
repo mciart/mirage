@@ -1,4 +1,4 @@
-# Mirage
+# Mirage（仍在开发测试中）
 
 [![Crates.io](https://img.shields.io/crates/v/mirage.svg)](https://crates.io/crates/mirage)
 [![Documentation](https://docs.rs/mirage/badge.svg)](https://docs.rs/mirage/)
@@ -56,16 +56,33 @@ TCP 和 QUIC 双协议均具备完整伪装能力，探测者只能看到合法�
 ## 快速开始
 
 ### 支持平台
-- [x] Windows (x86_64) - Wintun
-- [x] Linux (x86_64, aarch64)
-- [x] macOS (aarch64)
-- [x] FreeBSD (x86_64, aarch64)
+
+| 平台 | 架构 | 方式 |
+|------|------|------|
+| Windows | x86_64 | CLI (Wintun) |
+| Linux | x86_64, aarch64 | CLI |
+| macOS | aarch64 (Apple Silicon) | **原生 SwiftUI GUI** + CLI |
+| iOS / iPadOS | aarch64 | **原生 SwiftUI GUI** (Network Extension) |
+| FreeBSD | x86_64, aarch64 | CLI |
 
 ### 编译安装
+
+**CLI (命令行)**:
 
 ```bash
 cargo build --release
 cargo install --path mirage
+```
+
+**macOS / iOS GUI**:
+
+```bash
+# 编译 Rust FFI 库
+cargo build --release --target aarch64-apple-darwin -p mirage-ffi   # macOS
+cargo build --release --target aarch64-apple-ios -p mirage-ffi      # iOS
+
+# 用 Xcode 打开并构建
+open apple/Mirage/Mirage.xcodeproj
 ```
 
 ### 使用
@@ -214,7 +231,8 @@ mirage users --delete users   # 删除用户
 - [x] **Phase 4**: QUIC 传输 (h3 伪装, 0-RTT, Port Hopping)
 - [x] **Phase 5**: 双栈聚合 + 连接轮换
 - [x] **Phase 6**: **JLS 集成** — QUIC 层 Mirage 伪装 (无需证书, 0-RTT, 抗主动探测)
-- [ ] **Phase 7**: CDN 支持 (WebSocket, gRPC)
+- [x] **Phase 7**: **Apple 原生 GUI** — SwiftUI (macOS + iOS/iPadOS) + Network Extension
+- [ ] **Phase 8**: CDN 支持 (WebSocket, gRPC)
 
 ---
 
