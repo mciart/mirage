@@ -1,4 +1,4 @@
 #!/bin/sh
 if [ -z "$SKIP_BUILD" ]; then
-    cargo build --release --all-features --bin quincy-client-gui --bin quincy-client-daemon
+    cargo build --release --all-features --bin mirage-client-gui --bin mirage-client-daemon
 fi

@@ -1,5 +1,5 @@
 if (-not $env:SKIP_BUILD) {
-    cargo build --release --bin quincy-client-gui --bin quincy-client-daemon
+    cargo build --release --bin mirage-client-gui --bin mirage-client-daemon
 }
 
 if (-not $env:SKIP_WINTUN) {
