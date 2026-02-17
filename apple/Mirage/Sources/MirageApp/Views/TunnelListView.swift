@@ -38,7 +38,7 @@ struct TunnelListView: View {
     }
 
     private var bottomBar: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             Button(action: onImport) {
                 Image(systemName: "plus")
             }

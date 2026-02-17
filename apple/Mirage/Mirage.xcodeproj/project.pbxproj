@@ -235,6 +235,7 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					00BEC0B5F47B146B548D92FF = {
+						DevelopmentTeam = 99MSH62BM8;
 						ProvisioningStyle = Automatic;
 					};
 					B48E88F0AED84BCCAF04F865 = {
@@ -410,7 +411,8 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 99MSH62BM8;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_FILE = "MirageTunnel-Info.plist";
@@ -421,6 +423,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/release",
 					"$(PROJECT_DIR)/../../target/release",
 					"$(PROJECT_DIR)/../../target/debug",
 				);
@@ -444,7 +447,8 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 99MSH62BM8;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
 				INFOPLIST_FILE = "MirageTunnel-Info.plist";
@@ -455,6 +459,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/release",
 					"$(PROJECT_DIR)/../../target/release",
 					"$(PROJECT_DIR)/../../target/debug",
 				);

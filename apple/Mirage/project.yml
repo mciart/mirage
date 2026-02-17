@@ -65,6 +65,7 @@ targets:
         GENERATE_INFOPLIST_FILE: true
         SWIFT_OBJC_BRIDGING_HEADER: BridgingHeader.h
         LIBRARY_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/../../target/aarch64-apple-darwin/release"
           - "$(PROJECT_DIR)/../../target/release"
           - "$(PROJECT_DIR)/../../target/debug"
         HEADER_SEARCH_PATHS:

@@ -104,12 +104,35 @@ struct TunnelDetailView: View {
                 GridItem(.flexible()),
                 GridItem(.flexible()),
             ], spacing: 8) {
-                MetricCard(icon: "arrow.up", label: "Sent", value: "—")
-                MetricCard(icon: "arrow.down", label: "Received", value: "—")
-                MetricCard(icon: "clock", label: "Uptime", value: "—")
+                MetricCard(icon: "arrow.up", label: "Sent",
+                           value: Self.formatBytes(vpn.bytesSent))
+                MetricCard(icon: "arrow.down", label: "Received",
+                           value: Self.formatBytes(vpn.bytesReceived))
+                MetricCard(icon: "clock", label: "Uptime",
+                           value: Self.formatUptime(vpn.uptime))
                 MetricCard(icon: "bolt.horizontal", label: "Protocol", value: tunnel.protocols)
             }
         }
+    }
+
+    // MARK: - Formatters
+
+    private static func formatBytes(_ bytes: UInt64) -> String {
+        if bytes == 0 { return "0 B" }
+        let units = ["B", "KB", "MB", "GB"]
+        let exp = min(Int(log(Double(bytes)) / log(1024)), units.count - 1)
+        let val = Double(bytes) / pow(1024, Double(exp))
+        return exp == 0 ? "\(bytes) B" : String(format: "%.1f %@", val, units[exp])
+    }
+
+    private static func formatUptime(_ seconds: Int) -> String {
+        if seconds <= 0 { return "0s" }
+        let h = seconds / 3600
+        let m = (seconds % 3600) / 60
+        let s = seconds % 60
+        if h > 0 { return String(format: "%dh %02dm", h, m) }
+        if m > 0 { return String(format: "%dm %02ds", m, s) }
+        return "\(s)s"
     }
 
     // MARK: - Config Details

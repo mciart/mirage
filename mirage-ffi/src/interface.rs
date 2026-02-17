@@ -32,6 +32,26 @@ use mirage::Result;
 use crate::runtime::MirageMetricsInner;
 use crate::types::MiragePacketWriteCallback;
 
+/// Network config from the server, captured during `create_interface()`.
+#[derive(Debug, Clone)]
+pub(crate) struct TunnelConfigInfo {
+    pub client_address: String,
+    pub client_address_v6: String,
+    pub server_address: String,
+    pub server_address_v6: String,
+    pub mtu: u16,
+    pub dns_servers: Vec<String>,
+    pub routes: Vec<String>,
+}
+
+/// Global state for tunnel config, set during create_interface().
+static TUNNEL_CONFIG_INFO: StdMutex<Option<TunnelConfigInfo>> = StdMutex::new(None);
+
+/// Takes the tunnel config info (consuming it).
+pub(crate) fn take_tunnel_config() -> Option<TunnelConfigInfo> {
+    TUNNEL_CONFIG_INFO.lock().ok()?.take()
+}
+
 /// Global init state for passing FFI params into `create_interface()`.
 static APPLE_IO_INIT: StdMutex<Option<AppleIOInit>> = StdMutex::new(None);
 
@@ -78,13 +98,13 @@ unsafe impl Sync for AppleInterfaceIO {}
 impl InterfaceIO for AppleInterfaceIO {
     /// Creates the virtual interface by consuming the init state set by `set_init_state()`.
     fn create_interface(
-        _interface_address: IpNet,
-        _interface_address_v6: Option<IpNet>,
+        interface_address: IpNet,
+        interface_address_v6: Option<IpNet>,
         mtu: u16,
         _tunnel_gateway: Option<IpAddr>,
         _interface_name: Option<&str>,
-        _routes: Option<&[IpNet]>,
-        _dns_servers: Option<&[IpAddr]>,
+        routes: Option<&[IpNet]>,
+        dns_servers: Option<&[IpAddr]>,
     ) -> Result<Self>
     where
         Self: Sized,
@@ -100,6 +120,25 @@ impl InterfaceIO for AppleInterfaceIO {
             })?;
 
         debug!("AppleInterfaceIO: created virtual interface (mtu={})", mtu);
+
+        // Store server-assigned network config for tunnel_config_cb
+        if let Ok(mut guard) = TUNNEL_CONFIG_INFO.lock() {
+            *guard = Some(TunnelConfigInfo {
+                client_address: interface_address.to_string(),
+                client_address_v6: interface_address_v6
+                    .map(|a| a.to_string())
+                    .unwrap_or_default(),
+                server_address: String::new(), // filled externally if needed
+                server_address_v6: String::new(),
+                mtu,
+                dns_servers: dns_servers
+                    .map(|s| s.iter().map(|a| a.to_string()).collect())
+                    .unwrap_or_default(),
+                routes: routes
+                    .map(|r| r.iter().map(|n| n.to_string()).collect())
+                    .unwrap_or_default(),
+            });
+        }
 
         Ok(Self {
             write_cb: init.write_cb,

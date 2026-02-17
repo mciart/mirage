@@ -13,6 +13,9 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
 use crate::interface::{set_init_state, AppleIOInit, AppleInterfaceIO};
+use crate::types::{
+    copy_str_to_buf, MirageMetrics, MirageStatus, MirageTunnelConfig, MirageTunnelConfigCallback,
+};
 use crate::types::*;
 
 /// Internal state managed by the FFI handle.
@@ -55,6 +58,25 @@ impl Default for MirageMetricsInner {
 impl MirageRuntime {
     /// Creates a new runtime with parsed configuration.
     pub fn new(config: ClientConfig) -> Result<Self, String> {
+        // Initialize tracing subscriber — write to file since stderr is invisible
+        // in sandboxed app extensions. Path comes from Swift via environment variable.
+        let log_dir = std::env::var("MIRAGE_LOG_DIR").unwrap_or_else(|_| "/tmp".to_string());
+        let log_path = format!("{}/mirage_tunnel.log", log_dir);
+        if let Ok(log_file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")),
+                )
+                .with_writer(std::sync::Mutex::new(log_file))
+                .with_ansi(false)
+                .try_init();
+        }
+
         let runtime = Runtime::new().map_err(|e| format!("Failed to create Tokio runtime: {e}"))?;
         Ok(Self {
             runtime,
@@ -104,7 +126,7 @@ impl MirageRuntime {
         &mut self,
         write_cb: MiragePacketWriteCallback,
         status_cb: MirageStatusCallback,
-        _tunnel_config_cb: MirageTunnelConfigCallback,
+        tunnel_config_cb: MirageTunnelConfigCallback,
         context: *mut c_void,
     ) {
         if self.status() != MirageStatus::Disconnected {
@@ -148,13 +170,55 @@ impl MirageRuntime {
         self.runtime.spawn(async move {
             let mut client = MirageClient::new(config);
 
-            let (event_tx, _event_rx) = oneshot::channel::<()>();
+            let (event_tx, event_rx) = oneshot::channel::<()>();
 
             // Start the client with shutdown signal
             // AppleInterfaceIO will be created internally by MirageClient via create_interface()
             let shutdown_future = async {
                 let _ = shutdown_rx.await;
             };
+
+            // Spawn a task to wait for the connection-ready signal
+            let status_clone = status.clone();
+            let ctx_clone = SendPtr(ctx.0);
+            tokio::spawn(async move {
+                if event_rx.await.is_ok() {
+                    // Client connected and relayer started!
+                    // First, fire tunnel_config_cb with server-assigned network config
+                    if let Some(config_cb) = tunnel_config_cb {
+                        if let Some(info) = crate::interface::take_tunnel_config() {
+                            let mut tc = MirageTunnelConfig::empty();
+                            copy_str_to_buf(&info.client_address, &mut tc.client_address);
+                            copy_str_to_buf(&info.client_address_v6, &mut tc.client_address_v6);
+                            copy_str_to_buf(&info.server_address, &mut tc.server_address);
+                            copy_str_to_buf(&info.server_address_v6, &mut tc.server_address_v6);
+                            tc.mtu = info.mtu;
+                            // DNS as JSON array
+                            let dns_json = serde_json::to_string(&info.dns_servers)
+                                .unwrap_or_else(|_| "[]".to_string());
+                            copy_str_to_buf(&dns_json, &mut tc.dns_servers_json);
+                            // Routes as JSON array
+                            let routes_json = serde_json::to_string(&info.routes)
+                                .unwrap_or_else(|_| "[]".to_string());
+                            copy_str_to_buf(&routes_json, &mut tc.routes_json);
+
+                            info!("Sending tunnel config: addr={}, v6={}, mtu={}",
+                                info.client_address, info.client_address_v6, info.mtu);
+                            unsafe { config_cb(&tc, ctx_clone.0); }
+                        }
+                    }
+
+                    // Then fire status_cb(Connected)
+                    status_clone.store(MirageStatus::Connected as u8, Ordering::Relaxed);
+                    report_status_sendptr(
+                        status_cb,
+                        MirageStatus::Connected,
+                        "Connected",
+                        &ctx_clone,
+                    );
+                    info!("VPN connection established successfully");
+                }
+            });
 
             let result = client
                 .start::<AppleInterfaceIO, _>(Some(shutdown_future), Some(event_tx))

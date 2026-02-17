@@ -8,14 +8,19 @@ class VPNManager {
     var status: NEVPNStatus = .disconnected
     var connectedTunnelID: UUID?
     var statusMessage: String?
+    var bytesSent: UInt64 = 0
+    var bytesReceived: UInt64 = 0
+    var uptime: Int = 0
     private var manager: NETunnelProviderManager?
     private var statusObserver: NSObjectProtocol?
+    private var metricsTimer: Timer?
 
     init() {
         loadExistingManager()
     }
 
     deinit {
+        metricsTimer?.invalidate()
         if let observer = statusObserver {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -145,9 +150,51 @@ class VPNManager {
             self?.status = manager.connection.status
             if manager.connection.status == .disconnected {
                 self?.connectedTunnelID = nil
+                self?.stopMetricsPolling()
+            } else if manager.connection.status == .connected {
+                self?.startMetricsPolling()
             }
         }
         self.status = manager.connection.status
+        if status == .connected {
+            startMetricsPolling()
+        }
+    }
+
+    // MARK: - Metrics Polling
+
+    private func startMetricsPolling() {
+        metricsTimer?.invalidate()
+        metricsTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.fetchMetrics()
+        }
+        fetchMetrics() // immediate first fetch
+    }
+
+    private func stopMetricsPolling() {
+        metricsTimer?.invalidate()
+        metricsTimer = nil
+        bytesSent = 0
+        bytesReceived = 0
+        uptime = 0
+    }
+
+    private func fetchMetrics() {
+        guard let session = manager?.connection as? NETunnelProviderSession else { return }
+        do {
+            try session.sendProviderMessage(Data([0x01])) { [weak self] response in
+                guard let data = response,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else { return }
+                DispatchQueue.main.async {
+                    self?.bytesSent = (json["bytes_sent"] as? UInt64) ?? 0
+                    self?.bytesReceived = (json["bytes_received"] as? UInt64) ?? 0
+                    self?.uptime = (json["uptime"] as? Int) ?? 0
+                }
+            }
+        } catch {
+            // Extension not running or IPC failed — ignore
+        }
     }
 
     // MARK: - Helpers
