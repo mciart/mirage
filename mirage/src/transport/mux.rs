@@ -461,35 +461,44 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
 
             match mode {
                 MuxMode::RoundRobin => {
-                    for packet in packets {
-                        // Find the next alive writer
-                        let mut attempts = 0;
-                        loop {
-                            let idx = robin_idx.fetch_add(1, Ordering::Relaxed) % num_writers;
-                            attempts += 1;
-                            if attempts > num_writers {
-                                // All writers exhausted for this packet
-                                warn!("No alive writers for packet, dropping");
+                    // Batch flush: write all packets to the next alive writer, then flush once.
+                    // Per-packet lock→write→flush destroys latency (each flush = TLS record + TCP send).
+                    let mut attempts = 0;
+                    loop {
+                        let idx = robin_idx.fetch_add(1, Ordering::Relaxed) % num_writers;
+                        attempts += 1;
+                        if attempts > num_writers {
+                            warn!(
+                                "No alive writers for batch, dropping {} packets",
+                                packets.len()
+                            );
+                            break;
+                        }
+                        if dead_writers[idx].load(Ordering::Relaxed) {
+                            continue;
+                        }
+
+                        let writer = &writers[idx];
+                        let mut w = writer.lock().await;
+                        let mut ok = true;
+                        for packet in &packets {
+                            if w.send_packet_no_flush(packet).await.is_err() {
+                                ok = false;
                                 break;
                             }
-                            if dead_writers[idx].load(Ordering::Relaxed) {
-                                continue; // Skip dead writer
-                            }
-
-                            let writer = &writers[idx];
-                            let mut w = writer.lock().await;
-                            if let Err(e) = w.send_packet_no_flush(&packet).await {
-                                warn!("Mux writer {} failed, marking dead: {}", idx, e);
-                                dead_writers[idx].store(true, Ordering::Relaxed);
-                                continue;
-                            }
+                        }
+                        if ok {
                             if let Err(e) = w.flush().await {
                                 warn!("Mux writer {} flush failed, marking dead: {}", idx, e);
                                 dead_writers[idx].store(true, Ordering::Relaxed);
                                 continue;
                             }
-                            break; // Successfully sent
+                        } else {
+                            warn!("Mux writer {} failed, marking dead", idx);
+                            dead_writers[idx].store(true, Ordering::Relaxed);
+                            continue;
                         }
+                        break; // Successfully sent batch
                     }
                 }
                 MuxMode::ActiveStandby => {
@@ -541,8 +550,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     let mut w = writer.lock().await;
 
                     // Use timeout to detect truly dead connections.
-                    // 10s is generous to avoid false positives during speed test congestion.
-                    let write_result = tokio::time::timeout(Duration::from_secs(10), async {
+                    // 3s is generous enough to avoid false positives during congestion,
+                    // but short enough to prevent catastrophic latency buildup.
+                    let write_result = tokio::time::timeout(Duration::from_secs(3), async {
                         for packet in &packets {
                             if w.send_packet_no_flush(packet).await.is_err() {
                                 return false;
@@ -560,7 +570,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                         }
                         Err(_) => {
                             warn!(
-                                "Mux active-standby: connection {} write timed out (>10s), marking dead",
+                                "Mux active-standby: connection {} write timed out (>3s), marking dead",
                                 current
                             );
                             true

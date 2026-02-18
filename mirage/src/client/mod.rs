@@ -247,7 +247,12 @@ impl MirageClient {
         let target_parallel_connections = self.config.transport.parallel_connections;
 
         // Determine if we should use the MuxController
-        let use_mux = target_parallel_connections > 1 || self.config.connection.max_lifetime_s > 0;
+        // Only use Mux when we actually have multiple connections.
+        // For single connections, the direct relay path has zero mutex overhead
+        // and dramatically lower latency (no heartbeat lock contention, no channel hops).
+        // Connection rotation for single-connection mode can be handled separately
+        // without the full Mux machinery.
+        let use_mux = target_parallel_connections > 1;
 
         let relayer = if use_mux {
             // --- MuxController Logic ---

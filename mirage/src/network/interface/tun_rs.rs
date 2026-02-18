@@ -215,8 +215,11 @@ impl InterfaceIO for TunRsInterface {
 
     #[inline]
     async fn read_packets(&self) -> Result<Vec<Packet>> {
-        let mtu = self.mtu() as usize;
-        let batch_size = u16::MAX as usize / mtu;
+        // Cap batch size to prevent greedy draining after TCP stalls.
+        // Without this cap, batch_size ≈ 65535/1500 ≈ 43, and after a write stall
+        // we'd read all queued packets at once, creating massive TLS writes that
+        // compound the latency feedback loop.
+        let batch_size = 16;
 
         let mut packets_buf = Vec::with_capacity(batch_size);
 
