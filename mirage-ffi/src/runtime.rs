@@ -91,8 +91,8 @@ impl MirageRuntime {
         // thread to drive tasks (the FFI start() method must return immediately).
         #[cfg(target_os = "ios")]
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_stack_size(1024 * 1024) // 1MB instead of default 2MB
+            .worker_threads(2)
+            .thread_stack_size(512 * 1024) // 512KB × 2 threads = 1MB total (same as before)
             .enable_all()
             .build()
             .map_err(|e| format!("Failed to create Tokio runtime: {e}"))?;

@@ -16,7 +16,6 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
 /// Client relayer that handles packet forwarding between the TUN interface and the TCP/TLS tunnel.
-#[allow(dead_code)]
 pub struct ClientRelayer {
     relayer_task: JoinHandle<Result<()>>,
     shutdown_tx: broadcast::Sender<()>,
@@ -53,7 +52,6 @@ impl ClientRelayer {
     }
 
     /// Send a shutdown signal to the relayer task.
-    #[allow(dead_code)]
     pub async fn stop(&mut self) -> Result<()> {
         // Send shutdown signal to the relayer task
         self.shutdown_tx
@@ -209,158 +207,6 @@ impl ClientRelayer {
                 Err(e) => return Err(e),
             }
         }
-    }
-
-    /// Creates a client relayer with multiple parallel connections for improved throughput.
-    #[allow(dead_code)]
-    pub fn start_pooled<I: InterfaceIO + 'static>(
-        interface: Interface<I>,
-        writers: Vec<
-            crate::transport::framed::FramedWriter<impl AsyncWrite + Unpin + Send + 'static>,
-        >,
-        readers: Vec<
-            crate::transport::framed::FramedReader<impl AsyncRead + Unpin + Send + 'static>,
-        >,
-        obfuscation: crate::config::ObfuscationConfig,
-    ) -> Result<Self> {
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-        let interface = Arc::new(interface);
-
-        let relayer_task = tokio::spawn(Self::relay_packets_pooled(
-            interface.clone(),
-            writers,
-            readers,
-            shutdown_rx,
-            obfuscation,
-        ));
-
-        Ok(Self {
-            relayer_task,
-            shutdown_tx,
-        })
-    }
-
-    /// Relays packets using multiple parallel connections.
-    #[allow(dead_code)]
-    async fn relay_packets_pooled<R, W>(
-        interface: Arc<Interface<impl InterfaceIO>>,
-        writers: Vec<crate::transport::framed::FramedWriter<W>>,
-        readers: Vec<crate::transport::framed::FramedReader<R>>,
-        mut shutdown_rx: broadcast::Receiver<()>,
-        obfuscation: crate::config::ObfuscationConfig,
-    ) -> Result<()>
-    where
-        R: AsyncRead + Unpin + Send + 'static,
-        W: AsyncWrite + Unpin + Send + 'static,
-    {
-        let mut tasks = FuturesUnordered::new();
-        let num_connections = writers.len();
-        info!("Starting pooled relay with {} connections", num_connections);
-
-        // Spawn inbound tasks for all readers (merge traffic from all connections)
-        for (i, reader) in readers.into_iter().enumerate() {
-            let iface = interface.clone();
-            tasks.push(tokio::spawn(async move {
-                debug!("Inbound task {} started", i);
-                Self::process_inbound_traffic(reader, iface).await
-            }));
-        }
-
-        // For outbound traffic, we use a single shared channel and round-robin to writers
-        let jitter_disabled = !obfuscation.enabled
-            || (obfuscation.jitter_max_ms == 0 && obfuscation.padding_probability <= 0.0);
-
-        if jitter_disabled && num_connections == 1 {
-            // Single connection, use simple direct path
-            let mut writers_iter = writers.into_iter();
-            if let Some(writer) = writers_iter.next() {
-                tasks.push(tokio::spawn(Self::process_outgoing_traffic_direct(
-                    writer,
-                    interface.clone(),
-                )));
-            }
-        } else {
-            // Multiple connections: use Active-Standby strategy
-            // Only one connection is used at a time to avoid packet reordering
-            let (packet_tx, mut packet_rx) =
-                tokio::sync::mpsc::channel::<crate::network::packet::Packet>(256);
-
-            // Pump packets from TUN to channel
-            let iface = interface.clone();
-            tasks.push(tokio::spawn(async move {
-                loop {
-                    match iface.read_packets().await {
-                        Ok(packets) => {
-                            for packet in packets {
-                                if packet_tx.send(packet).await.is_err() {
-                                    return Ok(());
-                                }
-                            }
-                        }
-                        Err(e) => return Err(e),
-                    }
-                }
-            }));
-
-            // Active-Standby: use primary writer, switch on error
-            let writers_arc: Arc<tokio::sync::Mutex<Vec<_>>> =
-                Arc::new(tokio::sync::Mutex::new(writers));
-            let active_idx = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-            tasks.push(tokio::spawn(async move {
-                while let Some(packet) = packet_rx.recv().await {
-                    let current_idx = active_idx.load(std::sync::atomic::Ordering::Relaxed);
-                    let mut writers = writers_arc.lock().await;
-                    let writers_count = writers.len();
-
-                    // Try current active connection first
-                    let mut success = false;
-                    if let Some(writer) = writers.get_mut(current_idx) {
-                        if writer.send_packet_no_flush(&packet).await.is_ok()
-                            && writer.flush().await.is_ok()
-                        {
-                            success = true;
-                        }
-                    }
-
-                    // If failed, try next connection (failover)
-                    if !success && writers_count > 1 {
-                        let next_idx = (current_idx + 1) % writers_count;
-                        info!(
-                            "Connection {} failed, switching to connection {}",
-                            current_idx, next_idx
-                        );
-                        active_idx.store(next_idx, std::sync::atomic::Ordering::Relaxed);
-
-                        if let Some(writer) = writers.get_mut(next_idx) {
-                            if let Err(e) = writer.send_packet_no_flush(&packet).await {
-                                debug!("Failover writer {} error: {}", next_idx, e);
-                            }
-                            let _ = writer.flush().await;
-                        }
-                    }
-                }
-                Ok::<(), crate::MirageError>(())
-            }));
-        }
-
-        interface.configure()?;
-
-        let result = tokio::select! {
-             Some(task_result) = tasks.next() => task_result?,
-             _ = shutdown_rx.recv() => {
-                 info!("Received shutdown signal, shutting down pooled relay");
-                 Ok(())
-             },
-             _ = signal::ctrl_c() => {
-                 info!("Received shutdown signal, shutting down pooled relay");
-                 Ok(())
-             },
-        };
-
-        let _ = abort_all(tasks).await;
-
-        result
     }
 
     /// Creates a client relayer backed by the MuxController for XMUX-style multiplexing

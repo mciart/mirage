@@ -4,15 +4,11 @@
 //! stream and provides packet-level read/write operations using length-prefixed
 //! framing. This replaces QUIC datagrams for our TCP/TLS transport.
 //!
-//! ## Compact Frame Format (v2)
+//! ## Frame Format
 //!
-//! Uses variable-length encoding for minimal overhead:
+//! Fixed 3-byte header: `[type: 1 byte] [length: 2 bytes big-endian]`
 //!
-//! | Length Range | Header Size | Format |
-//! |--------------|-------------|--------|
-//! | 0-63 bytes   | 1 byte      | `[TT LL LLLL]` (2 type + 6 length) |
-//! | 64-16383     | 2 bytes     | `[01 TT LLLL] [LLLL LLLL]` |
-//! | 16384+       | 3 bytes     | `[10 TT LLLL] [LLLL LLLL] [LLLL LLLL]` |
+//! Maximum payload: 65535 bytes (u16::MAX).
 
 use crate::constants::MAX_FRAME_SIZE;
 use crate::error::{NetworkError, Result};
@@ -87,7 +83,9 @@ where
     pub fn new(stream: S) -> Self {
         Self {
             stream,
-            read_buffer: BytesMut::with_capacity(MAX_FRAME_SIZE),
+            // VPN packets are typically ≤ MTU (1500). Allocate 2KB initially;
+            // BytesMut will grow if a larger frame arrives (rare).
+            read_buffer: BytesMut::with_capacity(2048),
         }
     }
 
@@ -170,7 +168,7 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
     pub fn new(reader: R) -> Self {
         Self {
             reader,
-            read_buffer: BytesMut::with_capacity(MAX_FRAME_SIZE),
+            read_buffer: BytesMut::with_capacity(2048),
         }
     }
 
@@ -199,9 +197,10 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
     pub fn new(writer: W) -> Self {
         Self {
             writer,
-            padding_buffer: Vec::with_capacity(1024),
-            // Pre-allocate a larger buffer (e.g. 32KB) to hold multiple packets
-            write_buffer: BytesMut::with_capacity(32 * 1024),
+            padding_buffer: Vec::with_capacity(256),
+            // Pre-allocate buffer for batch coalescing. 8KB holds ~5 MTU packets.
+            // BytesMut will grow on demand if needed.
+            write_buffer: BytesMut::with_capacity(8 * 1024),
         }
     }
 

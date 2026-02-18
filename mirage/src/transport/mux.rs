@@ -560,7 +560,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                         }
                         Err(_) => {
                             warn!(
-                                "Mux active-standby: connection {} write timed out (>3s), marking dead",
+                                "Mux active-standby: connection {} write timed out (>10s), marking dead",
                                 current
                             );
                             true
