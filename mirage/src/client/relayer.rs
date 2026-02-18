@@ -1,24 +1,22 @@
 //! Client packet relayer for the Mirage VPN.
 //!
 //! This module handles bidirectional packet relay between the TUN interface
-//! and the TCP/TLS tunnel using FramedStream.
+//! and the TCP/TLS tunnel using FramedReader/FramedWriter.
 
 use crate::network::interface::{Interface, InterfaceIO};
 use crate::utils::tasks::abort_all;
-use crate::{MirageError, Result};
+use crate::Result;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::signal;
-use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
 /// Client relayer that handles packet forwarding between the TUN interface and the TCP/TLS tunnel.
 pub struct ClientRelayer {
     relayer_task: JoinHandle<Result<()>>,
-    shutdown_tx: broadcast::Sender<()>,
 }
 
 impl ClientRelayer {
@@ -34,7 +32,7 @@ impl ClientRelayer {
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
         let interface = Arc::new(interface);
 
         let relayer_task = tokio::spawn(Self::relay_packets(
@@ -45,28 +43,18 @@ impl ClientRelayer {
             obfuscation,
         ));
 
-        Ok(Self {
-            relayer_task,
-            shutdown_tx,
-        })
-    }
+        // shutdown_tx is intentionally dropped here — shutdown is driven by
+        // Ctrl+C or task completion, not by explicit stop().
+        drop(shutdown_tx);
 
-    /// Send a shutdown signal to the relayer task.
-    pub async fn stop(&mut self) -> Result<()> {
-        // Send shutdown signal to the relayer task
-        self.shutdown_tx
-            .send(())
-            .map_err(|_| MirageError::system("Failed to send shutdown signal"))?;
-
-        Ok(())
+        Ok(Self { relayer_task })
     }
 
     /// Waits for the relayer task to finish. Consumes this Relayer instance.
     pub async fn wait_for_shutdown(self) -> Result<()> {
-        // Wait for the relayer task to finish
         self.relayer_task
             .await
-            .map_err(|_| MirageError::system("Relayer task failed"))?
+            .map_err(|e| crate::MirageError::system(format!("Relayer task failed: {e}")))?
     }
 
     /// Relays packets between the TUN interface and the TCP/TLS tunnel.
@@ -74,7 +62,7 @@ impl ClientRelayer {
         interface: Arc<Interface<impl InterfaceIO>>,
         reader: R,
         writer: W,
-        mut shutdown_rx: broadcast::Receiver<()>,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         obfuscation: crate::config::ObfuscationConfig,
     ) -> Result<()>
     where
@@ -110,7 +98,9 @@ impl ClientRelayer {
             tasks.push(tokio::spawn(async move {
                 spawn_jitter_sender(jitter_rx, framed_writer, obfuscation)
                     .await
-                    .map_err(|e| MirageError::system(format!("Jitter sender task failed: {}", e)))
+                    .map_err(|e| {
+                        crate::MirageError::system(format!("Jitter sender task failed: {}", e))
+                    })
             }));
 
             tasks.push(tokio::spawn(Self::process_outgoing_traffic_pump(
@@ -219,15 +209,14 @@ impl ClientRelayer {
         mux: crate::transport::mux::MuxController<S>,
         obfuscation: crate::config::ObfuscationConfig,
     ) -> Result<Self> {
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
         let interface = Arc::new(interface);
 
         let relayer_task =
             tokio::spawn(async move { mux.run(interface, shutdown_rx, obfuscation).await });
 
-        Ok(Self {
-            relayer_task,
-            shutdown_tx,
-        })
+        drop(shutdown_tx);
+
+        Ok(Self { relayer_task })
     }
 }

@@ -19,7 +19,7 @@ pub fn default_bind_port() -> u16 {
 }
 
 pub fn default_buffer_size() -> u64 {
-    2097152
+    2 * 1024 * 1024 // 2 MiB
 }
 
 pub fn default_mtu() -> u16 {

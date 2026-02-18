@@ -15,16 +15,14 @@ use crate::config::ObfuscationConfig;
 use crate::network::packet::Packet;
 use crate::Result;
 use bytes::Bytes;
-use dashmap::DashMap;
+
 use std::sync::atomic::Ordering;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, info, warn};
 
 use super::connection;
-
-type ConnectionQueues = Arc<DashMap<std::net::IpAddr, Sender<Bytes>>>;
-type SessionQueues = Arc<DashMap<[u8; 8], SessionContext>>;
+use super::{ConnectionQueues, SessionQueues};
 
 /// Handles a single client connection after the transport layer (TLS/QUIC) is established.
 ///

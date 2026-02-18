@@ -19,7 +19,6 @@ use tracing::debug;
 
 /// Runs the packet relay for an authenticated client.
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
 pub async fn run_connection_relay<R, W>(
     reader: R,
     writer: W,

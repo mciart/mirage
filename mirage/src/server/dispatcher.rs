@@ -123,7 +123,7 @@ impl TlsDispatcher {
 }
 
 /// A wrapper that makes `TcpStream` compatible with `dyn AsyncIo`
-/// Not stricly necessary if we use generics, but simplifies `DispatchResult` to use `Box<dyn AsyncIo>`
+/// Not strictly necessary if we use generics, but simplifies `DispatchResult` to use `Box<dyn AsyncIo>`
 pub trait AsyncIo: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync> AsyncIo for T {}
 

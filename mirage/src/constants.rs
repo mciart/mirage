@@ -20,8 +20,7 @@ pub const PACKET_BUFFER_SIZE: usize = 32;
 /// allowing `try_send` to detect and skip congested channels.
 pub const PACKET_CHANNEL_SIZE: usize = 256;
 
-/// Maximum frame header size for variable-length protocol (1-3 bytes).
-/// Old fixed format was 5 bytes; new compact format uses 1-3 bytes.
+/// Fixed frame header size: 1 byte type + 2 bytes big-endian length.
 pub const FRAME_HEADER_MAX_SIZE: usize = 3;
 
 /// Maximum frame size for a single frame.

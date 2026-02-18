@@ -3,7 +3,6 @@
 //! This module provides the main MirageClient that establishes TCP/TLS connections
 //! to the server and relays packets between the TUN interface and the tunnel.
 
-pub mod connection_pool;
 mod relayer;
 
 use crate::auth::client_auth::AuthClient;
