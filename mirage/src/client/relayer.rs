@@ -17,6 +17,9 @@ use tracing::{debug, info};
 /// Client relayer that handles packet forwarding between the TUN interface and the TCP/TLS tunnel.
 pub struct ClientRelayer {
     relayer_task: JoinHandle<Result<()>>,
+    /// Kept alive so `shutdown_rx.recv()` in the relay task blocks until this struct is dropped.
+    /// Without this, the broadcast receiver returns immediately and the relay exits.
+    _shutdown_tx: tokio::sync::broadcast::Sender<()>,
 }
 
 impl ClientRelayer {
@@ -43,11 +46,10 @@ impl ClientRelayer {
             obfuscation,
         ));
 
-        // shutdown_tx is intentionally dropped here — shutdown is driven by
-        // Ctrl+C or task completion, not by explicit stop().
-        drop(shutdown_tx);
-
-        Ok(Self { relayer_task })
+        Ok(Self {
+            relayer_task,
+            _shutdown_tx: shutdown_tx,
+        })
     }
 
     /// Waits for the relayer task to finish. Consumes this Relayer instance.
@@ -215,8 +217,9 @@ impl ClientRelayer {
         let relayer_task =
             tokio::spawn(async move { mux.run(interface, shutdown_rx, obfuscation).await });
 
-        drop(shutdown_tx);
-
-        Ok(Self { relayer_task })
+        Ok(Self {
+            relayer_task,
+            _shutdown_tx: shutdown_tx,
+        })
     }
 }
