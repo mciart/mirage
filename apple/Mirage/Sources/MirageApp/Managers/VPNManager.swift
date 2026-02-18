@@ -52,6 +52,13 @@ class VPNManager {
                 "config_toml": tunnel.tomlContent,
                 "tunnel_id": tunnel.id.uuidString,
             ]
+            // Prevent iOS from tearing down the tunnel during sleep/system tests
+            proto.disconnectOnSleep = false
+            // Route all traffic through the tunnel (iOS 14+); exclude local LAN
+            if #available(iOS 14.0, macOS 11.0, *) {
+                proto.includeAllNetworks = true
+                proto.excludeLocalNetworks = true
+            }
 
             manager.protocolConfiguration = proto
             manager.localizedDescription = "Mirage - \(tunnel.name)"
