@@ -128,6 +128,9 @@ impl MuxStats {
 /// Contains (slot_index, response_channel) so the factory knows which address to use.
 pub type ConnectionRequest<S> = (usize, oneshot::Sender<Option<(ReadHalf<S>, WriteHalf<S>)>>);
 
+/// Shared handle tracker for inbound reader tasks, used by rotation and heartbeat.
+type ReaderHandles = Arc<Mutex<Vec<Option<tokio::task::JoinHandle<Result<()>>>>>>;
+
 /// Manages multiple connections with packet distribution and rotation.
 ///
 /// The MuxController is generic over the transport stream type `S`.
@@ -210,7 +213,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
 
         // Spawn inbound reader tasks for all initial connections
         // Track handles in Arc<Mutex> so both rotation and heartbeat can update them
-        let reader_handles: Arc<Mutex<Vec<Option<tokio::task::JoinHandle<Result<()>>>>>> = {
+        let reader_handles: ReaderHandles = {
             let mut handles = Vec::with_capacity(self.readers.len());
             for (i, reader) in self.readers.iter_mut().enumerate() {
                 if let Some(reader) = reader.take() {
@@ -649,7 +652,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         dead_writers: Arc<Vec<AtomicBool>>,
         conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
         inbound_tx: mpsc::Sender<Packet>,
-        reader_handles: Arc<Mutex<Vec<Option<tokio::task::JoinHandle<Result<()>>>>>>,
+        reader_handles: ReaderHandles,
         stats: Arc<MuxStats>,
     ) -> Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(15));
@@ -740,7 +743,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
         inbound_tx: mpsc::Sender<Packet>,
         dead_writers: Arc<Vec<AtomicBool>>,
-        reader_handles: Arc<Mutex<Vec<Option<tokio::task::JoinHandle<Result<()>>>>>>,
+        reader_handles: ReaderHandles,
         stats: Arc<MuxStats>,
     ) -> Result<()> {
         // Use mutable local copies for tracking
