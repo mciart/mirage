@@ -696,10 +696,11 @@ impl MirageClient {
         let tcp_stream = TcpStream::connect(server_addr).await?;
         tcp_stream.set_nodelay(self.config.transport.tcp_nodelay)?;
 
-        // Apply TCP optimizations (Linux only)
+        // Apply TCP optimizations
         let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
         let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
         let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
+        let _ = crate::transport::tcp::set_tcp_keepalive(&tcp_stream, 10);
 
         debug!("TCP connection established to {}", server_addr);
 
@@ -759,6 +760,7 @@ impl MirageClient {
         let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
         let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
         let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
+        let _ = crate::transport::tcp::set_tcp_keepalive(&tcp_stream, 10);
 
         let use_camouflage = config.camouflage.is_mirage();
 

@@ -196,6 +196,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
     /// 1. Spawns inbound reader tasks (network → TUN)
     /// 2. Runs outbound writer loop (TUN → network) with distribution
     /// 3. Monitors connection lifetimes and triggers rotation
+    /// 4. Auto-heals dead connections via heartbeat-driven reconnection
     pub async fn run<I: InterfaceIO + 'static>(
         mut self,
         interface: Arc<Interface<I>>,
@@ -208,22 +209,23 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         let (inbound_tx, inbound_rx) = mpsc::channel::<Packet>(4096);
 
         // Spawn inbound reader tasks for all initial connections
-        // Track their JoinHandles so we can abort them on rotation
-        let mut reader_handles: Vec<Option<tokio::task::JoinHandle<Result<()>>>> =
-            Vec::with_capacity(self.readers.len());
-        for (i, reader) in self.readers.iter_mut().enumerate() {
-            if let Some(reader) = reader.take() {
-                let tx = inbound_tx.clone();
-                let stats = self.stats.clone();
-                let handle =
-                    tokio::spawn(
+        // Track handles in Arc<Mutex> so both rotation and heartbeat can update them
+        let reader_handles: Arc<Mutex<Vec<Option<tokio::task::JoinHandle<Result<()>>>>>> = {
+            let mut handles = Vec::with_capacity(self.readers.len());
+            for (i, reader) in self.readers.iter_mut().enumerate() {
+                if let Some(reader) = reader.take() {
+                    let tx = inbound_tx.clone();
+                    let stats = self.stats.clone();
+                    let handle = tokio::spawn(
                         async move { Self::inbound_reader_task(i, reader, tx, stats).await },
                     );
-                reader_handles.push(Some(handle));
-            } else {
-                reader_handles.push(None);
+                    handles.push(Some(handle));
+                } else {
+                    handles.push(None);
+                }
             }
-        }
+            Arc::new(Mutex::new(handles))
+        };
 
         // Spawn the TUN writer task (inbound_rx → TUN)
         let iface_writer = interface.clone();
@@ -231,7 +233,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             Self::tun_writer_task(iface_writer, inbound_rx).await
         }));
 
-        // Shared dead-writer tracking between distributor and rotation supervisor
+        // Shared dead-writer tracking between distributor, heartbeat, and rotation
         let dead_writers: Arc<Vec<AtomicBool>> = Arc::new(
             (0..self.writers.len())
                 .map(|_| AtomicBool::new(false))
@@ -271,11 +273,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             let writers_for_rotation = self.writers.clone();
             let birth_times = self.birth_times.clone();
             let lifetimes_initial = self.lifetimes.clone();
-            let conn_request_tx = self.conn_request_tx.clone();
+            let conn_request_tx_for_rotation = self.conn_request_tx.clone();
             let inbound_tx_for_rotation = inbound_tx.clone();
 
             let dead_writers_for_rotation = dead_writers.clone();
             let stats_for_rotation = self.stats.clone();
+            let reader_handles_for_rotation = reader_handles.clone();
 
             tasks.push(tokio::spawn(async move {
                 Self::rotation_supervisor(
@@ -283,19 +286,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     writers_for_rotation,
                     birth_times,
                     lifetimes_initial,
-                    conn_request_tx,
+                    conn_request_tx_for_rotation,
                     inbound_tx_for_rotation,
                     dead_writers_for_rotation,
-                    reader_handles,
+                    reader_handles_for_rotation,
                     stats_for_rotation,
                 )
                 .await
             }));
-        } else {
-            // Not rotating — push reader handles into tasks so they're awaited
-            for h in reader_handles.into_iter().flatten() {
-                tasks.push(h);
-            }
         }
 
         interface.configure()?;
@@ -306,11 +304,23 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             Self::stats_reporter_task(stats_for_reporter).await
         }));
 
-        // Spawn heartbeat sender (every 15 seconds on each alive connection)
+        // Spawn heartbeat + auto-heal task (every 15 seconds)
         let writers_for_heartbeat = self.writers.clone();
         let dead_writers_for_heartbeat = dead_writers.clone();
+        let conn_request_tx_for_heal = self.conn_request_tx.clone();
+        let inbound_tx_for_heal = inbound_tx.clone();
+        let reader_handles_for_heal = reader_handles.clone();
+        let stats_for_heal = self.stats.clone();
         tasks.push(tokio::spawn(async move {
-            Self::heartbeat_sender_task(writers_for_heartbeat, dead_writers_for_heartbeat).await
+            Self::heartbeat_and_heal_task(
+                writers_for_heartbeat,
+                dead_writers_for_heartbeat,
+                conn_request_tx_for_heal,
+                inbound_tx_for_heal,
+                reader_handles_for_heal,
+                stats_for_heal,
+            )
+            .await
         }));
 
         info!(
@@ -431,8 +441,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 .filter(|d| !d.load(Ordering::Relaxed))
                 .count();
             if alive_count == 0 {
-                warn!("All mux writers are dead, stopping distributor");
-                return Err(MirageError::system("All mux connections lost"));
+                // All connections dead — wait briefly for auto-heal to replace them
+                // before giving up. The heartbeat task may already be reconnecting.
+                warn!("All mux writers dead — waiting 5s for auto-heal...");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let recovered = dead_writers
+                    .iter()
+                    .any(|d| !d.load(Ordering::Relaxed));
+                if !recovered {
+                    warn!("All mux writers still dead after 5s, stopping distributor");
+                    return Err(MirageError::system("All mux connections lost"));
+                }
+                info!("Auto-heal recovered at least one connection, resuming");
+                continue;
             }
 
             match mode {
@@ -583,11 +604,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         }
     }
 
-    /// Heartbeat sender: periodically sends keep-alive frames on all alive connections.
-    /// Also serves as background health check — failed heartbeats mark connections dead.
-    async fn heartbeat_sender_task(
+    /// Heartbeat + auto-heal task: periodically sends keep-alive frames on all alive
+    /// connections. When a connection is found dead, requests a replacement through
+    /// the same channel the rotation supervisor uses.
+    async fn heartbeat_and_heal_task(
         writers: Vec<Arc<Mutex<FramedWriter<WriteHalf<S>>>>>,
         dead_writers: Arc<Vec<AtomicBool>>,
+        conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
+        inbound_tx: mpsc::Sender<Packet>,
+        reader_handles: Arc<Mutex<Vec<Option<tokio::task::JoinHandle<Result<()>>>>>>,
+        stats: Arc<MuxStats>,
     ) -> Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(15));
         // Skip immediate first tick
@@ -598,13 +624,62 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
 
             for (i, writer) in writers.iter().enumerate() {
                 if dead_writers[i].load(Ordering::Relaxed) {
+                    // Already dead — attempt to heal
+                    info!("Auto-heal: requesting replacement for dead connection {}", i);
+                    let (response_tx, response_rx) = oneshot::channel();
+                    if conn_request_tx.send((i, response_tx)).await.is_err() {
+                        debug!("Auto-heal: connection request channel closed");
+                        continue;
+                    }
+                    match response_rx.await {
+                        Ok(Some((new_reader, new_writer))) => {
+                            info!("Auto-heal: replacing connection {} with fresh connection", i);
+                            // Replace writer
+                            {
+                                let mut w = writer.lock().await;
+                                *w = FramedWriter::new(new_writer);
+                            }
+                            // Mark alive
+                            dead_writers[i].store(false, Ordering::Relaxed);
+                            // Abort old reader and spawn new one
+                            {
+                                let mut handles = reader_handles.lock().await;
+                                if let Some(old) = handles[i].take() {
+                                    old.abort();
+                                }
+                                let tx = inbound_tx.clone();
+                                let conn_id = i;
+                                let stats_clone = stats.clone();
+                                handles[i] = Some(tokio::spawn(async move {
+                                    if let Err(e) = Self::inbound_reader_task(
+                                        conn_id,
+                                        FramedReader::new(new_reader),
+                                        tx,
+                                        stats_clone,
+                                    ).await {
+                                        debug!("Auto-healed reader {} ended: {}", conn_id, e);
+                                    }
+                                    Ok(())
+                                }));
+                            }
+                            info!("Auto-heal: connection {} restored", i);
+                        }
+                        Ok(None) => {
+                            warn!("Auto-heal: failed to get replacement for connection {}", i);
+                        }
+                        Err(_) => {
+                            debug!("Auto-heal: response channel cancelled for connection {}", i);
+                        }
+                    }
                     continue;
                 }
 
+                // Connection alive — send heartbeat
                 let mut w = writer.lock().await;
                 if w.send_heartbeat().await.is_err() {
                     warn!("Heartbeat failed on connection {}, marking dead", i);
                     dead_writers[i].store(true, Ordering::Relaxed);
+                    // Will be healed on next tick
                 }
             }
         }
@@ -620,7 +695,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
         inbound_tx: mpsc::Sender<Packet>,
         dead_writers: Arc<Vec<AtomicBool>>,
-        mut reader_handles: Vec<Option<tokio::task::JoinHandle<Result<()>>>>,
+        reader_handles: Arc<Mutex<Vec<Option<tokio::task::JoinHandle<Result<()>>>>>>,
         stats: Arc<MuxStats>,
     ) -> Result<()> {
         // Use mutable local copies for tracking
@@ -689,33 +764,36 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     // Mark this writer as alive again
                     dead_writers[expire_idx].store(false, Ordering::Relaxed);
 
-                    // Abort the old reader task to release old QUIC streams/endpoint
-                    if let Some(old_handle) = reader_handles[expire_idx].take() {
-                        old_handle.abort();
-                        debug!(
-                            "Rotation: aborted old reader task for connection {}",
-                            expire_idx
-                        );
-                    }
-
-                    // Spawn a new inbound reader for the replacement connection
-                    let tx = inbound_tx.clone();
-                    let conn_id = expire_idx;
-                    let stats_for_reader = stats.clone();
-                    let new_handle = tokio::spawn(async move {
-                        if let Err(e) = Self::inbound_reader_task(
-                            conn_id,
-                            FramedReader::new(new_reader),
-                            tx,
-                            stats_for_reader,
-                        )
-                        .await
-                        {
-                            debug!("Rotated inbound reader {} ended: {}", conn_id, e);
+                    // Abort the old reader task and spawn new one
+                    {
+                        let mut handles = reader_handles.lock().await;
+                        if let Some(old_handle) = handles[expire_idx].take() {
+                            old_handle.abort();
+                            debug!(
+                                "Rotation: aborted old reader task for connection {}",
+                                expire_idx
+                            );
                         }
-                        Ok(())
-                    });
-                    reader_handles[expire_idx] = Some(new_handle);
+
+                        // Spawn a new inbound reader for the replacement connection
+                        let tx = inbound_tx.clone();
+                        let conn_id = expire_idx;
+                        let stats_for_reader = stats.clone();
+                        let new_handle = tokio::spawn(async move {
+                            if let Err(e) = Self::inbound_reader_task(
+                                conn_id,
+                                FramedReader::new(new_reader),
+                                tx,
+                                stats_for_reader,
+                            )
+                            .await
+                            {
+                                debug!("Rotated inbound reader {} ended: {}", conn_id, e);
+                            }
+                            Ok(())
+                        });
+                        handles[expire_idx] = Some(new_handle);
+                    }
 
                     // Update birth time and lifetime for this slot
                     current_birth_times[expire_idx] = Instant::now();

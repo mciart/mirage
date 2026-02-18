@@ -1,7 +1,26 @@
 //! TCP socket optimization utilities.
 //!
 //! Provides functions for configuring TCP sockets for optimal VPN performance,
-//! including BBR congestion control and buffer tuning.
+//! including BBR congestion control, buffer tuning, and keepalive.
+
+use std::time::Duration;
+
+/// Enables TCP keepalive on the socket to prevent server-side timeout during
+/// iOS process suspension. When the Network Extension is suspended, the Tokio
+/// runtime freezes but the OS TCP stack continues sending keepalive probes,
+/// keeping the connection alive on the server side.
+pub fn set_tcp_keepalive(stream: &tokio::net::TcpStream, interval_secs: u32) -> std::io::Result<()> {
+    let sock_ref = socket2::SockRef::from(stream);
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(interval_secs as u64))
+        .with_interval(Duration::from_secs(interval_secs as u64));
+
+    // TCP_KEEPCNT is not available on all platforms via socket2,
+    // but time + interval are sufficient for our needs.
+    sock_ref.set_tcp_keepalive(&keepalive)?;
+    tracing::debug!("TCP keepalive enabled: interval={}s", interval_secs);
+    Ok(())
+}
 
 /// Optimizes TCP socket for VPN traffic (Linux only).
 /// Note: We intentionally do NOT set large buffers to avoid bufferbloat.

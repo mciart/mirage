@@ -11,7 +11,7 @@ private final class PacketWriteBuffer {
     private let lock = NSLock()
     private var packets: [Data] = []
     private var protocols: [NSNumber] = []
-    private var maxBatch = 64
+    private let maxBatch = 64
     private weak var provider: PacketTunnelProvider?
     private var flushTimer: DispatchSourceTimer?
     private let timerQueue = DispatchQueue(label: "com.mciart.mirage.flush", qos: .userInteractive)
@@ -33,15 +33,6 @@ private final class PacketWriteBuffer {
 
     deinit {
         flushTimer?.cancel()
-    }
-
-    /// Switch to low-memory mode: halve the batch size and flush immediately
-    func setLowMemoryMode(_ enabled: Bool) {
-        lock.lock()
-        maxBatch = enabled ? 16 : 64
-        let shouldFlush = packets.count >= maxBatch
-        lock.unlock()
-        if shouldFlush { flush() }
     }
 
     /// Adds a packet to the buffer; flushes if buffer is full
@@ -92,19 +83,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pendingSettings: NEPacketTunnelNetworkSettings?
     /// Memory monitoring timer
     private var memoryTimer: DispatchSourceTimer?
-    /// System memory pressure event source
-    private var memoryPressureSource: DispatchSourceMemoryPressure?
-
-    // MARK: - Reconnection State
-
-    /// Saved TOML config for reconnection after sleep/wake
-    private var savedConfigToml: String?
-    /// Saved resolved server IP for reconnection
-    private var savedServerIP: String?
-    /// Whether the tunnel has been fully established (past initial startTunnel)
-    private var tunnelUp = false
-    /// Guard against concurrent reconnection attempts
-    private var isReconnecting = false
 
     override func startTunnel(
         options: [String: NSObject]?,
@@ -127,9 +105,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         NSLog("[MirageTunnel] Got TOML config (%d bytes)", toml.count)
 
-        // Save config for potential reconnection after sleep/wake
-        self.savedConfigToml = toml
-
         // Parse config for fallback values
         let parsed = parseTOML(toml)
         let serverHost = parsed["server.host"] ?? proto.serverAddress ?? "127.0.0.1"
@@ -137,7 +112,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // Resolve hostname → IPv4 for NEPacketTunnelNetworkSettings
         let serverIP = resolveHostname(serverHost) ?? "0.0.0.0"
         NSLog("[MirageTunnel] Server: %@ → IP: %@", serverHost, serverIP)
-        self.savedServerIP = serverIP
 
         // ── CRITICAL ORDER ──
         // 1. Start Rust bridge FIRST (before VPN routes exist — avoids DNS loop)
@@ -223,22 +197,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     NSLog("[MirageTunnel] ✅ Rust connected — applying server-assigned network settings")
                     self.applyPendingSettingsAndComplete(completeOnce: completeOnce)
                 } else if status == .error || status == .disconnected {
-                    guard let self else { return }
-                    if self.tunnelUp {
-                        // Tunnel was up — connection lost (e.g. after sleep/wake).
-                        // Attempt automatic reconnection instead of killing the tunnel.
-                        NSLog("[MirageTunnel] ⚠️ Connection lost while tunnel is UP (status=%@, msg=%@) — will reconnect",
-                              status.displayName, message ?? "")
-                        self.attemptReconnect()
-                    } else {
-                        // Still in initial startup — report failure normally
-                        NSLog("[MirageTunnel] ❌ Rust connection error during startup: %@", message ?? "unknown")
-                        completeOnce(NSError(
-                            domain: "com.mciart.mirage.tunnel",
-                            code: 4,
-                            userInfo: [NSLocalizedDescriptionKey: message ?? "Rust connection error"]
-                        ))
-                    }
+                    // Connection error — report failure
+                    NSLog("[MirageTunnel] ❌ Rust connection error: %@", message ?? "unknown")
+                    completeOnce(NSError(
+                        domain: "com.mciart.mirage.tunnel",
+                        code: 4,
+                        userInfo: [NSLocalizedDescriptionKey: message ?? "Rust connection error"]
+                    ))
                 }
             },
             onTunnelConfig: { [weak self] config in
@@ -269,8 +234,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             NSLog("[MirageTunnel] ✅ Network settings applied — tunnel is UP")
             guard let self else { completeOnce(nil); return }
             self.connectedAt = Date()
-            self.tunnelUp = true
-            self.isReconnecting = false
             self.writeBuffer = PacketWriteBuffer(provider: self)
             self.startReadingPackets()
             self.startMemoryMonitoring()
@@ -283,10 +246,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         completionHandler: @escaping () -> Void
     ) {
         NSLog("[MirageTunnel] stopTunnel called (reason: %d)", reason.rawValue)
-        tunnelUp = false
-        isReconnecting = false
-        memoryPressureSource?.cancel()
-        memoryPressureSource = nil
         memoryTimer?.cancel()
         memoryTimer = nil
         writeBuffer?.flush()
@@ -294,170 +253,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         bridge?.stop()
         bridge = nil
         completionHandler()
-    }
-
-    // MARK: - Sleep / Wake
-
-    override func sleep(completionHandler: @escaping () -> Void) {
-        NSLog("[MirageTunnel] 💤 sleep() — flushing buffer before suspend")
-        writeBuffer?.flush()
-        completionHandler()
-    }
-
-    override func wake() {
-        NSLog("[MirageTunnel] ⏰ wake() — checking connection health")
-        guard tunnelUp else {
-            NSLog("[MirageTunnel] wake(): tunnel not up, nothing to do")
-            return
-        }
-        // Check if the Rust bridge is still alive after the process was suspended.
-        // The server may have dropped the connection due to keepalive timeout.
-        if let bridge {
-            let status = bridge.status
-            if status == .error || status == .disconnected {
-                NSLog("[MirageTunnel] ⚠️ Connection dead after wake (status=%@) — reconnecting", status.displayName)
-                attemptReconnect()
-            } else {
-                NSLog("[MirageTunnel] ✅ Connection still alive after wake (status=%@)", status.displayName)
-            }
-        } else {
-            NSLog("[MirageTunnel] ⚠️ Bridge is nil after wake — reconnecting")
-            attemptReconnect()
-        }
-    }
-
-    // MARK: - Reconnection
-
-    /// Attempts to reconnect the VPN tunnel after a connection loss (e.g. after sleep/wake).
-    /// Uses `reasserting` to tell iOS "we're reconnecting, don't tear down the tunnel".
-    private func attemptReconnect() {
-        guard tunnelUp else {
-            NSLog("[MirageTunnel] attemptReconnect: tunnel not up, skipping")
-            return
-        }
-        guard !isReconnecting else {
-            NSLog("[MirageTunnel] attemptReconnect: already reconnecting, skipping")
-            return
-        }
-        isReconnecting = true
-
-        guard let toml = savedConfigToml, let serverIP = savedServerIP else {
-            NSLog("[MirageTunnel] ❌ Cannot reconnect: no saved config")
-            isReconnecting = false
-            cancelTunnelWithError(NSError(
-                domain: "com.mciart.mirage.tunnel",
-                code: 10,
-                userInfo: [NSLocalizedDescriptionKey: "Cannot reconnect: missing saved configuration"]
-            ))
-            return
-        }
-
-        NSLog("[MirageTunnel] 🔄 Reconnecting — setting reasserting=true")
-        reasserting = true
-
-        // Tear down old bridge
-        writeBuffer?.flush()
-        writeBuffer = nil
-        bridge?.stop()
-        bridge = nil
-
-        // Create a fresh bridge with the saved config
-        let newBridge = MirageBridge()
-        do {
-            try newBridge.create(configToml: toml)
-            NSLog("[MirageTunnel] 🔄 New bridge created for reconnection")
-        } catch {
-            NSLog("[MirageTunnel] ❌ Reconnect failed to create bridge: %@", error.localizedDescription)
-            reasserting = false
-            isReconnecting = false
-            cancelTunnelWithError(error)
-            return
-        }
-        self.bridge = newBridge
-
-        // Timeout for reconnection (30s)
-        var reconnected = false
-        let reconnectLock = NSLock()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
-            reconnectLock.lock()
-            let done = reconnected
-            reconnectLock.unlock()
-            if !done {
-                NSLog("[MirageTunnel] ⏰ Reconnection timeout")
-                self?.reasserting = false
-                self?.isReconnecting = false
-                self?.cancelTunnelWithError(NSError(
-                    domain: "com.mciart.mirage.tunnel",
-                    code: 11,
-                    userInfo: [NSLocalizedDescriptionKey: "Reconnection timeout"]
-                ))
-            }
-        }
-
-        pendingSettings = nil
-
-        newBridge.start(
-            onPacketWrite: { [weak self] data in
-                self?.writeBuffer?.append(data)
-            },
-            onStatusChange: { [weak self] status, message in
-                NSLog("[MirageTunnel] 🔄 Reconnect status: %@ - %@", status.displayName, message ?? "")
-
-                if status == .connected {
-                    guard let self else { return }
-                    reconnectLock.lock()
-                    reconnected = true
-                    reconnectLock.unlock()
-
-                    if let settings = self.pendingSettings {
-                        self.setTunnelNetworkSettings(settings) { [weak self] error in
-                            if let error {
-                                NSLog("[MirageTunnel] ❌ Reconnect: failed to re-apply settings: %@", error.localizedDescription)
-                                self?.reasserting = false
-                                self?.isReconnecting = false
-                                self?.cancelTunnelWithError(error)
-                                return
-                            }
-                            NSLog("[MirageTunnel] ✅ Reconnected successfully — tunnel restored")
-                            self?.connectedAt = Date()
-                            self?.writeBuffer = PacketWriteBuffer(provider: self!)
-                            self?.startReadingPackets()
-                            self?.reasserting = false
-                            self?.isReconnecting = false
-                        }
-                    } else {
-                        // No new settings — just restart packet flow with existing settings
-                        NSLog("[MirageTunnel] ✅ Reconnected (no new config) — restarting packet flow")
-                        self.writeBuffer = PacketWriteBuffer(provider: self)
-                        self.startReadingPackets()
-                        self.reasserting = false
-                        self.isReconnecting = false
-                    }
-                } else if status == .error {
-                    NSLog("[MirageTunnel] ❌ Reconnect error: %@", message ?? "unknown")
-                    reconnectLock.lock()
-                    let done = reconnected
-                    reconnectLock.unlock()
-                    if !done {
-                        self?.reasserting = false
-                        self?.isReconnecting = false
-                        self?.cancelTunnelWithError(NSError(
-                            domain: "com.mciart.mirage.tunnel",
-                            code: 12,
-                            userInfo: [NSLocalizedDescriptionKey: message ?? "Reconnection failed"]
-                        ))
-                    }
-                }
-            },
-            onTunnelConfig: { [weak self] config in
-                NSLog("[MirageTunnel] 🔄 Reconnect tunnel config: addr=%@, mtu=%d",
-                      config.clientAddress, config.mtu)
-                guard let self else { return }
-                self.pendingSettings = self.buildNetworkSettings(from: config, serverIP: serverIP)
-            }
-        )
-
-        NSLog("[MirageTunnel] 🔄 Reconnect bridge started — waiting for Rust to connect...")
     }
 
     // MARK: - App ↔ Extension IPC
@@ -522,60 +317,28 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     // MARK: - Memory Monitoring
 
-    /// Periodically checks available memory and takes action to prevent OOM kills.
+    /// Periodically logs available memory to help diagnose Extension OOM kills.
     /// iOS Network Extensions have ~15MB limit; exceeding it causes silent termination.
     private func startMemoryMonitoring() {
         #if os(iOS)
-        // 1. Periodic timer — check memory every 5s (faster than before)
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        timer.schedule(deadline: .now() + 5, repeating: 5)
-        timer.setEventHandler { [weak self] in
+        timer.schedule(deadline: .now() + 10, repeating: 10)
+        timer.setEventHandler {
             let available = os_proc_available_memory()
             let availMB = Double(available) / 1_048_576.0
-
-            if availMB < 3.0 {
-                NSLog("[MirageTunnel] � CRITICAL MEMORY: %.1f MB — emergency flush", availMB)
-                self?.writeBuffer?.flush()
-                self?.writeBuffer?.setLowMemoryMode(true)
-            } else if availMB < 5.0 {
-                NSLog("[MirageTunnel] ⚠️ LOW MEMORY: %.1f MB — reducing batch size", availMB)
-                self?.writeBuffer?.setLowMemoryMode(true)
-            } else {
-                // Memory is healthy — restore normal batch size
-                self?.writeBuffer?.setLowMemoryMode(false)
+            NSLog("[MirageTunnel] 📊 Memory: %.1f MB available", availMB)
+            if availMB < 5.0 {
+                NSLog("[MirageTunnel] ⚠️ LOW MEMORY WARNING: %.1f MB remaining!", availMB)
             }
         }
         timer.resume()
         self.memoryTimer = timer
-
-        // 2. System memory pressure events — react instantly to OS warnings
-        let pressureSource = DispatchSource.makeMemoryPressureSource(
-            eventMask: [.warning, .critical],
-            queue: .global(qos: .utility)
-        )
-        pressureSource.setEventHandler { [weak self] in
-            let event = pressureSource.data
-            let available = os_proc_available_memory()
-            let availMB = Double(available) / 1_048_576.0
-
-            if event.contains(.critical) {
-                NSLog("[MirageTunnel] 🚨 SYSTEM CRITICAL MEMORY PRESSURE (%.1f MB) — emergency flush", availMB)
-                self?.writeBuffer?.flush()
-                self?.writeBuffer?.setLowMemoryMode(true)
-            } else if event.contains(.warning) {
-                NSLog("[MirageTunnel] ⚠️ SYSTEM MEMORY WARNING (%.1f MB) — reducing batch size", availMB)
-                self?.writeBuffer?.setLowMemoryMode(true)
-            }
-        }
-        pressureSource.resume()
-        self.memoryPressureSource = pressureSource
         #endif
     }
 
     // MARK: - Helpers
 
     /// Builds `NEPacketTunnelNetworkSettings` from a server-assigned tunnel config.
-    /// Shared between initial connection and reconnection to avoid code duplication.
     private func buildNetworkSettings(
         from config: MirageTunnelNetworkConfig,
         serverIP: String

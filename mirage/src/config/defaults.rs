@@ -90,7 +90,7 @@ pub fn default_protocols() -> Vec<super::TransportProtocol> {
     vec![super::TransportProtocol::Tcp]
 }
 pub fn default_parallel_connections() -> u8 {
-    1 // Default to single connection for backward compatibility
+    2 // Dual connections for resilience — if one dies, the other survives while auto-heal replaces it
 }
 
 pub fn default_zero_fn() -> u64 {
