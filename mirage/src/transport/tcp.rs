@@ -9,7 +9,10 @@ use std::time::Duration;
 /// iOS process suspension. When the Network Extension is suspended, the Tokio
 /// runtime freezes but the OS TCP stack continues sending keepalive probes,
 /// keeping the connection alive on the server side.
-pub fn set_tcp_keepalive(stream: &tokio::net::TcpStream, interval_secs: u32) -> std::io::Result<()> {
+pub fn set_tcp_keepalive(
+    stream: &tokio::net::TcpStream,
+    interval_secs: u32,
+) -> std::io::Result<()> {
     let sock_ref = socket2::SockRef::from(stream);
     let keepalive = socket2::TcpKeepalive::new()
         .with_time(Duration::from_secs(interval_secs as u64))

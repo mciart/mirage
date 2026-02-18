@@ -30,6 +30,8 @@ class VPNManager {
 
     /// Prevents re-entry. @ObservationIgnored so it NEVER triggers SwiftUI re-renders.
     @ObservationIgnored private var _connectLock = false
+    /// Tracks explicit user-initiated disconnect to distinguish from iOS auto-restart.
+    @ObservationIgnored private var _userDisconnecting = false
 
     func connect(tunnel: TunnelConfig) async throws {
         guard !_connectLock else {
@@ -84,8 +86,8 @@ class VPNManager {
     }
 
     func disconnect() {
+        _userDisconnecting = true
         manager?.connection.stopVPNTunnel()
-        connectedTunnelID = nil
     }
 
     func toggle(tunnel: TunnelConfig) async throws {
@@ -180,16 +182,43 @@ class VPNManager {
             object: manager.connection,
             queue: .main
         ) { [weak self] _ in
+            guard let self else { return }
             let newStatus = manager.connection.status
-            NSLog("[Mirage] Status changed: %d", newStatus.rawValue)
-            self?.status = newStatus
-            if newStatus == .disconnected {
-                self?.connectedTunnelID = nil
-                self?.stopMetricsPolling()
-                self?._connectLock = false
-            } else if newStatus == .connected {
-                self?.startMetricsPolling()
-                self?._connectLock = false
+            NSLog("[Mirage] Status changed: %@ (raw=%d, userDisconnecting=%d)",
+                  newStatus.displayName, newStatus.rawValue, self._userDisconnecting ? 1 : 0)
+            self.status = newStatus
+
+            switch newStatus {
+            case .disconnected:
+                if self._userDisconnecting {
+                    // Explicit user disconnect — clear everything
+                    self.connectedTunnelID = nil
+                    self._userDisconnecting = false
+                    NSLog("[Mirage] User-initiated disconnect complete")
+                } else {
+                    // iOS killed/restarted extension — keep connectedTunnelID
+                    // so UI stays correct when iOS auto-reconnects
+                    NSLog("[Mirage] Extension disconnected (will auto-reconnect), keeping tunnel ID")
+                }
+                self.stopMetricsPolling()
+                self._connectLock = false
+
+            case .connected:
+                // Restore connectedTunnelID from config if we lost it somehow
+                if self.connectedTunnelID == nil,
+                   let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                   let idStr = proto.providerConfiguration?["tunnel_id"] as? String {
+                    self.connectedTunnelID = UUID(uuidString: idStr)
+                    NSLog("[Mirage] Restored connectedTunnelID from config: %@", idStr)
+                }
+                self.startMetricsPolling()
+                self._connectLock = false
+
+            case .reasserting:
+                NSLog("[Mirage] iOS is re-establishing tunnel connection")
+
+            default:
+                break
             }
         }
         self.status = manager.connection.status

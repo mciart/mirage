@@ -380,20 +380,37 @@ impl MirageClient {
                         target_addr, active_protocol, slot_idx
                     );
 
-                    let stream: Option<TransportStream> = if active_protocol == "udp" {
-                        // --- QUIC Rotation ---
-                        Self::create_quic_rotation_stream(&config_clone, target_addr, &conn_string)
-                            .await
-                    } else {
-                        // --- TCP Rotation ---
-                        Self::create_tcp_rotation_stream(
-                            &config_clone,
-                            &transport_config,
-                            target_addr,
-                            &conn_string,
-                        )
+                    // Timeout prevents factory from hanging during network congestion
+                    let stream: Option<TransportStream> =
+                        match tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                            if active_protocol == "udp" {
+                                Self::create_quic_rotation_stream(
+                                    &config_clone,
+                                    target_addr,
+                                    &conn_string,
+                                )
+                                .await
+                            } else {
+                                Self::create_tcp_rotation_stream(
+                                    &config_clone,
+                                    &transport_config,
+                                    target_addr,
+                                    &conn_string,
+                                )
+                                .await
+                            }
+                        })
                         .await
-                    };
+                        {
+                            Ok(s) => s,
+                            Err(_) => {
+                                warn!(
+                                    "Connection factory: timed out after 15s for slot {}",
+                                    slot_idx
+                                );
+                                None
+                            }
+                        };
 
                     // If we got a stream, authenticate it as secondary
                     let result = if let Some(stream) = stream {

@@ -317,18 +317,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     // MARK: - Memory Monitoring
 
-    /// Periodically logs available memory to help diagnose Extension OOM kills.
+    /// Monitors available memory and flushes buffers to prevent OOM kills.
     /// iOS Network Extensions have ~15MB limit; exceeding it causes silent termination.
     private func startMemoryMonitoring() {
         #if os(iOS)
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        timer.schedule(deadline: .now() + 10, repeating: 10)
-        timer.setEventHandler {
+        timer.schedule(deadline: .now() + 3, repeating: 3)
+        timer.setEventHandler { [weak self] in
             let available = os_proc_available_memory()
             let availMB = Double(available) / 1_048_576.0
-            NSLog("[MirageTunnel] 📊 Memory: %.1f MB available", availMB)
-            if availMB < 5.0 {
-                NSLog("[MirageTunnel] ⚠️ LOW MEMORY WARNING: %.1f MB remaining!", availMB)
+            if availMB < 3.0 {
+                NSLog("[MirageTunnel] 🚨 CRITICAL MEMORY: %.1f MB — emergency flush", availMB)
+                self?.writeBuffer?.flush()
+            } else if availMB < 5.0 {
+                NSLog("[MirageTunnel] ⚠️ LOW MEMORY: %.1f MB", availMB)
+                self?.writeBuffer?.flush()
             }
         }
         timer.resume()

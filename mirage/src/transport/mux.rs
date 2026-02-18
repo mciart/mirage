@@ -216,9 +216,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 if let Some(reader) = reader.take() {
                     let tx = inbound_tx.clone();
                     let stats = self.stats.clone();
-                    let handle = tokio::spawn(
-                        async move { Self::inbound_reader_task(i, reader, tx, stats).await },
-                    );
+                    let handle = tokio::spawn(async move {
+                        Self::inbound_reader_task(i, reader, tx, stats).await
+                    });
                     handles.push(Some(handle));
                 } else {
                     handles.push(None);
@@ -441,18 +441,21 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 .filter(|d| !d.load(Ordering::Relaxed))
                 .count();
             if alive_count == 0 {
-                // All connections dead — wait briefly for auto-heal to replace them
-                // before giving up. The heartbeat task may already be reconnecting.
-                warn!("All mux writers dead — waiting 5s for auto-heal...");
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                let recovered = dead_writers
-                    .iter()
-                    .any(|d| !d.load(Ordering::Relaxed));
+                // All connections dead — poll for auto-heal recovery (up to 30s)
+                warn!("All mux writers dead — waiting for auto-heal...");
+                let mut recovered = false;
+                for attempt in 1..=30u32 {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    if dead_writers.iter().any(|d| !d.load(Ordering::Relaxed)) {
+                        info!("Auto-heal recovered after {}s", attempt);
+                        recovered = true;
+                        break;
+                    }
+                }
                 if !recovered {
-                    warn!("All mux writers still dead after 5s, stopping distributor");
+                    warn!("All connections still dead after 30s, giving up");
                     return Err(MirageError::system("All mux connections lost"));
                 }
-                info!("Auto-heal recovered at least one connection, resuming");
                 continue;
             }
 
@@ -504,8 +507,32 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                             }
                         }
                         if !found {
-                            warn!("All mux writers are dead (active-standby), stopping");
-                            return Err(MirageError::system("All mux connections lost"));
+                            // All dead — poll for auto-heal recovery
+                            warn!(
+                                "All mux writers dead (active-standby) — waiting for auto-heal..."
+                            );
+                            let mut healed = false;
+                            for attempt in 1..=30u32 {
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                for offset in 0..num_writers {
+                                    let next = (current + offset) % num_writers;
+                                    if !dead_writers[next].load(Ordering::Relaxed) {
+                                        active_idx.store(next, Ordering::Relaxed);
+                                        info!(
+                                            "Auto-heal recovered connection {} after {}s",
+                                            next, attempt
+                                        );
+                                        healed = true;
+                                        break;
+                                    }
+                                }
+                                if healed {
+                                    break;
+                                }
+                            }
+                            if !healed {
+                                return Err(MirageError::system("All mux connections lost"));
+                            }
                         }
                         continue; // Retry with new active writer
                     }
@@ -513,9 +540,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     let writer = &writers[current];
                     let mut w = writer.lock().await;
 
-                    // Use timeout to detect slow/congested connections.
-                    // If the write takes too long, mark as dead and switch to standby.
-                    let write_result = tokio::time::timeout(Duration::from_secs(3), async {
+                    // Use timeout to detect truly dead connections.
+                    // 10s is generous to avoid false positives during speed test congestion.
+                    let write_result = tokio::time::timeout(Duration::from_secs(10), async {
                         for packet in &packets {
                             if w.send_packet_no_flush(packet).await.is_err() {
                                 return false;
@@ -625,7 +652,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             for (i, writer) in writers.iter().enumerate() {
                 if dead_writers[i].load(Ordering::Relaxed) {
                     // Already dead — attempt to heal
-                    info!("Auto-heal: requesting replacement for dead connection {}", i);
+                    info!(
+                        "Auto-heal: requesting replacement for dead connection {}",
+                        i
+                    );
                     let (response_tx, response_rx) = oneshot::channel();
                     if conn_request_tx.send((i, response_tx)).await.is_err() {
                         debug!("Auto-heal: connection request channel closed");
@@ -633,7 +663,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     }
                     match response_rx.await {
                         Ok(Some((new_reader, new_writer))) => {
-                            info!("Auto-heal: replacing connection {} with fresh connection", i);
+                            info!(
+                                "Auto-heal: replacing connection {} with fresh connection",
+                                i
+                            );
                             // Replace writer
                             {
                                 let mut w = writer.lock().await;
@@ -656,7 +689,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                                         FramedReader::new(new_reader),
                                         tx,
                                         stats_clone,
-                                    ).await {
+                                    )
+                                    .await
+                                    {
                                         debug!("Auto-healed reader {} ended: {}", conn_id, e);
                                     }
                                     Ok(())
