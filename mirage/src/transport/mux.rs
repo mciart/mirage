@@ -206,7 +206,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         let mut tasks = FuturesUnordered::new();
 
         // Channel for merged inbound packets from all readers
-        let (inbound_tx, inbound_rx) = mpsc::channel::<Packet>(4096);
+        let (inbound_tx, inbound_rx) = mpsc::channel::<Packet>(256);
 
         // Spawn inbound reader tasks for all initial connections
         // Track handles in Arc<Mutex> so both rotation and heartbeat can update them

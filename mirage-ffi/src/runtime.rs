@@ -69,14 +69,35 @@ impl MirageRuntime {
         {
             let _ = tracing_subscriber::fmt()
                 .with_env_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")),
+                    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                        // iOS: use warn to avoid massive memory allocation from debug logging
+                        // macOS: use debug for development
+                        if cfg!(target_os = "ios") {
+                            tracing_subscriber::EnvFilter::new("warn")
+                        } else {
+                            tracing_subscriber::EnvFilter::new("debug")
+                        }
+                    }),
                 )
                 .with_writer(std::sync::Mutex::new(log_file))
                 .with_ansi(false)
                 .try_init();
         }
 
+        // iOS Network Extensions have ~15MB memory limit.
+        // Default multi-threaded runtime creates num_cpus threads × 2MB stack = ~12MB on iPhone.
+        // We limit to 1 worker thread with 1MB stack = ~1MB, saving ~11MB for VPN buffers.
+        // Note: current_thread won't work here because runtime.spawn() needs a background
+        // thread to drive tasks (the FFI start() method must return immediately).
+        #[cfg(target_os = "ios")]
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(1024 * 1024) // 1MB instead of default 2MB
+            .enable_all()
+            .build()
+            .map_err(|e| format!("Failed to create Tokio runtime: {e}"))?;
+
+        #[cfg(not(target_os = "ios"))]
         let runtime = Runtime::new().map_err(|e| format!("Failed to create Tokio runtime: {e}"))?;
         Ok(Self {
             runtime,

@@ -283,7 +283,7 @@ impl ClientRelayer {
             // Multiple connections: use Active-Standby strategy
             // Only one connection is used at a time to avoid packet reordering
             let (packet_tx, mut packet_rx) =
-                tokio::sync::mpsc::channel::<crate::network::packet::Packet>(4096);
+                tokio::sync::mpsc::channel::<crate::network::packet::Packet>(256);
 
             // Pump packets from TUN to channel
             let iface = interface.clone();

@@ -21,9 +21,10 @@ private final class PacketWriteBuffer {
         packets.reserveCapacity(maxBatch)
         protocols.reserveCapacity(maxBatch)
 
-        // 1ms flush deadline — don't hold packets too long
+        // 10ms flush deadline — balances latency vs iOS CPU wake limits
+        // (iOS kills processes exceeding ~150 wakes/sec; 1ms timer = 1000 wakes/sec = violation)
         let timer = DispatchSource.makeTimerSource(queue: timerQueue)
-        timer.schedule(deadline: .now() + .milliseconds(1), repeating: .milliseconds(1))
+        timer.schedule(deadline: .now() + .milliseconds(10), repeating: .milliseconds(10))
         timer.setEventHandler { [weak self] in
             self?.flush()
         }
@@ -89,6 +90,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         completionHandler: @escaping (Error?) -> Void
     ) {
         NSLog("[MirageTunnel] startTunnel called")
+        #if os(iOS)
+        let availMB = Double(os_proc_available_memory()) / 1_048_576.0
+        NSLog("[MirageTunnel] 📊 Initial memory: %.1f MB available", availMB)
+        #endif
 
         guard let proto = protocolConfiguration as? NETunnelProviderProtocol,
               let config = proto.providerConfiguration,
@@ -199,11 +204,29 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 } else if status == .error || status == .disconnected {
                     // Connection error — report failure
                     NSLog("[MirageTunnel] ❌ Rust connection error: %@", message ?? "unknown")
-                    completeOnce(NSError(
-                        domain: "com.mciart.mirage.tunnel",
-                        code: 4,
-                        userInfo: [NSLocalizedDescriptionKey: message ?? "Rust connection error"]
-                    ))
+                    #if os(iOS)
+                    let mem = Double(os_proc_available_memory()) / 1_048_576.0
+                    NSLog("[MirageTunnel] 📊 Memory at error: %.1f MB", mem)
+                    #endif
+                    // If tunnel was already up, completeOnce is a no-op.
+                    // In that case, tear down the tunnel so iOS can auto-restart it.
+                    lock.lock()
+                    let wasCompleted = completed
+                    lock.unlock()
+                    if wasCompleted {
+                        NSLog("[MirageTunnel] 🔄 Rust died after tunnel was up — calling cancelTunnelWithError for auto-restart")
+                        self?.cancelTunnelWithError(NSError(
+                            domain: "com.mciart.mirage.tunnel",
+                            code: 5,
+                            userInfo: [NSLocalizedDescriptionKey: message ?? "Rust connection lost"]
+                        ))
+                    } else {
+                        completeOnce(NSError(
+                            domain: "com.mciart.mirage.tunnel",
+                            code: 4,
+                            userInfo: [NSLocalizedDescriptionKey: message ?? "Rust connection error"]
+                        ))
+                    }
                 }
             },
             onTunnelConfig: { [weak self] config in
@@ -245,7 +268,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         with reason: NEProviderStopReason,
         completionHandler: @escaping () -> Void
     ) {
-        NSLog("[MirageTunnel] stopTunnel called (reason: %d)", reason.rawValue)
+        NSLog("[MirageTunnel] stopTunnel called (reason: %@ / %d)", Self.stopReasonName(reason), reason.rawValue)
+        #if os(iOS)
+        let availMB = Double(os_proc_available_memory()) / 1_048_576.0
+        NSLog("[MirageTunnel] 📊 Memory at stop: %.1f MB", availMB)
+        #endif
         memoryTimer?.cancel()
         memoryTimer = nil
         writeBuffer?.flush()
@@ -253,6 +280,29 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         bridge?.stop()
         bridge = nil
         completionHandler()
+    }
+
+    private static func stopReasonName(_ reason: NEProviderStopReason) -> String {
+        switch reason {
+        case .none: return "none"
+        case .userInitiated: return "userInitiated"
+        case .providerFailed: return "providerFailed"
+        case .noNetworkAvailable: return "noNetworkAvailable"
+        case .unrecoverableNetworkChange: return "unrecoverableNetworkChange"
+        case .providerDisabled: return "providerDisabled"
+        case .authenticationCanceled: return "authenticationCanceled"
+        case .configurationFailed: return "configurationFailed"
+        case .idleTimeout: return "idleTimeout"
+        case .configurationDisabled: return "configurationDisabled"
+        case .configurationRemoved: return "configurationRemoved"
+        case .superceded: return "superceded"
+        case .userLogout: return "userLogout"
+        case .userSwitch: return "userSwitch"
+        case .connectionFailed: return "connectionFailed"
+        case .sleep: return "sleep"
+        case .appUpdate: return "appUpdate"
+        @unknown default: return "unknown(\(reason.rawValue))"
+        }
     }
 
     // MARK: - App ↔ Extension IPC
@@ -326,11 +376,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         timer.setEventHandler { [weak self] in
             let available = os_proc_available_memory()
             let availMB = Double(available) / 1_048_576.0
+            // Always log memory so we can see the trend before a crash
+            NSLog("[MirageTunnel] 📊 Memory: %.1f MB available", availMB)
             if availMB < 3.0 {
                 NSLog("[MirageTunnel] 🚨 CRITICAL MEMORY: %.1f MB — emergency flush", availMB)
                 self?.writeBuffer?.flush()
             } else if availMB < 5.0 {
-                NSLog("[MirageTunnel] ⚠️ LOW MEMORY: %.1f MB", availMB)
+                NSLog("[MirageTunnel] ⚠️ LOW MEMORY: %.1f MB — flushing", availMB)
                 self?.writeBuffer?.flush()
             }
         }
