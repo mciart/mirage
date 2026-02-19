@@ -83,9 +83,10 @@ impl ClientRelayer {
         // Application-layer encryption setup
         if obfuscation.inner_encryption {
             if let Some(key_str) = &inner_key {
-                let derived = crate::transport::crypto::derive_key(key_str);
-                framed_writer.set_cipher(crate::transport::crypto::FrameCipher::new(&derived));
-                framed_reader.set_cipher(crate::transport::crypto::FrameCipher::new(&derived));
+                let (c2s_key, s2c_key) = crate::transport::crypto::derive_key_pair(key_str);
+                // Client writer encrypts with c2s_key, reader decrypts with s2c_key
+                framed_writer.set_cipher(crate::transport::crypto::FrameCipher::new(&c2s_key));
+                framed_reader.set_cipher(crate::transport::crypto::FrameCipher::new(&s2c_key));
                 tracing::info!("Application-layer encryption enabled (ChaCha20-Poly1305)");
             } else {
                 tracing::warn!(
