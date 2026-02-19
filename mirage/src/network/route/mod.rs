@@ -12,6 +12,9 @@ mod posix;
 #[cfg(all(unix, not(target_os = "ios")))]
 pub use posix::{add_routes, delete_routes, get_default_gateway, get_gateway_for};
 
+#[cfg(target_os = "macos")]
+mod route_socket;
+
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]

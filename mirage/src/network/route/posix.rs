@@ -2,6 +2,7 @@ use crate::error::RouteError;
 use crate::Result;
 use ipnet::IpNet;
 use std::net::IpAddr;
+#[cfg(target_os = "linux")]
 use std::process::Command;
 use tracing::{debug, info};
 
@@ -73,57 +74,8 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 
     #[cfg(target_os = "macos")]
     {
-        // macOS 策略: 先删后加
-        let _ = delete_route_impl(network, target, interface_name);
-
-        let mut cmd = Command::new("route");
-        cmd.args(["-n", "add"]);
-
-        // 根据 IP 版本选择参数
-        match network {
-            IpNet::V4(_) => {
-                cmd.arg("-net");
-            }
-            IpNet::V6(_) => {
-                cmd.arg("-inet6");
-            }
-        }
-
-        cmd.arg(network.to_string());
-
-        match target {
-            RouteTarget::Gateway(gw) => {
-                cmd.arg(gw.to_string());
-            }
-            RouteTarget::GatewayOnInterface(gw, iface) => {
-                // macOS/BSD specific handling for Link-Local
-                if gw.is_ipv6() && gw.to_string().starts_with("fe80") {
-                    cmd.arg(format!("{}%{}", gw, iface));
-                } else {
-                    cmd.arg(gw.to_string());
-                }
-            }
-            RouteTarget::Interface(_) => {
-                cmd.arg("-interface");
-                cmd.arg(interface_name);
-            }
-        }
-
-        let output = cmd.output().map_err(|e| RouteError::PlatformError {
-            message: format!("Failed to execute route add: {}", e),
-        })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // 忽略 "File exists" 错误
-            if !stderr.contains("File exists") {
-                return Err(RouteError::AddFailed {
-                    destination: network.to_string(),
-                    message: format!("route add failed: {}", stderr),
-                }
-                .into());
-            }
-        }
+        // 使用原生 routing socket (无需 fork 外部进程)
+        super::route_socket::route_add(network, target, interface_name)?;
     }
 
     info!(
@@ -150,32 +102,7 @@ fn delete_route_impl(network: &IpNet, target: &RouteTarget, _interface_name: &st
 
     #[cfg(target_os = "macos")]
     {
-        let mut cmd = Command::new("route");
-        cmd.args(["-n", "delete"]);
-
-        match network {
-            IpNet::V4(_) => {
-                cmd.arg("-net");
-            }
-            IpNet::V6(_) => {
-                cmd.arg("-inet6");
-            }
-        }
-
-        cmd.arg(network.to_string());
-
-        match target {
-            RouteTarget::Gateway(gw) => {
-                cmd.arg(gw.to_string());
-            }
-            RouteTarget::GatewayOnInterface(gw, _) => {
-                cmd.arg(gw.to_string());
-            }
-            RouteTarget::Interface(_) => {
-                // 删除时不需要指定接口
-            }
-        }
-        let _ = cmd.output();
+        let _ = super::route_socket::route_delete(network);
     }
 
     Ok(())
@@ -240,70 +167,10 @@ fn get_gateway_by_exec(target: IpAddr) -> Result<RouteTarget> {
 
     #[cfg(target_os = "macos")]
     {
-        let mut cmd = Command::new("route");
-        cmd.args(["-n", "get"]);
-
-        // [关键修复] 必须显式指定地址族，否则 route get IPv6 会报错 "bad address"
-        if target.is_ipv6() {
-            cmd.arg("-inet6");
-        } else {
-            cmd.arg("-inet");
-        }
-
-        cmd.arg(target.to_string());
-
-        let output = cmd.output().map_err(|e| RouteError::PlatformError {
-            message: e.to_string(),
-        })?;
-
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-
-            let mut found_gateway = false;
-            let mut found_interface = false;
-
-            for line in stdout.lines() {
-                let line = line.trim();
-
-                if line.starts_with("gateway:") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() > 1 {
-                        // [关键修复] 去除 IPv6 的 Scope ID (例如 fe80::1%en0 -> fe80::1)
-                        let ip_str = parts[1].split('%').next().unwrap_or(parts[1]);
-
-                        if let Ok(ip) = ip_str.parse::<IpAddr>() {
-                            return Ok(RouteTarget::Gateway(ip));
-                        } else {
-                            tracing::warn!(
-                                "Found gateway string '{}' but failed to parse as IP.",
-                                parts[1]
-                            );
-                        }
-                    }
-                    found_gateway = true;
-                }
-
-                if line.starts_with("interface:") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() > 1 {
-                        return Ok(RouteTarget::Interface(parts[1].to_string()));
-                    }
-                    found_interface = true;
-                }
-            }
-
-            if !found_gateway && !found_interface {
-                tracing::warn!(
-                    "Command 'route -n get' output did not contain gateway info:\n{}",
-                    stdout
-                );
-            }
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!("Command 'route -n get {}' failed: {}", target, stderr);
-        }
+        return super::route_socket::route_get(target);
     }
 
+    #[allow(unreachable_code)]
     Err(RouteError::PlatformError {
         message: "Failed to determine gateway".into(),
     }
