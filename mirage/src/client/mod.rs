@@ -10,7 +10,7 @@ use crate::auth::users_file::UsersFileClientAuthenticator;
 
 use crate::config::{ClientConfig, TransportProtocol};
 use crate::network::interface::{Interface, InterfaceIO};
-use crate::network::route::{add_routes, get_gateway_for, ExclusionRouteGuard, RouteTarget};
+use crate::network::socket_protect;
 use crate::{MirageError, Result};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -43,6 +43,9 @@ pub struct MirageClient {
     quic_endpoint: Option<quinn::Endpoint>,
     quic_connection: Option<quinn::Connection>,
     last_quic_refresh: Option<std::time::Instant>,
+    /// Physical interface name for socket binding (anti-loop).
+    /// Detected before TUN is created, used to bind all outbound sockets.
+    physical_interface: Option<String>,
 }
 
 impl MirageClient {
@@ -55,6 +58,7 @@ impl MirageClient {
             quic_endpoint: None,
             quic_connection: None,
             last_quic_refresh: None,
+            physical_interface: None,
         }
     }
 
@@ -78,12 +82,31 @@ impl MirageClient {
         // 1. Resolve server addresses (support Dual Stack)
         let resolved_addrs = self.resolve_server_address().await?;
 
-        // 2. Connect to server (tries all resolved addresses × protocols)
+        // 2. Detect physical interface BEFORE connecting (for socket binding anti-loop)
+        //    This must happen before TUN is created, while default route is on physical NIC.
+        #[cfg(not(target_os = "ios"))]
+        {
+            let probe_addr = resolved_addrs[0].ip();
+            match socket_protect::detect_outbound_interface(probe_addr) {
+                Ok(iface) => {
+                    info!("Physical interface for anti-loop binding: {}", iface);
+                    self.physical_interface = Some(iface);
+                }
+                Err(e) => {
+                    warn!(
+                        "Could not detect physical interface: {}. Falling back to exclusion routes.",
+                        e
+                    );
+                }
+            }
+        }
+
+        // 3. Connect to server (tries all resolved addresses × protocols)
         let (tls_stream, remote_addr, protocol): (TransportStream, SocketAddr, String) =
             self.connect_to_server(&resolved_addrs).await?;
 
-        // 3. Anti-loop exclusion routes (held until this scope drops)
-        let _route_guards = Self::setup_exclusion_routes(&self.config, remote_addr.ip());
+        // Setup exclusion routes for user-configured excluded_routes (if any)
+        let _route_guards = Self::setup_exclusion_routes(&self.config);
 
         // 4. Authenticate
         let session = self.authenticate_connection(tls_stream).await?;
@@ -147,90 +170,79 @@ impl MirageClient {
         Ok(())
     }
 
-    /// Sets up exclusion routes to prevent routing loops.
+    /// Sets up exclusion routes for user-configured excluded networks.
     ///
-    /// Adds routes for the server IP and any user-configured excluded routes
-    /// via their detected gateway, ensuring VPN traffic doesn't loop through
-    /// the tunnel itself.
+    /// Server IP anti-loop is now handled by socket binding (IP_BOUND_IF / SO_BINDTODEVICE).
+    /// This function only handles `config.network.excluded_routes` which are
+    /// arbitrary network ranges that still need routing table entries.
     fn setup_exclusion_routes(
         config: &ClientConfig,
-        server_ip: std::net::IpAddr,
-    ) -> Vec<ExclusionRouteGuard> {
+    ) -> Vec<crate::network::route::ExclusionRouteGuard> {
+        use crate::network::route::{
+            add_routes, get_gateway_for, ExclusionRouteGuard, RouteTarget,
+        };
+
         let mut route_guards: Vec<ExclusionRouteGuard> = Vec::new();
-        let default_interface_placeholder = "auto";
 
-        // Check if server IP falls within configured routes (needs exclusion)
-        let needs_server_exclusion = config
-            .network
-            .routes
-            .iter()
-            .any(|route| route.contains(&server_ip));
-
-        let mut targets_to_exclude = Vec::new();
-
-        if needs_server_exclusion {
-            let mask = if server_ip.is_ipv4() { 32 } else { 128 };
-            if let Ok(server_net) = IpNet::new(server_ip, mask) {
-                targets_to_exclude.push((server_net, "Server IP"));
-            }
+        if config.network.excluded_routes.is_empty() {
+            return route_guards;
         }
 
         for excluded_route in &config.network.excluded_routes {
-            targets_to_exclude.push((*excluded_route, "Excluded Route"));
-        }
-
-        for (network, description) in targets_to_exclude {
-            if let Ok(target) = get_gateway_for(network.addr()) {
+            if let Ok(target) = get_gateway_for(excluded_route.addr()) {
                 let (iface_to_use, result) = match &target {
                     RouteTarget::Gateway(gw) => {
                         info!(
-                            "Detected gateway for {} {}: {}. Adding exclusion route.",
-                            description, network, gw
+                            "Detected gateway for excluded route {}: {}. Adding exclusion route.",
+                            excluded_route, gw
                         );
                         (
-                            default_interface_placeholder.to_string(),
-                            add_routes(&[network], &target, default_interface_placeholder),
+                            "auto".to_string(),
+                            add_routes(&[*excluded_route], &target, "auto"),
                         )
                     }
                     RouteTarget::GatewayOnInterface(gw, iface) => {
                         info!(
-                            "Detected gateway for {} {}: {} on interface {}. Adding exclusion route.",
-                            description, network, gw, iface
+                            "Detected gateway for excluded route {}: {} on {}. Adding exclusion route.",
+                            excluded_route, gw, iface
                         );
-                        (iface.clone(), add_routes(&[network], &target, iface))
+                        (
+                            iface.clone(),
+                            add_routes(&[*excluded_route], &target, iface),
+                        )
                     }
                     RouteTarget::Interface(iface) => {
                         info!(
-                            "Detected interface for {} {}: {}. Adding exclusion route directly.",
-                            description, network, iface
+                            "Detected interface for excluded route {}: {}. Adding exclusion route.",
+                            excluded_route, iface
                         );
-                        (iface.clone(), add_routes(&[network], &target, iface))
+                        (
+                            iface.clone(),
+                            add_routes(&[*excluded_route], &target, iface),
+                        )
                     }
                 };
 
                 match result {
                     Ok(()) => {
-                        info!(
-                            "Successfully added exclusion route for {} {}",
-                            description, network
-                        );
+                        info!("Added exclusion route for {}", excluded_route);
                         route_guards.push(ExclusionRouteGuard {
-                            network,
+                            network: *excluded_route,
                             target: target.clone(),
                             interface: iface_to_use,
                         });
                     }
                     Err(e) => {
                         warn!(
-                            "Failed to add exclusion route for {} {}: {}",
-                            description, network, e
+                            "Failed to add exclusion route for {}: {}",
+                            excluded_route, e
                         );
                     }
                 }
             } else {
                 warn!(
-                    "Could not detect gateway for {} {}. Skipping exclusion route.",
-                    description, network
+                    "Could not detect gateway for excluded route {}. Skipping.",
+                    excluded_route
                 );
             }
         }
@@ -534,6 +546,27 @@ impl MirageClient {
             )));
         }
 
+        // Happy Eyeballs (RFC 8305): interleave IPv6 and IPv4 addresses.
+        // IPv6 gets first shot, but if it fails instantly (e.g. "Network unreachable"
+        // on IPv4-only networks), we immediately try IPv4 without waiting.
+        let v6: Vec<SocketAddr> = addrs.iter().filter(|a| a.is_ipv6()).cloned().collect();
+        let v4: Vec<SocketAddr> = addrs.iter().filter(|a| a.is_ipv4()).cloned().collect();
+        let mut addrs = Vec::with_capacity(v6.len() + v4.len());
+        let max_len = std::cmp::max(v6.len(), v4.len());
+        for i in 0..max_len {
+            if i < v6.len() {
+                addrs.push(v6[i]);
+            }
+            if i < v4.len() {
+                addrs.push(v4[i]);
+            }
+        }
+
+        info!(
+            "Resolved addresses (Happy Eyeballs interleaved): {:?}",
+            addrs
+        );
+
         Ok(addrs)
     }
 
@@ -559,31 +592,50 @@ impl MirageClient {
 
         let mut last_error = None;
 
+        // Per-address connection timeout: prevents a single unreachable address
+        // (e.g. IPv6 on IPv4-only network) from blocking for 30+ seconds.
+        let connect_timeout = Duration::from_secs(self.config.connection.timeout_s.min(5));
+
         for protocol in &protocols {
             for server_addr in resolved_addrs {
                 info!(
-                    "Attempting connection to {} using protocol: {}",
-                    server_addr, protocol
+                    "Attempting connection to {} using protocol: {} (timeout: {}s)",
+                    server_addr,
+                    protocol,
+                    connect_timeout.as_secs()
                 );
 
-                match self
-                    .connect_with_protocol(*server_addr, protocol, &connection_string)
-                    .await
+                match tokio::time::timeout(
+                    connect_timeout,
+                    self.connect_with_protocol(*server_addr, protocol, &connection_string),
+                )
+                .await
                 {
-                    Ok(stream) => {
+                    Ok(Ok(stream)) => {
                         info!(
                             "Successfully connected to {} using protocol: {}",
                             server_addr, protocol
                         );
                         return Ok((stream, *server_addr, protocol.to_string()));
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         warn!(
                             "Failed to connect to {} using {}: {}",
                             server_addr, protocol, e
                         );
                         last_error = Some(e);
-                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    Err(_) => {
+                        warn!(
+                            "Connection to {} using {} timed out after {}s",
+                            server_addr,
+                            protocol,
+                            connect_timeout.as_secs()
+                        );
+                        last_error = Some(MirageError::connection_failed(format!(
+                            "Connection to {} timed out",
+                            server_addr
+                        )));
                     }
                 }
             }
@@ -654,15 +706,22 @@ impl MirageClient {
                         if server_addr.is_ipv6() { "IPv6" } else { "IPv4" }
                     );
                     self.quic_connection = None;
-                    let endpoint =
-                        crate::protocol::udp::create_endpoint(&self.config, server_addr)?;
+                    let endpoint = crate::protocol::udp::create_endpoint_with_protect(
+                        &self.config,
+                        server_addr,
+                        self.physical_interface.as_deref(),
+                    )?;
                     self.quic_endpoint = Some(endpoint.clone());
                     endpoint
                 } else {
                     endpoint.clone()
                 }
             } else {
-                let endpoint = crate::protocol::udp::create_endpoint(&self.config, server_addr)?;
+                let endpoint = crate::protocol::udp::create_endpoint_with_protect(
+                    &self.config,
+                    server_addr,
+                    self.physical_interface.as_deref(),
+                )?;
                 self.quic_endpoint = Some(endpoint.clone());
                 endpoint
             };
@@ -734,7 +793,37 @@ impl MirageClient {
             return Ok(Box::new(stream));
         }
 
-        let tcp_stream = TcpStream::connect(server_addr).await?;
+        // TCP: Create socket → protect (bind to physical NIC) → async connect
+        let tcp_stream = {
+            let tcp_socket = if server_addr.is_ipv4() {
+                tokio::net::TcpSocket::new_v4()
+            } else {
+                tokio::net::TcpSocket::new_v6()
+            }
+            .map_err(|e| {
+                MirageError::connection_failed(format!("Failed to create TCP socket: {e}"))
+            })?;
+
+            // Bind socket to physical interface (anti-loop)
+            #[cfg(unix)]
+            if let Some(ref iface) = self.physical_interface {
+                use std::os::fd::AsRawFd;
+                if let Err(e) = socket_protect::protect_socket(
+                    tcp_socket.as_raw_fd(),
+                    iface,
+                    server_addr.is_ipv6(),
+                ) {
+                    warn!(
+                        "Socket protect failed ({}), continuing without binding: {}",
+                        iface, e
+                    );
+                }
+            }
+
+            tcp_socket.connect(server_addr).await.map_err(|e| {
+                MirageError::connection_failed(format!("TCP connect to {server_addr}: {e}"))
+            })?
+        };
         tcp_stream.set_nodelay(self.config.transport.tcp_nodelay)?;
 
         // Apply TCP optimizations

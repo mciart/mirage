@@ -105,11 +105,20 @@ pub fn build_rustls_config(config: &ClientConfig) -> Result<rustls::ClientConfig
 /// Creates a quinn `Endpoint` configured for client use.
 /// Binds to the correct address family based on `target_addr`.
 ///
-/// On Windows, wraps the socket to disable GSO (Generic Segmentation Offload)
-/// since Windows does not reliably support USO, causing `sendmsg` error 10040.
+/// If `protect_interface` is provided, the UDP socket will be bound to that
+/// physical interface to prevent traffic from entering the TUN (anti-loop).
 pub fn create_endpoint(
     config: &ClientConfig,
     target_addr: std::net::SocketAddr,
+) -> Result<quinn::Endpoint> {
+    create_endpoint_with_protect(config, target_addr, None)
+}
+
+/// Creates a QUIC endpoint with optional socket protection.
+pub fn create_endpoint_with_protect(
+    config: &ClientConfig,
+    target_addr: std::net::SocketAddr,
+    protect_interface: Option<&str>,
 ) -> Result<quinn::Endpoint> {
     let client_crypto = build_rustls_config(config)?;
 
@@ -134,12 +143,15 @@ pub fn create_endpoint(
         "0.0.0.0:0".parse().unwrap()
     };
 
-    let mut endpoint = create_platform_endpoint(bind_addr)?;
+    let mut endpoint =
+        create_platform_endpoint(bind_addr, protect_interface, target_addr.is_ipv6())?;
     endpoint.set_default_client_config(client_config);
 
     info!(
-        "Created new QUIC endpoint (bound to {} for target {})",
-        bind_addr, target_addr
+        "Created new QUIC endpoint (bound to {} for target {}, protected: {})",
+        bind_addr,
+        target_addr,
+        protect_interface.is_some()
     );
     Ok(endpoint)
 }
@@ -148,7 +160,12 @@ pub fn create_endpoint(
 ///
 /// On Windows: Disables GSO/USO by wrapping the socket with `max_transmit_segments = 1`.
 /// On other platforms: Uses Quinn's default `Endpoint::client()`.
-fn create_platform_endpoint(bind_addr: std::net::SocketAddr) -> Result<quinn::Endpoint> {
+/// If `protect_interface` is provided, binds the UDP socket to that physical interface.
+fn create_platform_endpoint(
+    bind_addr: std::net::SocketAddr,
+    protect_interface: Option<&str>,
+    is_ipv6: bool,
+) -> Result<quinn::Endpoint> {
     #[cfg(target_os = "windows")]
     {
         use std::sync::Arc;
@@ -175,8 +192,22 @@ fn create_platform_endpoint(bind_addr: std::net::SocketAddr) -> Result<quinn::En
 
     #[cfg(not(target_os = "windows"))]
     {
-        quinn::Endpoint::client(bind_addr).map_err(|e| {
-            MirageError::connection_failed(format!("Failed to create QUIC endpoint: {}", e))
+        let socket = std::net::UdpSocket::bind(bind_addr).map_err(|e| {
+            MirageError::connection_failed(format!("Failed to bind UDP socket: {e}"))
+        })?;
+
+        // Protect socket if interface is specified
+        if let Some(iface) = protect_interface {
+            if let Err(e) =
+                crate::network::socket_protect::protect_udp_socket(&socket, iface, is_ipv6)
+            {
+                warn!("QUIC socket protect failed ({}): {}", iface, e);
+            }
+        }
+
+        let runtime = std::sync::Arc::new(quinn::TokioRuntime);
+        quinn::Endpoint::new(quinn::EndpointConfig::default(), None, socket, runtime).map_err(|e| {
+            MirageError::connection_failed(format!("Failed to create QUIC endpoint: {e}"))
         })
     }
 }
