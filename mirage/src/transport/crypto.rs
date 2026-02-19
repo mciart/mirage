@@ -28,7 +28,6 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use hkdf::Hkdf;
 use sha2::Sha256;
-use zeroize::Zeroize;
 
 /// Authentication tag size for ChaCha20-Poly1305 (16 bytes)
 pub const TAG_SIZE: usize = 16;
