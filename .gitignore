@@ -108,3 +108,6 @@ target/
 lcov.info
 cobertura.xml
 coverage/
+
+# Xcode user state
+*.xcuserstate
