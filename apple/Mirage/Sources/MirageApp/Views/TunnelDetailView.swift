@@ -116,10 +116,10 @@ struct TunnelDetailView: View {
                 GridItem(.flexible()),
                 GridItem(.flexible()),
             ], spacing: 8) {
-                MetricCard(icon: "arrow.up", label: "Sent",
-                           value: Self.formatBytes(vpn.metrics.bytesSent))
                 MetricCard(icon: "arrow.down", label: "Received",
                            value: Self.formatBytes(vpn.metrics.bytesReceived))
+                MetricCard(icon: "arrow.up", label: "Sent",
+                           value: Self.formatBytes(vpn.metrics.bytesSent))
                 MetricCard(icon: "clock", label: "Uptime",
                            value: Self.formatUptime(vpn.metrics.uptime))
                 MetricCard(icon: "bolt.horizontal", label: "Protocol",

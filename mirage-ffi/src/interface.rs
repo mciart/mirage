@@ -204,10 +204,10 @@ impl InterfaceIO for AppleInterfaceIO {
         match rx.recv().await {
             Some(data) => {
                 self.metrics
-                    .packets_received
+                    .packets_sent
                     .fetch_add(1, Ordering::Relaxed);
                 self.metrics
-                    .bytes_received
+                    .bytes_sent
                     .fetch_add(data.len() as u64, Ordering::Relaxed);
                 Ok(Packet::new(data))
             }
@@ -246,10 +246,10 @@ impl InterfaceIO for AppleInterfaceIO {
         let count = packets.len() as u64;
         let bytes: u64 = packets.iter().map(|p| p.data.len() as u64).sum();
         self.metrics
-            .packets_received
+            .packets_sent
             .fetch_add(count, Ordering::Relaxed);
         self.metrics
-            .bytes_received
+            .bytes_sent
             .fetch_add(bytes, Ordering::Relaxed);
 
         Ok(packets)
@@ -260,9 +260,11 @@ impl InterfaceIO for AppleInterfaceIO {
     async fn write_packet(&self, packet: Packet) -> Result<()> {
         if let Some(cb) = self.write_cb {
             let data = packet.data.as_ref();
-            self.metrics.packets_sent.fetch_add(1, Ordering::Relaxed);
             self.metrics
-                .bytes_sent
+                .packets_received
+                .fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .bytes_received
                 .fetch_add(data.len() as u64, Ordering::Relaxed);
             unsafe {
                 cb(data.as_ptr(), data.len(), self.context);
@@ -276,9 +278,11 @@ impl InterfaceIO for AppleInterfaceIO {
     #[inline]
     fn write_packet_data(&self, data: &[u8]) -> Result<()> {
         if let Some(cb) = self.write_cb {
-            self.metrics.packets_sent.fetch_add(1, Ordering::Relaxed);
             self.metrics
-                .bytes_sent
+                .packets_received
+                .fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .bytes_received
                 .fetch_add(data.len() as u64, Ordering::Relaxed);
             unsafe {
                 cb(data.as_ptr(), data.len(), self.context);
@@ -296,9 +300,11 @@ impl InterfaceIO for AppleInterfaceIO {
         let count = packets.len() as u64;
         let bytes: u64 = packets.iter().map(|p| p.data.len() as u64).sum();
         self.metrics
-            .packets_sent
+            .packets_received
             .fetch_add(count, Ordering::Relaxed);
-        self.metrics.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
+        self.metrics
+            .bytes_received
+            .fetch_add(bytes, Ordering::Relaxed);
 
         if let Some(cb) = self.write_cb {
             for packet in &packets {
