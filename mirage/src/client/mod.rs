@@ -106,8 +106,8 @@ impl MirageClient {
         {
             // In macOS Network Extension sandbox, socket bind/protect is denied.
             // Skip detect_outbound_interface and rely on exclusion routes instead.
-            let skip = cfg!(target_os = "macos")
-                && std::env::var_os("APP_SANDBOX_CONTAINER_ID").is_some();
+            let skip =
+                cfg!(target_os = "macos") && std::env::var_os("APP_SANDBOX_CONTAINER_ID").is_some();
 
             if !skip {
                 let probe_addr = resolved_addrs[0].ip();
@@ -124,7 +124,9 @@ impl MirageClient {
                     }
                 }
             } else {
-                info!("macOS sandbox detected, skipping socket protection (using exclusion routes)");
+                info!(
+                    "macOS sandbox detected, skipping socket protection (using exclusion routes)"
+                );
             }
         }
 
