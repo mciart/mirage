@@ -4,6 +4,7 @@
 //! establishment, DNS resolution, and endpoint caching.
 
 use crate::config::TransportProtocol;
+#[cfg(not(target_os = "ios"))]
 use crate::network::socket_protect;
 use crate::transport::quic::QuicStream;
 use crate::{MirageError, Result};
@@ -21,7 +22,7 @@ use super::{MirageClient, TransportStream};
 /// Standalone — no `&mut self` needed, safe to call concurrently.
 pub(super) async fn tcp_connect_raw(
     addr: SocketAddr,
-    physical_interface: Option<&str>,
+    #[cfg_attr(target_os = "ios", allow(unused))] physical_interface: Option<&str>,
 ) -> Result<TcpStream> {
     let tcp_socket = if addr.is_ipv4() {
         tokio::net::TcpSocket::new_v4()
