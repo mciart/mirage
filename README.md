@@ -45,7 +45,7 @@ TCP 和 QUIC 双协议均具备完整伪装能力，探测者只能看到合法�
 |------|--------|----------------|---------|
 | **传输层** | TCP/TLS + QUIC + 优先级回退 | TCP/TLS, QUIC, WS, gRPC | TCP/UDP (自定义协议) |
 | **TLS 库** | **BoringSSL** (Chrome 同源) | uTLS (Go) | OpenSSL |
-| **TCP 伪装** | **Mirage 协议** (SNI + 抗主动探测) | Reality | 无 (特征明显) |
+| **TCP 伪装** | **类Reality** (SNI + 抗主动探测) | Reality | 无 (特征明显) |
 | **QUIC 伪装** | **JLS** (无需证书 + 抗主动探测 + 0-RTT) | 无 | 无 |
 | **VPN 层级** | **L3 VPN** (原生 ICMP/TCP/UDP) | L4 代理 (SOCKS/HTTP) | L3 VPN (TUN/TAP) |
 | **流量混淆** | Padding + Jitter + Heartbeat | Vision 流控 | 无 (需插件) |
