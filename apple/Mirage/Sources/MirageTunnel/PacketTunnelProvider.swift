@@ -92,6 +92,7 @@ private final class PacketWriteBuffer {
 }
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
+    private static let log = Logger(subsystem: "com.mciart.mirage.tunnel", category: "tunnel")
     private static let memLog = Logger(subsystem: "com.mciart.mirage.tunnel", category: "memory")
     private var bridge: MirageBridge?
     /// Batched packet writer for downlink (Rust → TUN)
@@ -105,7 +106,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         options: [String: NSObject]?,
         completionHandler: @escaping (Error?) -> Void
     ) {
-        NSLog("[MirageTunnel] startTunnel called")
+        Self.log.info("startTunnel called")
         #if os(iOS)
         let availMB = Double(os_proc_available_memory()) / 1_048_576.0
         let footprintMB = Double(Self.physicalFootprint()) / 1_048_576.0
@@ -116,7 +117,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
               let config = proto.providerConfiguration,
               let toml = config["config_toml"] as? String
         else {
-            NSLog("[MirageTunnel] ERROR: Missing tunnel configuration")
+            Self.log.error("Missing tunnel configuration")
             completionHandler(NSError(
                 domain: "com.mciart.mirage.tunnel",
                 code: 1,
@@ -125,7 +126,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
 
-        NSLog("[MirageTunnel] Got TOML config (%d bytes)", toml.count)
+        Self.log.info("Got TOML config (\(toml.count, privacy: .public) bytes)")
 
         // Parse config for fallback values
         let parsed = parseTOML(toml)
@@ -133,7 +134,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // Resolve hostname → IPv4 for NEPacketTunnelNetworkSettings
         let serverIP = resolveHostname(serverHost) ?? "0.0.0.0"
-        NSLog("[MirageTunnel] Server: %@ → IP: %@", serverHost, serverIP)
+        Self.log.info("Server: \(serverHost, privacy: .public) → IP: \(serverIP, privacy: .public)")
 
         // ── CRITICAL ORDER ──
         // 1. Start Rust bridge FIRST (before VPN routes exist — avoids DNS loop)
@@ -147,9 +148,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         do {
             try bridge.create(configToml: toml)
-            NSLog("[MirageTunnel] MirageBridge created successfully")
+            Self.log.info("MirageBridge created successfully")
         } catch {
-            NSLog("[MirageTunnel] Failed to create bridge: %@", error.localizedDescription)
+            Self.log.error("Failed to create bridge: \(error.localizedDescription, privacy: .public)")
             completionHandler(NSError(
                 domain: "com.mciart.mirage.tunnel",
                 code: 2,
@@ -176,7 +177,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let isCompleted = completed
             lock.unlock()
             if !isCompleted {
-                NSLog("[MirageTunnel] ⏰ Connection timeout")
+                Self.log.error("⏰ Connection timeout")
                 completeOnce(NSError(
                     domain: "com.mciart.mirage.tunnel",
                     code: 3,
@@ -190,14 +191,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 self?.writeBuffer?.append(data)
             },
             onStatusChange: { [weak self] status, message in
-                NSLog("[MirageTunnel] 🔄 Rust status: %@ - %@", status.displayName, message ?? "")
+                Self.log.info("🔄 Rust status: \(status.displayName, privacy: .public) - \(message ?? \"\", privacy: .public)")
 
                 if status == .connected {
                     // Rust connected! Apply NE settings (already built from onTunnelConfig)
                     // and tell the system the tunnel is up.
                     guard let self else { return }
                     guard self.pendingSettings != nil else {
-                        NSLog("[MirageTunnel] ⚠️ Connected but no tunnel config received — using fallback")
+                        Self.log.warning("⚠️ Connected but no tunnel config received — using fallback")
                         // Fallback: use TOML-based settings
                         let fallbackSettings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: serverIP)
                         let ipv4 = NEIPv4Settings(addresses: [parsed["interface.address"] ?? "10.7.0.2"],
@@ -210,14 +211,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         return
                     }
 
-                    NSLog("[MirageTunnel] ✅ Rust connected — applying server-assigned network settings")
+                    Self.log.info("✅ Rust connected — applying server-assigned network settings")
                     self.applyPendingSettingsAndComplete(completeOnce: completeOnce)
                 } else if status == .error || status == .disconnected {
                     // Connection error — report failure
-                    NSLog("[MirageTunnel] ❌ Rust connection error: %@", message ?? "unknown")
+                    Self.log.error("❌ Rust connection error: \(message ?? "unknown", privacy: .public)")
                     #if os(iOS)
                     let mem = Double(os_proc_available_memory()) / 1_048_576.0
-                    NSLog("[MirageTunnel] 📊 Memory at error: %.1f MB", mem)
+                    Self.log.info("📊 Memory at error: \(mem, privacy: .public) MB")
                     #endif
                     // If tunnel was already up, completeOnce is a no-op.
                     // In that case, tear down the tunnel so iOS can auto-restart it.
@@ -225,7 +226,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     let wasCompleted = completed
                     lock.unlock()
                     if wasCompleted {
-                        NSLog("[MirageTunnel] 🔄 Rust died after tunnel was up — calling cancelTunnelWithError for auto-restart")
+                        Self.log.error("🔄 Rust died after tunnel was up — calling cancelTunnelWithError for auto-restart")
                         self?.cancelTunnelWithError(NSError(
                             domain: "com.mciart.mirage.tunnel",
                             code: 5,
@@ -242,15 +243,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             },
             onTunnelConfig: { [weak self] config in
                 // This fires BEFORE onStatusChange(Connected) with server-assigned addresses
-                NSLog("[MirageTunnel] 🎯 Tunnel config from server: addr=%@, v6=%@, mtu=%d, excludedRoutes=%@",
-                      config.clientAddress, config.clientAddressV6, config.mtu,
-                      config.excludedRoutes.description)
+                Self.log.info("🎯 Tunnel config from server: addr=\(config.clientAddress, privacy: .public), v6=\(config.clientAddressV6, privacy: .public), mtu=\(config.mtu, privacy: .public), excludedRoutes=\(config.excludedRoutes.description, privacy: .public)")
                 guard let self else { return }
                 self.pendingSettings = self.buildNetworkSettings(from: config, serverIP: serverIP)
             }
         )
 
-        NSLog("[MirageTunnel] bridge.start() returned — waiting for Rust to connect...")
+        Self.log.info("bridge.start() returned — waiting for Rust to connect...")
     }
 
     /// Applies pending NE settings and calls completionHandler.
@@ -262,11 +261,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         setTunnelNetworkSettings(settings) { [weak self] error in
             if let error {
-                NSLog("[MirageTunnel] ❌ Failed to set network settings: %@", error.localizedDescription)
+                Self.log.error("❌ Failed to set network settings: \(error.localizedDescription, privacy: .public)")
                 completeOnce(error)
                 return
             }
-            NSLog("[MirageTunnel] ✅ Network settings applied — tunnel is UP")
+            Self.log.info("✅ Network settings applied — tunnel is UP")
             guard let self else { completeOnce(nil); return }
             self.connectedAt = Date()
             self.writeBuffer = PacketWriteBuffer(provider: self)
@@ -280,10 +279,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         with reason: NEProviderStopReason,
         completionHandler: @escaping () -> Void
     ) {
-        NSLog("[MirageTunnel] stopTunnel called (reason: %@ / %d)", Self.stopReasonName(reason), reason.rawValue)
+        Self.log.info("stopTunnel called (reason: \(Self.stopReasonName(reason), privacy: .public) / \(reason.rawValue, privacy: .public))")
         #if os(iOS)
         let availMB = Double(os_proc_available_memory()) / 1_048_576.0
-        NSLog("[MirageTunnel] 📊 Memory at stop: %.1f MB", availMB)
+        Self.log.info("📊 Memory at stop: \(availMB, privacy: .public) MB")
         #endif
         memoryTimer?.cancel()
         memoryTimer = nil
@@ -452,7 +451,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let netStr = "\((netInt >> 24) & 0xFF).\((netInt >> 16) & 0xFF).\((netInt >> 8) & 0xFF).\(netInt & 0xFF)"
                 let maskStr = "\((mask >> 24) & 0xFF).\((mask >> 16) & 0xFF).\((mask >> 8) & 0xFF).\(mask & 0xFF)"
                 ipv4Included.append(NEIPv4Route(destinationAddress: netStr, subnetMask: maskStr))
-                NSLog("[MirageTunnel] Added VPN subnet route: %@/%d", netStr, prefix)
+                Self.log.debug("Added VPN subnet route: \(netStr, privacy: .public)/\(prefix, privacy: .public)")
             }
         }
         ipv4.includedRoutes = ipv4Included
@@ -482,7 +481,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         if !ipv4Excluded.isEmpty {
             ipv4.excludedRoutes = ipv4Excluded
         }
-        NSLog("[MirageTunnel] IPv4: default route + %d excluded routes", ipv4Excluded.count)
+        Self.log.info("IPv4: default route + \(ipv4Excluded.count, privacy: .public) excluded routes")
         settings.ipv4Settings = ipv4
 
         // IPv6
@@ -520,14 +519,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         destinationAddress: netStr,
                         networkPrefixLength: v6Prefix as NSNumber
                     ))
-                    NSLog("[MirageTunnel] Added VPN IPv6 subnet route: %@/%d", netStr, v6Prefix)
+                    Self.log.debug("Added VPN IPv6 subnet route: \(netStr, privacy: .public)/\(v6Prefix, privacy: .public)")
                 }
             }
             ipv6.includedRoutes = ipv6Included
             if !ipv6Excluded.isEmpty {
                 ipv6.excludedRoutes = ipv6Excluded
             }
-            NSLog("[MirageTunnel] IPv6: default route + %d excluded routes", ipv6Excluded.count)
+            Self.log.info("IPv6: default route + \(ipv6Excluded.count, privacy: .public) excluded routes")
             settings.ipv6Settings = ipv6
         }
 

@@ -175,15 +175,11 @@ impl MirageServer {
 
                     debug!("Received incoming connection from '{}'", remote_addr.ip());
 
-                    // Configure TCP options
-                    if let Err(e) = tcp_stream.set_nodelay(self.config.connection.tcp_nodelay) {
-                        warn!("Failed to set TCP_NODELAY: {e}");
-                    }
-
-                    // Apply TCP optimizations (Linux only)
-                    let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
-                    let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
-                    let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
+                    // Apply TCP optimizations (best-effort, logged on failure)
+                    crate::transport::tcp::apply_all_optimizations(
+                        &tcp_stream,
+                        self.config.connection.tcp_nodelay,
+                    );
 
                     // Dispatch traffic (Camouflage / Standard / Proxy)
                     let dispatcher = TlsDispatcher::new(&self.config);

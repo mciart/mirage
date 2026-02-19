@@ -17,6 +17,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::debug;
 
+/// Maximum number of packets to coalesce in a single flush (Smart Batching).
+const MAX_BATCH_COUNT: usize = 16;
+/// Maximum total bytes to accumulate before flushing (~16 KB, one TLS record).
+const MAX_BATCH_BYTES: usize = 16384;
+
 /// Runs the packet relay for an authenticated client.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_connection_relay<R, W>(
@@ -53,20 +58,18 @@ where
 
         if jitter_disabled {
             tasks.push(tokio::spawn(async move {
-                // [优化] 智能批量发送 (Smart Batching)
+                // [Optimization] Smart Batching — coalesce queued packets into fewer flushes
                 while let Some(data) = egress_queue.recv().await {
-                    // 1. 至少先发一个包
+                    // 1. Send at least one packet
                     if let Err(e) = framed_writer.send_packet_no_flush(&data).await {
                         return Err(MirageError::system(format!("Failed to send packet: {}", e)));
                     }
 
-                    // 2. 尝试获取更多包，但增加两个限制条件
+                    // 2. Try to coalesce more packets (bounded by count and byte limits)
                     let mut current_batch_size = data.len();
                     let mut count = 0;
-                    let max_batch_count = 16;
-                    let max_batch_bytes = 16384; // 16KB for high throughput
 
-                    while count < max_batch_count && current_batch_size < max_batch_bytes {
+                    while count < MAX_BATCH_COUNT && current_batch_size < MAX_BATCH_BYTES {
                         match egress_queue.try_recv() {
                             Ok(more_data) => {
                                 current_batch_size += more_data.len();
@@ -83,7 +86,7 @@ where
                         }
                     }
 
-                    // 3. 立即 Flush
+                    // 3. Flush immediately
                     if let Err(e) = framed_writer.flush().await {
                         return Err(MirageError::system(format!("Failed to flush: {}", e)));
                     }

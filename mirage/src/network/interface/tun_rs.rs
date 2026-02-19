@@ -293,27 +293,29 @@ fn reader_task(
             // Ensure buffer can hold potential 4-byte PI header
             let buffer_size = mtu + 4;
 
-            let mut packet_buf = unsafe {
-                // SAFETY: the data is written to before it resized and read
-                uninitialized_bytes_mut(buffer_size)
-            };
+            let mut packet_buf = zeroed_bytes_mut(buffer_size);
 
             let size = interface
                 .recv(&mut packet_buf)
                 .await
                 .inspect_err(|e| error!("failed to receive packet: {}", e))?;
 
-            // Heuristic PI header stripping (works for macOS/BSD/etc)
+            // PI (Packet Information) header stripping.
+            //
+            // On Unix: we set `packet_information(false)` (IFF_NO_PI) at creation,
+            // so PI should never appear. We still guard just in case a driver
+            // ignores the flag.
+            //
+            // On Windows: TUN drivers (e.g. Wintun) never add PI headers.
+            //
+            // The heuristic: valid IPv4 starts with 0x4_, IPv6 with 0x6_.
+            // A PI header starts with 0x00 or 0x02, so high nibble == 0.
             let mut packet_data = packet_buf.split_to(size);
-
             if packet_data.len() >= 4 {
-                // Check IP version (high nibble of first byte)
-                // If 0, it's likely a PI header (00 00 00 02 or 02 00 00 00)
-                // IPv4 starts with 4 (0100), IPv6 with 6 (0110)
                 let first_byte = packet_data[0];
                 if first_byte >> 4 == 0 {
                     use bytes::Buf;
-                    debug!("Detected PI header, stripping 4 bytes");
+                    tracing::warn!("Detected unexpected PI header (IFF_NO_PI may not be honored), stripping 4 bytes");
                     packet_data.advance(4);
                 }
             }
@@ -390,10 +392,7 @@ fn reader_task(
             // 复用 Vec 容量，只重新填充 BytesMut
             bufs.clear();
             for _ in 0..batch_size {
-                bufs.push(unsafe {
-                    // SAFETY: the data is written to before it resized and read
-                    uninitialized_bytes_mut(mtu)
-                });
+                bufs.push(zeroed_bytes_mut(mtu));
             }
 
             let num_packets = interface
@@ -476,16 +475,12 @@ fn writer_task(
     })
 }
 
-/// Creates a `BytesMut` of `capacity` uninitialized bytes.
+/// Creates a `BytesMut` of `capacity` zero-initialized bytes.
 ///
-/// # Safety
-/// - the caller must ensure that the memory is initialized before it is read
-unsafe fn uninitialized_bytes_mut(capacity: usize) -> BytesMut {
+/// This avoids the UB risk of exposing uninitialized memory via `set_len`.
+/// The cost of `memset` on a ~2KB MTU buffer is negligible (< 100ns).
+fn zeroed_bytes_mut(capacity: usize) -> BytesMut {
     let mut buf = BytesMut::with_capacity(capacity);
-
-    // SAFETY: the data is being written to and then resized
-    // so no uninitialized data is being read
-    buf.set_len(capacity);
-
+    buf.resize(capacity, 0);
     buf
 }

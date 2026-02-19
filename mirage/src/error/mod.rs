@@ -74,16 +74,20 @@ pub enum MirageError {
     System { message: String },
 }
 
-// BoringSSL error conversion
+// BoringSSL error conversion — preserve error context for debugging
 impl From<boring::ssl::Error> for MirageError {
-    fn from(_err: boring::ssl::Error) -> Self {
-        MirageError::Certificate(CertificateError::ValidationFailed)
+    fn from(err: boring::ssl::Error) -> Self {
+        MirageError::Certificate(CertificateError::TlsError {
+            message: format!("{}", err),
+        })
     }
 }
 
 impl From<boring::error::ErrorStack> for MirageError {
-    fn from(_err: boring::error::ErrorStack) -> Self {
-        MirageError::Certificate(CertificateError::ValidationFailed)
+    fn from(err: boring::error::ErrorStack) -> Self {
+        MirageError::Certificate(CertificateError::TlsError {
+            message: format!("{}", err),
+        })
     }
 }
 

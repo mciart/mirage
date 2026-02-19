@@ -870,11 +870,10 @@ impl MirageClient {
                     {
                         Ok((tcp_stream, winner_addr)) => {
                             // Apply TCP optimizations on the winning connection
-                            tcp_stream.set_nodelay(self.config.transport.tcp_nodelay)?;
-                            let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
-                            let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
-                            let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
-                            let _ = crate::transport::tcp::set_tcp_keepalive(&tcp_stream, 10);
+                            crate::transport::tcp::apply_all_optimizations(
+                                &tcp_stream,
+                                self.config.transport.tcp_nodelay,
+                            );
 
                             debug!("TCP connection established to {}", winner_addr);
 
@@ -1139,11 +1138,7 @@ impl MirageClient {
             }
         };
 
-        let _ = tcp_stream.set_nodelay(transport_config.tcp_nodelay);
-        let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
-        let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
-        let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
-        let _ = crate::transport::tcp::set_tcp_keepalive(&tcp_stream, 10);
+        crate::transport::tcp::apply_all_optimizations(&tcp_stream, transport_config.tcp_nodelay);
 
         let use_camouflage = config.camouflage.is_mirage();
 

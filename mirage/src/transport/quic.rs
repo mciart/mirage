@@ -52,9 +52,8 @@ impl AsyncWrite for QuicStream {
     }
 }
 
-// Ensure QuicStream is compatible with our needs
-unsafe impl Send for QuicStream {}
-unsafe impl Sync for QuicStream {}
+// QuicStream is Send (quinn types are Send) but NOT Sync (RecvStream is !Sync).
+// This is correct — QuicStream is only used from a single async task at a time.
 
 /// Creates a QUIC transport configuration.
 ///

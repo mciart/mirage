@@ -47,4 +47,8 @@ pub enum CertificateError {
     /// Certificate has been revoked
     #[error("Certificate has been revoked")]
     Revoked,
+
+    /// TLS/SSL error from BoringSSL with preserved error context
+    #[error("TLS error: {message}")]
+    TlsError { message: String },
 }

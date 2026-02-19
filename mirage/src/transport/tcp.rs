@@ -5,6 +5,28 @@
 
 use std::time::Duration;
 
+/// Applies all TCP optimizations to a stream in one call.
+///
+/// This is a best-effort operation — individual failures are logged but do not
+/// propagate, since these are optional performance tunings.
+pub fn apply_all_optimizations(stream: &tokio::net::TcpStream, nodelay: bool) {
+    if let Err(e) = stream.set_nodelay(nodelay) {
+        tracing::debug!("Failed to set TCP_NODELAY: {}", e);
+    }
+    if let Err(e) = optimize_tcp_socket(stream) {
+        tracing::debug!("Failed to optimize TCP socket: {}", e);
+    }
+    if let Err(e) = set_tcp_congestion_bbr(stream) {
+        tracing::debug!("Failed to set BBR: {}", e);
+    }
+    if let Err(e) = set_tcp_quickack(stream) {
+        tracing::debug!("Failed to set TCP_QUICKACK: {}", e);
+    }
+    if let Err(e) = set_tcp_keepalive(stream, 10) {
+        tracing::debug!("Failed to set TCP keepalive: {}", e);
+    }
+}
+
 /// Enables TCP keepalive on the socket to prevent server-side timeout during
 /// iOS process suspension. When the Network Extension is suspended, the Tokio
 /// runtime freezes but the OS TCP stack continues sending keepalive probes,
