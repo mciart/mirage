@@ -27,6 +27,12 @@ TARGETS=(
     "x86_64-apple-darwin"
 )
 
+# Set deployment targets so BoringSSL's cc/cmake picks up the right min version.
+# Without export, child processes (cc crate) may use the SDK version (e.g. 26.2)
+# instead, causing hundreds of "built for newer iOS" linker warnings.
+export IPHONEOS_DEPLOYMENT_TARGET=17.0
+export MACOSX_DEPLOYMENT_TARGET=13.0
+
 echo "🔨 Building libmirage_ffi.a ($PROFILE) for ${#TARGETS[@]} Apple targets..."
 echo ""
 
@@ -34,7 +40,7 @@ FAILED=()
 
 for target in "${TARGETS[@]}"; do
     echo "━━━ Building for $target ━━━"
-    if IPHONEOS_DEPLOYMENT_TARGET=15.0 cargo rustc \
+    if cargo rustc \
         -p mirage-ffi \
         --target "$target" \
         $PROFILE_FLAG \

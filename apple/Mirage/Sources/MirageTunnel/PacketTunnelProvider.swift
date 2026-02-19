@@ -85,7 +85,7 @@ private final class PacketWriteBuffer {
         protocols.reserveCapacity(maxBatch)
         lock.unlock()
 
-        autoreleasepool {
+        _ = autoreleasepool {
             provider?.packetFlow.writePackets(batch, withProtocols: protos)
         }
     }
@@ -312,6 +312,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         case .connectionFailed: return "connectionFailed"
         case .sleep: return "sleep"
         case .appUpdate: return "appUpdate"
+        case .internalError: return "internalError"
         @unknown default: return "unknown(\(reason.rawValue))"
         }
     }
