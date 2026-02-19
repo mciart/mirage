@@ -438,169 +438,174 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 .fetch_add(packets.len() as u64, Ordering::Relaxed);
             stats.tx_bytes.fetch_add(batch_bytes, Ordering::Relaxed);
 
-            // Check if all writers are dead
-            let alive_count = dead_writers
-                .iter()
-                .filter(|d| !d.load(Ordering::Relaxed))
-                .count();
-            if alive_count == 0 {
-                // All connections dead — poll for auto-heal recovery (up to 30s)
-                warn!("All mux writers dead — waiting for auto-heal...");
-                let mut recovered = false;
-                for attempt in 1..=30u32 {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    if dead_writers.iter().any(|d| !d.load(Ordering::Relaxed)) {
-                        info!("Auto-heal recovered after {}s", attempt);
-                        recovered = true;
-                        break;
-                    }
-                }
-                if !recovered {
-                    warn!("All connections still dead after 30s, giving up");
-                    return Err(MirageError::system("All mux connections lost"));
-                }
-                continue;
-            }
+            // Auto-heal if all writers are dead
+            Self::wait_for_auto_heal(&dead_writers).await?;
 
             match mode {
                 MuxMode::RoundRobin => {
-                    // Batch flush: write all packets to the next alive writer, then flush once.
-                    // Per-packet lock→write→flush destroys latency (each flush = TLS record + TCP send).
-                    let mut attempts = 0;
-                    loop {
-                        let idx = robin_idx.fetch_add(1, Ordering::Relaxed) % num_writers;
-                        attempts += 1;
-                        if attempts > num_writers {
-                            warn!(
-                                "No alive writers for batch, dropping {} packets",
-                                packets.len()
-                            );
-                            break;
-                        }
-                        if dead_writers[idx].load(Ordering::Relaxed) {
-                            continue;
-                        }
-
-                        let writer = &writers[idx];
-                        let mut w = writer.lock().await;
-                        let mut ok = true;
-                        for packet in &packets {
-                            if w.send_packet_no_flush(packet).await.is_err() {
-                                ok = false;
-                                break;
-                            }
-                        }
-                        if ok {
-                            if let Err(e) = w.flush().await {
-                                warn!("Mux writer {} flush failed, marking dead: {}", idx, e);
-                                dead_writers[idx].store(true, Ordering::Relaxed);
-                                continue;
-                            }
-                        } else {
-                            warn!("Mux writer {} failed, marking dead", idx);
-                            dead_writers[idx].store(true, Ordering::Relaxed);
-                            continue;
-                        }
-                        break; // Successfully sent batch
-                    }
+                    Self::distribute_round_robin(&packets, &writers, &robin_idx, &dead_writers)
+                        .await;
                 }
                 MuxMode::ActiveStandby => {
-                    let current = active_idx.load(Ordering::Relaxed) % num_writers;
+                    Self::distribute_active_standby(&packets, &writers, &active_idx, &dead_writers)
+                        .await;
+                }
+            }
+        }
+    }
 
-                    if dead_writers[current].load(Ordering::Relaxed) {
-                        // Find next alive writer
-                        let mut found = false;
-                        for offset in 1..num_writers {
-                            let next = (current + offset) % num_writers;
-                            if !dead_writers[next].load(Ordering::Relaxed) {
-                                active_idx.store(next, Ordering::Relaxed);
-                                found = true;
-                                break;
-                            }
-                        }
-                        if !found {
-                            // All dead — poll for auto-heal recovery
-                            warn!(
-                                "All mux writers dead (active-standby) — waiting for auto-heal..."
-                            );
-                            let mut healed = false;
-                            for attempt in 1..=30u32 {
-                                tokio::time::sleep(Duration::from_secs(1)).await;
-                                for offset in 0..num_writers {
-                                    let next = (current + offset) % num_writers;
-                                    if !dead_writers[next].load(Ordering::Relaxed) {
-                                        active_idx.store(next, Ordering::Relaxed);
-                                        info!(
-                                            "Auto-heal recovered connection {} after {}s",
-                                            next, attempt
-                                        );
-                                        healed = true;
-                                        break;
-                                    }
-                                }
-                                if healed {
-                                    break;
-                                }
-                            }
-                            if !healed {
-                                return Err(MirageError::system("All mux connections lost"));
-                            }
-                        }
-                        continue; // Retry with new active writer
-                    }
+    /// Waits for at least one writer to recover if all are dead.
+    ///
+    /// Polls once per second for up to 30 seconds. Returns error if
+    /// no writer recovers within the timeout.
+    async fn wait_for_auto_heal(dead_writers: &[AtomicBool]) -> Result<()> {
+        let alive_count = dead_writers
+            .iter()
+            .filter(|d| !d.load(Ordering::Relaxed))
+            .count();
 
-                    let writer = &writers[current];
+        if alive_count > 0 {
+            return Ok(());
+        }
+
+        warn!("All mux writers dead — waiting for auto-heal...");
+        for attempt in 1..=30u32 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if dead_writers.iter().any(|d| !d.load(Ordering::Relaxed)) {
+                info!("Auto-heal recovered after {}s", attempt);
+                return Ok(());
+            }
+        }
+
+        warn!("All connections still dead after 30s, giving up");
+        Err(MirageError::system("All mux connections lost"))
+    }
+
+    /// Distributes a batch of packets using round-robin scheduling.
+    ///
+    /// Selects the next alive writer, writes all packets without flushing,
+    /// then flushes once. Dead writers are skipped.
+    async fn distribute_round_robin(
+        packets: &[Packet],
+        writers: &[Arc<Mutex<FramedWriter<WriteHalf<S>>>>],
+        robin_idx: &AtomicUsize,
+        dead_writers: &[AtomicBool],
+    ) {
+        let num_writers = writers.len();
+        let mut attempts = 0;
+
+        loop {
+            let idx = robin_idx.fetch_add(1, Ordering::Relaxed) % num_writers;
+            attempts += 1;
+            if attempts > num_writers {
+                warn!(
+                    "No alive writers for batch, dropping {} packets",
+                    packets.len()
+                );
+                break;
+            }
+            if dead_writers[idx].load(Ordering::Relaxed) {
+                continue;
+            }
+
+            let writer = &writers[idx];
+            let mut w = writer.lock().await;
+            let mut ok = true;
+            for packet in packets {
+                if w.send_packet_no_flush(packet).await.is_err() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                if let Err(e) = w.flush().await {
+                    warn!("Mux writer {} flush failed, marking dead: {}", idx, e);
+                    dead_writers[idx].store(true, Ordering::Relaxed);
+                    continue;
+                }
+            } else {
+                warn!("Mux writer {} failed, marking dead", idx);
+                dead_writers[idx].store(true, Ordering::Relaxed);
+                continue;
+            }
+            break; // Successfully sent batch
+        }
+    }
+
+    /// Distributes a batch of packets using active-standby scheduling.
+    ///
+    /// Writes to the currently active writer with a 3-second timeout.
+    /// On failure, marks the writer dead and fails over to the next alive one.
+    async fn distribute_active_standby(
+        packets: &[Packet],
+        writers: &[Arc<Mutex<FramedWriter<WriteHalf<S>>>>],
+        active_idx: &AtomicUsize,
+        dead_writers: &[AtomicBool],
+    ) {
+        let num_writers = writers.len();
+        let current = active_idx.load(Ordering::Relaxed) % num_writers;
+
+        if dead_writers[current].load(Ordering::Relaxed) {
+            // Find next alive writer
+            for offset in 1..num_writers {
+                let next = (current + offset) % num_writers;
+                if !dead_writers[next].load(Ordering::Relaxed) {
+                    active_idx.store(next, Ordering::Relaxed);
+                    break;
+                }
+            }
+            return; // Retry on next loop iteration with new active writer
+        }
+
+        let writer = &writers[current];
+        let mut w = writer.lock().await;
+
+        // Use timeout to detect truly dead connections.
+        // 3s is generous enough to avoid false positives during congestion,
+        // but short enough to prevent catastrophic latency buildup.
+        let write_result = tokio::time::timeout(Duration::from_secs(3), async {
+            for packet in packets {
+                if w.send_packet_no_flush(packet).await.is_err() {
+                    return false;
+                }
+            }
+            w.flush().await.is_ok()
+        })
+        .await;
+
+        let failed = match write_result {
+            Ok(true) => false, // Write succeeded
+            Ok(false) => {
+                warn!("Mux active-standby: connection {} write error", current);
+                true
+            }
+            Err(_) => {
+                warn!(
+                    "Mux active-standby: connection {} write timed out (>3s), marking dead",
+                    current
+                );
+                true
+            }
+        };
+
+        if failed {
+            dead_writers[current].store(true, Ordering::Relaxed);
+
+            // Find next alive writer and retry
+            for offset in 1..num_writers {
+                let next = (current + offset) % num_writers;
+                if !dead_writers[next].load(Ordering::Relaxed) {
+                    info!("Mux active-standby: switching to connection {}", next);
+                    active_idx.store(next, Ordering::Relaxed);
+                    drop(w);
+
+                    let writer = &writers[next];
                     let mut w = writer.lock().await;
-
-                    // Use timeout to detect truly dead connections.
-                    // 3s is generous enough to avoid false positives during congestion,
-                    // but short enough to prevent catastrophic latency buildup.
-                    let write_result = tokio::time::timeout(Duration::from_secs(3), async {
-                        for packet in &packets {
-                            if w.send_packet_no_flush(packet).await.is_err() {
-                                return false;
-                            }
-                        }
-                        w.flush().await.is_ok()
-                    })
-                    .await;
-
-                    let failed = match write_result {
-                        Ok(true) => false, // Write succeeded
-                        Ok(false) => {
-                            warn!("Mux active-standby: connection {} write error", current);
-                            true
-                        }
-                        Err(_) => {
-                            warn!(
-                                "Mux active-standby: connection {} write timed out (>3s), marking dead",
-                                current
-                            );
-                            true
-                        }
-                    };
-
-                    if failed {
-                        dead_writers[current].store(true, Ordering::Relaxed);
-
-                        // Find next alive writer and retry
-                        for offset in 1..num_writers {
-                            let next = (current + offset) % num_writers;
-                            if !dead_writers[next].load(Ordering::Relaxed) {
-                                info!("Mux active-standby: switching to connection {}", next);
-                                active_idx.store(next, Ordering::Relaxed);
-                                drop(w);
-
-                                let writer = &writers[next];
-                                let mut w = writer.lock().await;
-                                for packet in &packets {
-                                    let _ = w.send_packet_no_flush(packet).await;
-                                }
-                                let _ = w.flush().await;
-                                break;
-                            }
-                        }
+                    for packet in packets {
+                        let _ = w.send_packet_no_flush(packet).await;
                     }
+                    let _ = w.flush().await;
+                    break;
                 }
             }
         }

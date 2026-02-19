@@ -58,8 +58,15 @@ impl MirageClient {
         }
     }
 
-    /// Connects to the Mirage server...
-    /// [修改] 签名变更：接收 shutdown_signal (Future) 和 connection_event_tx (Sender)
+    /// Connects to the Mirage server, authenticates, and starts the packet relay.
+    ///
+    /// Orchestrates the full connection lifecycle:
+    /// 1. DNS resolution
+    /// 2. TCP/TLS or QUIC connection
+    /// 3. Exclusion routes (anti-loop)
+    /// 4. Authentication
+    /// 5. Interface creation + relay setup (single or MUX)
+    /// 6. Shutdown handling
     pub async fn start<I: InterfaceIO, F>(
         &mut self,
         shutdown_signal: Option<F>,
@@ -68,32 +75,97 @@ impl MirageClient {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        // Resolve server addresses (support Dual Stack)
-        eprintln!("[MEM-CHECKPOINT] client.start() ENTRY");
+        // 1. Resolve server addresses (support Dual Stack)
         let resolved_addrs = self.resolve_server_address().await?;
-        eprintln!("[MEM-CHECKPOINT] after DNS resolve");
 
-        // Connect to server via TCP/TLS (Primary Connection)
-        // Try all resolved addresses for each protocol before falling back
+        // 2. Connect to server (tries all resolved addresses × protocols)
         let (tls_stream, remote_addr, protocol): (TransportStream, SocketAddr, String) =
             self.connect_to_server(&resolved_addrs).await?;
-        eprintln!("[MEM-CHECKPOINT] after TLS connect");
 
-        // Anti-Loop & Excluded Routes: Add exclusion routes via the gateway used to reach them
-        let server_ip = remote_addr.ip();
-        let mut _route_guards: Vec<ExclusionRouteGuard> = Vec::new();
+        // 3. Anti-loop exclusion routes (held until this scope drops)
+        let _route_guards = Self::setup_exclusion_routes(&self.config, remote_addr.ip());
+
+        // 4. Authenticate
+        let session = self.authenticate_connection(tls_stream).await?;
+
+        // 5. Create TUN interface
+        let interface: Interface<I> = Interface::create(
+            session.client_address,
+            session.client_address_v6,
+            self.config.connection.mtu,
+            Some(session.server_address.addr()),
+            session.server_address_v6.map(|n: ipnet::IpNet| n.addr()),
+            self.config.network.interface_name.clone(),
+            Some(self.config.network.routes.clone()),
+            Some(self.config.network.dns_servers.clone()),
+        )?;
+
+        // 6. Start relay (single-connection or MUX)
+        let primary_reader = session.reader;
+        let primary_writer = session.writer;
+        let session_id = session.session_id;
+        let target_parallel_connections = self.config.transport.parallel_connections;
+        let use_mux = target_parallel_connections > 1;
+
+        let relayer = if use_mux {
+            self.setup_mux_relay(
+                interface,
+                primary_reader,
+                primary_writer,
+                session_id,
+                &resolved_addrs,
+                remote_addr,
+                &protocol,
+            )
+            .await?
+        } else {
+            ClientRelayer::start(
+                interface,
+                primary_reader,
+                primary_writer,
+                self.config.obfuscation.clone(),
+            )?
+        };
+
+        // 7. Signal successful connection
+        if let Some(tx) = connection_event_tx {
+            let _ = tx.send(());
+        }
+
+        // 8. Wait for shutdown
+        if let Some(signal) = shutdown_signal {
+            tokio::select! {
+                res = relayer.wait_for_shutdown() => res?,
+                _ = signal => {
+                    info!("Shutdown signal received, closing connection...");
+                }
+            }
+        } else {
+            relayer.wait_for_shutdown().await?;
+        }
+
+        Ok(())
+    }
+
+    /// Sets up exclusion routes to prevent routing loops.
+    ///
+    /// Adds routes for the server IP and any user-configured excluded routes
+    /// via their detected gateway, ensuring VPN traffic doesn't loop through
+    /// the tunnel itself.
+    fn setup_exclusion_routes(
+        config: &ClientConfig,
+        server_ip: std::net::IpAddr,
+    ) -> Vec<ExclusionRouteGuard> {
+        let mut route_guards: Vec<ExclusionRouteGuard> = Vec::new();
         let default_interface_placeholder = "auto";
 
-        // 1. Add exclusion route for Server IP
-        // Check if we actually need an exclusion route for server
-        let needs_server_exclusion = self
-            .config
+        // Check if server IP falls within configured routes (needs exclusion)
+        let needs_server_exclusion = config
             .network
             .routes
             .iter()
             .any(|route| route.contains(&server_ip));
 
-        // Valid targets for exclusion routes
         let mut targets_to_exclude = Vec::new();
 
         if needs_server_exclusion {
@@ -103,87 +175,56 @@ impl MirageClient {
             }
         }
 
-        // 2. Add user-configured excluded routes
-        for excluded_route in &self.config.network.excluded_routes {
+        for excluded_route in &config.network.excluded_routes {
             targets_to_exclude.push((*excluded_route, "Excluded Route"));
         }
 
         for (network, description) in targets_to_exclude {
-            // We use the network address to find the best route
-            // For a network like 192.168.1.0/24, using the network address usually works to find the interface/gateway
             if let Ok(target) = get_gateway_for(network.addr()) {
-                match &target {
+                let (iface_to_use, result) = match &target {
                     RouteTarget::Gateway(gw) => {
                         info!(
                             "Detected gateway for {} {}: {}. Adding exclusion route.",
                             description, network, gw
                         );
-
-                        if let Err(e) =
-                            add_routes(&[network], &target, default_interface_placeholder)
-                        {
-                            warn!(
-                                "Failed to add exclusion route for {} {} (loop risk): {}",
-                                description, network, e
-                            );
-                        } else {
-                            info!(
-                                "Successfully added exclusion route for {} {}",
-                                description, network
-                            );
-                            _route_guards.push(ExclusionRouteGuard {
-                                network,
-                                target: target.clone(),
-                                interface: default_interface_placeholder.to_string(),
-                            });
-                        }
+                        (
+                            default_interface_placeholder.to_string(),
+                            add_routes(&[network], &target, default_interface_placeholder),
+                        )
                     }
                     RouteTarget::GatewayOnInterface(gw, iface) => {
                         info!(
                             "Detected gateway for {} {}: {} on interface {}. Adding exclusion route.",
                             description, network, gw, iface
                         );
-
-                        // Use the discovered interface explicitly
-                        if let Err(e) = add_routes(&[network], &target, iface) {
-                            warn!(
-                                "Failed to add exclusion route for {} {} on {} (loop risk): {}",
-                                description, network, iface, e
-                            );
-                        } else {
-                            info!(
-                                "Successfully added exclusion route for {} {} on {}",
-                                description, network, iface
-                            );
-                            _route_guards.push(ExclusionRouteGuard {
-                                network,
-                                target: target.clone(),
-                                interface: iface.clone(),
-                            });
-                        }
+                        (iface.clone(), add_routes(&[network], &target, iface))
                     }
                     RouteTarget::Interface(iface) => {
                         info!(
                             "Detected interface for {} {}: {}. Adding exclusion route directly.",
                             description, network, iface
                         );
+                        (iface.clone(), add_routes(&[network], &target, iface))
+                    }
+                };
 
-                        if let Err(e) = add_routes(&[network], &target, iface) {
-                            warn!(
-                                "Failed to add exclusion route on interface {} for {} {}: {}",
-                                iface, description, network, e
-                            );
-                        } else {
-                            info!(
-                                "Successfully added exclusion route on interface {} for {} {}",
-                                iface, description, network
-                            );
-                            _route_guards.push(ExclusionRouteGuard {
-                                network,
-                                target: target.clone(),
-                                interface: iface.clone(),
-                            });
-                        }
+                match result {
+                    Ok(()) => {
+                        info!(
+                            "Successfully added exclusion route for {} {}",
+                            description, network
+                        );
+                        route_guards.push(ExclusionRouteGuard {
+                            network,
+                            target: target.clone(),
+                            interface: iface_to_use,
+                        });
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to add exclusion route for {} {}: {}",
+                            description, network, e
+                        );
                     }
                 }
             } else {
@@ -194,10 +235,24 @@ impl MirageClient {
             }
         }
 
-        // Split stream for auth
+        route_guards
+    }
+
+    /// Authenticates the connection and stores address assignments.
+    ///
+    /// Splits the transport stream, sends credentials, and receives the
+    /// session configuration (client/server addresses, session ID).
+    async fn authenticate_connection(
+        &mut self,
+        tls_stream: TransportStream,
+    ) -> Result<
+        crate::auth::client_auth::AuthenticatedSession<
+            tokio::io::ReadHalf<TransportStream>,
+            tokio::io::WriteHalf<TransportStream>,
+        >,
+    > {
         let (read_half, write_half) = tokio::io::split(tls_stream);
 
-        // Authenticate
         let authenticator = Box::new(UsersFileClientAuthenticator::new(
             &self.config.authentication,
             self.config.static_client_ip,
@@ -211,7 +266,6 @@ impl MirageClient {
         let session = auth_client.authenticate(read_half, write_half).await?;
 
         info!("Successfully authenticated");
-        eprintln!("[MEM-CHECKPOINT] after auth");
         info!("Session ID: {:02x?}", session.session_id);
         info!(
             "Parallel connections configured: {}",
@@ -229,260 +283,221 @@ impl MirageClient {
         self.client_address = Some(session.client_address);
         self.server_address = Some(session.server_address);
 
-        // Create interface
-        let interface: Interface<I> = Interface::create(
-            session.client_address,
-            session.client_address_v6,
-            self.config.connection.mtu,
-            Some(session.server_address.addr()),
-            session.server_address_v6.map(|n: ipnet::IpNet| n.addr()),
-            self.config.network.interface_name.clone(),
-            Some(self.config.network.routes.clone()),
-            Some(self.config.network.dns_servers.clone()),
-        )?;
+        Ok(session)
+    }
 
-        // Prepare primary connection
-        let primary_reader = session.reader;
-        let primary_writer = session.writer;
-        let session_id = session.session_id;
+    /// Sets up the MUX relay with multiple parallel connections.
+    ///
+    /// Establishes additional connections, authenticates them as secondary
+    /// sessions, configures the MuxController, and spawns the connection
+    /// factory for rotation.
+    #[allow(clippy::too_many_arguments)]
+    async fn setup_mux_relay<I: InterfaceIO>(
+        &mut self,
+        interface: Interface<I>,
+        primary_reader: tokio::io::ReadHalf<TransportStream>,
+        primary_writer: tokio::io::WriteHalf<TransportStream>,
+        session_id: [u8; 8],
+        resolved_addrs: &[SocketAddr],
+        remote_addr: SocketAddr,
+        protocol: &str,
+    ) -> Result<ClientRelayer> {
+        use crate::transport::mux::{MuxController, MuxMode, RotationConfig};
 
-        // Unified parallel connection count
-        let target_parallel_connections = self.config.transport.parallel_connections;
+        let num_parallel = self.config.transport.parallel_connections as usize;
 
-        // Determine if we should use the MuxController
-        // Only use Mux when we actually have multiple connections.
-        // For single connections, the direct relay path has zero mutex overhead
-        // and dramatically lower latency (no heartbeat lock contention, no channel hops).
-        // Connection rotation for single-connection mode can be handled separately
-        // without the full Mux machinery.
-        let use_mux = target_parallel_connections > 1;
+        // Determine addresses to use for pool connections
+        let pool_addrs = self.build_pool_addrs(resolved_addrs, remote_addr);
 
-        let relayer = if use_mux {
-            // --- MuxController Logic ---
-            use crate::transport::mux::{MuxController, MuxMode, RotationConfig};
+        // Establish all connections (primary + secondary)
+        let mut connections = Vec::new();
+        connections.push((primary_reader, primary_writer));
 
-            // Determine addresses to use for pool connections
-            let mut pool_addrs = Vec::new();
-            if self.config.transport.dual_stack && resolved_addrs.len() > 1 {
-                // Dual Stack: Interleave v4 and v6 addresses
-                let v4_addrs: Vec<_> = resolved_addrs
-                    .iter()
-                    .filter(|a| a.is_ipv4())
-                    .cloned()
-                    .collect();
-                let v6_addrs: Vec<_> = resolved_addrs
-                    .iter()
-                    .filter(|a| a.is_ipv6())
-                    .cloned()
-                    .collect();
+        for i in 1..num_parallel {
+            let target_addr = pool_addrs[i % pool_addrs.len()];
+            info!(
+                "Establishing parallel connection {}/{} to {}",
+                i + 1,
+                num_parallel,
+                target_addr
+            );
 
-                let max_len = std::cmp::max(v4_addrs.len(), v6_addrs.len());
-                for i in 0..max_len {
-                    if i < v4_addrs.len() {
-                        pool_addrs.push(v4_addrs[i]);
-                    }
-                    if i < v6_addrs.len() {
-                        pool_addrs.push(v6_addrs[i]);
-                    }
-                }
-
-                info!("Dual Stack Enabled: Using pool addresses: {:?}", pool_addrs);
-            } else {
-                // Just use the primary address for all connections
-                pool_addrs.push(remote_addr);
-            }
-
-            let mut connections = Vec::new();
-
-            // Add the primary connection first
-            connections.push((primary_reader, primary_writer));
-
-            // Establish additional connections
-            let num_parallel = target_parallel_connections as usize;
-            for i in 1..num_parallel {
-                // Round-robin selection of address
-                let target_addr = pool_addrs[i % pool_addrs.len()];
-
-                info!(
-                    "Establishing parallel connection {}/{} to {}",
-                    i + 1,
-                    num_parallel,
-                    target_addr
-                );
-
-                match self.connect_to_server(&[target_addr]).await {
-                    Ok((stream, _, _)) => {
-                        // Authenticate secondary connection
-                        let (r, w) = tokio::io::split(stream);
-                        let secondary_auth = AuthClient::new(
-                            Box::new(UsersFileClientAuthenticator::new(
-                                &self.config.authentication,
-                                self.config.static_client_ip,
-                                self.config.static_client_ip_v6,
-                            )),
-                            Duration::from_secs(self.config.connection.timeout_s),
-                        );
-
-                        // Secondary connections just need to join the session
-                        match secondary_auth
-                            .authenticate_secondary(r, w, session_id)
-                            .await
-                        {
-                            Ok((reader, writer)) => {
-                                connections.push((reader, writer));
-                                info!("Parallel connection {} joined session", i + 1);
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Failed to authenticate parallel connection {}: {}",
-                                    i + 1,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to establish parallel connection {}: {}", i + 1, e);
-                    }
-                }
-            }
-
-            let mode = MuxMode::parse(&self.config.connection.mux_mode);
-            let rotation_config = RotationConfig {
-                max_lifetime_s: self.config.connection.max_lifetime_s,
-                lifetime_jitter_s: self.config.connection.lifetime_jitter_s,
-            };
-
-            // Create the connection factory channel for rotation
-            let (conn_request_tx, mut conn_request_rx) = tokio::sync::mpsc::channel::<
-                crate::transport::mux::ConnectionRequest<TransportStream>,
-            >(4);
-
-            // Build slot → address mapping so each slot always rotates to the same address
-            let mut slot_addrs = Vec::with_capacity(num_parallel);
-            slot_addrs.push(remote_addr); // Slot 0 = primary connection address
-            for i in 1..num_parallel {
-                slot_addrs.push(pool_addrs[i % pool_addrs.len()]);
-            }
-
-            // Spawn the connection factory background task
-            // This task handles rotation requests from MuxController
-            let auth_config = self.config.authentication.clone();
-            let conn_config = self.config.connection.clone();
-            let transport_config = self.config.transport.clone();
-            let static_ip = self.config.static_client_ip;
-            let static_ip_v6 = self.config.static_client_ip_v6;
-            let conn_string = self.config.server.to_connection_string();
-            let config_clone = self.config.clone();
-            let active_protocol = protocol.clone(); // Protocol used for primary connection
-
-            // We need a separate task since connect_to_server needs &mut self
-            // Instead, we replicate the connection logic in a standalone async block
-            tokio::spawn(async move {
-                while let Some((slot_idx, response_tx)) = conn_request_rx.recv().await {
-                    // Use the same address this slot was originally connected to
-                    let target_addr = slot_addrs[slot_idx % slot_addrs.len()];
-
-                    info!(
-                        "Connection factory: establishing rotation connection to {} ({}) for slot {}",
-                        target_addr, active_protocol, slot_idx
+            match self.connect_to_server(&[target_addr]).await {
+                Ok((stream, _, _)) => {
+                    let (r, w) = tokio::io::split(stream);
+                    let secondary_auth = AuthClient::new(
+                        Box::new(UsersFileClientAuthenticator::new(
+                            &self.config.authentication,
+                            self.config.static_client_ip,
+                            self.config.static_client_ip_v6,
+                        )),
+                        Duration::from_secs(self.config.connection.timeout_s),
                     );
 
-                    // Timeout prevents factory from hanging during network congestion
-                    let stream: Option<TransportStream> =
-                        match tokio::time::timeout(std::time::Duration::from_secs(15), async {
-                            if active_protocol == "udp" {
-                                Self::create_quic_rotation_stream(
-                                    &config_clone,
-                                    target_addr,
-                                    &conn_string,
-                                )
-                                .await
-                            } else {
-                                Self::create_tcp_rotation_stream(
-                                    &config_clone,
-                                    &transport_config,
-                                    target_addr,
-                                    &conn_string,
-                                )
-                                .await
-                            }
-                        })
+                    match secondary_auth
+                        .authenticate_secondary(r, w, session_id)
                         .await
-                        {
-                            Ok(s) => s,
-                            Err(_) => {
-                                warn!(
-                                    "Connection factory: timed out after 15s for slot {}",
-                                    slot_idx
-                                );
-                                None
-                            }
-                        };
-
-                    // If we got a stream, authenticate it as secondary
-                    let result = if let Some(stream) = stream {
-                        let (r, w) = tokio::io::split(stream);
-                        let secondary_auth = AuthClient::new(
-                            Box::new(UsersFileClientAuthenticator::new(
-                                &auth_config,
-                                static_ip,
-                                static_ip_v6,
-                            )),
-                            Duration::from_secs(conn_config.timeout_s),
-                        );
-                        match secondary_auth
-                            .authenticate_secondary(r, w, session_id)
-                            .await
-                        {
-                            Ok((reader, writer)) => {
-                                info!("Rotation: new connection authenticated successfully");
-                                Some((reader, writer))
-                            }
-                            Err(e) => {
-                                warn!("Rotation authentication failed: {}", e);
-                                None
-                            }
+                    {
+                        Ok((reader, writer)) => {
+                            connections.push((reader, writer));
+                            info!("Parallel connection {} joined session", i + 1);
                         }
-                    } else {
-                        None
-                    };
-
-                    let _ = response_tx.send(result);
+                        Err(e) => {
+                            warn!(
+                                "Failed to authenticate parallel connection {}: {}",
+                                i + 1,
+                                e
+                            );
+                        }
+                    }
                 }
-            });
-
-            let mux = MuxController::new(connections, mode, rotation_config, conn_request_tx);
-
-            ClientRelayer::start_mux(interface, mux, self.config.obfuscation.clone())?
-        } else {
-            // --- Single Connection Logic ---
-            ClientRelayer::start(
-                interface,
-                primary_reader,
-                primary_writer,
-                self.config.obfuscation.clone(),
-            )?
-        };
-        eprintln!("[MEM-CHECKPOINT] after relayer start");
-
-        // [恢复] 发送连接成功信号
-        if let Some(tx) = connection_event_tx {
-            let _ = tx.send(());
-        }
-
-        if let Some(signal) = shutdown_signal {
-            tokio::select! {
-                res = relayer.wait_for_shutdown() => res?,
-                _ = signal => {
-                    info!("Shutdown signal received, closing connection...");
+                Err(e) => {
+                    warn!("Failed to establish parallel connection {}: {}", i + 1, e);
                 }
             }
-        } else {
-            relayer.wait_for_shutdown().await?;
         }
 
-        Ok(())
+        let mode = MuxMode::parse(&self.config.connection.mux_mode);
+        let rotation_config = RotationConfig {
+            max_lifetime_s: self.config.connection.max_lifetime_s,
+            lifetime_jitter_s: self.config.connection.lifetime_jitter_s,
+        };
+
+        // Connection factory channel for rotation
+        let (conn_request_tx, mut conn_request_rx) = tokio::sync::mpsc::channel::<
+            crate::transport::mux::ConnectionRequest<TransportStream>,
+        >(4);
+
+        // Slot → address mapping (each slot rotates to the same address)
+        let mut slot_addrs = Vec::with_capacity(num_parallel);
+        slot_addrs.push(remote_addr);
+        for i in 1..num_parallel {
+            slot_addrs.push(pool_addrs[i % pool_addrs.len()]);
+        }
+
+        // Spawn connection factory background task
+        let auth_config = self.config.authentication.clone();
+        let conn_config = self.config.connection.clone();
+        let transport_config = self.config.transport.clone();
+        let static_ip = self.config.static_client_ip;
+        let static_ip_v6 = self.config.static_client_ip_v6;
+        let conn_string = self.config.server.to_connection_string();
+        let config_clone = self.config.clone();
+        let active_protocol = protocol.to_string();
+
+        tokio::spawn(async move {
+            while let Some((slot_idx, response_tx)) = conn_request_rx.recv().await {
+                let target_addr = slot_addrs[slot_idx % slot_addrs.len()];
+
+                info!(
+                    "Connection factory: establishing rotation connection to {} ({}) for slot {}",
+                    target_addr, active_protocol, slot_idx
+                );
+
+                let stream: Option<TransportStream> =
+                    match tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                        if active_protocol == "udp" {
+                            Self::create_quic_rotation_stream(
+                                &config_clone,
+                                target_addr,
+                                &conn_string,
+                            )
+                            .await
+                        } else {
+                            Self::create_tcp_rotation_stream(
+                                &config_clone,
+                                &transport_config,
+                                target_addr,
+                                &conn_string,
+                            )
+                            .await
+                        }
+                    })
+                    .await
+                    {
+                        Ok(s) => s,
+                        Err(_) => {
+                            warn!(
+                                "Connection factory: timed out after 15s for slot {}",
+                                slot_idx
+                            );
+                            None
+                        }
+                    };
+
+                let result = if let Some(stream) = stream {
+                    let (r, w) = tokio::io::split(stream);
+                    let secondary_auth = AuthClient::new(
+                        Box::new(UsersFileClientAuthenticator::new(
+                            &auth_config,
+                            static_ip,
+                            static_ip_v6,
+                        )),
+                        Duration::from_secs(conn_config.timeout_s),
+                    );
+                    match secondary_auth
+                        .authenticate_secondary(r, w, session_id)
+                        .await
+                    {
+                        Ok((reader, writer)) => {
+                            info!("Rotation: new connection authenticated successfully");
+                            Some((reader, writer))
+                        }
+                        Err(e) => {
+                            warn!("Rotation authentication failed: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let _ = response_tx.send(result);
+            }
+        });
+
+        let mux = MuxController::new(connections, mode, rotation_config, conn_request_tx);
+
+        ClientRelayer::start_mux(interface, mux, self.config.obfuscation.clone())
+    }
+
+    /// Builds the pool of addresses for parallel connections.
+    ///
+    /// For dual-stack configurations, interleaves IPv4 and IPv6 addresses.
+    /// Otherwise, uses the primary address for all connections.
+    fn build_pool_addrs(
+        &self,
+        resolved_addrs: &[SocketAddr],
+        remote_addr: SocketAddr,
+    ) -> Vec<SocketAddr> {
+        if self.config.transport.dual_stack && resolved_addrs.len() > 1 {
+            let v4_addrs: Vec<_> = resolved_addrs
+                .iter()
+                .filter(|a| a.is_ipv4())
+                .cloned()
+                .collect();
+            let v6_addrs: Vec<_> = resolved_addrs
+                .iter()
+                .filter(|a| a.is_ipv6())
+                .cloned()
+                .collect();
+
+            let max_len = std::cmp::max(v4_addrs.len(), v6_addrs.len());
+            let mut pool_addrs = Vec::new();
+            for i in 0..max_len {
+                if i < v4_addrs.len() {
+                    pool_addrs.push(v4_addrs[i]);
+                }
+                if i < v6_addrs.len() {
+                    pool_addrs.push(v6_addrs[i]);
+                }
+            }
+
+            info!("Dual Stack Enabled: Using pool addresses: {:?}", pool_addrs);
+            pool_addrs
+        } else {
+            vec![remote_addr]
+        }
     }
 
     pub fn client_address(&self) -> Option<IpNet> {

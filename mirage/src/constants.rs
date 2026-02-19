@@ -9,7 +9,9 @@ use std::sync::LazyLock;
 pub const TLS_MTU_OVERHEAD: u16 = 50;
 
 /// Buffer size for authentication messages.
-pub const AUTH_MESSAGE_BUFFER_SIZE: usize = 1024;
+/// Generous limit (8KB) to support future route table expansion
+/// in Authenticated responses without needing protocol changes.
+pub const AUTH_MESSAGE_BUFFER_SIZE: usize = 8192;
 
 /// Packet buffer size for batch operations on the TUN interface.
 /// Larger values improve throughput but may increase latency.
