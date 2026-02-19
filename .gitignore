@@ -111,3 +111,6 @@ coverage/
 
 # Xcode user state
 *.xcuserstate
+
+# macOS
+.DS_Store
