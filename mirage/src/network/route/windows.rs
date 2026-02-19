@@ -6,12 +6,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::windows::ffi::OsStrExt;
 use tracing::{debug, info, warn};
 
-// 引入 Windows API
 use windows::core::{HRESULT, PCWSTR};
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToAlias, ConvertInterfaceLuidToIndex,
     CreateIpForwardEntry2, DeleteIpForwardEntry2, FreeMibTable, GetBestRoute2, GetIpForwardTable2,
-    InitializeIpForwardEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
+    InitializeIpForwardEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2, NL_ROUTE_PROTOCOL,
 };
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, IN6_ADDR, IN_ADDR, SOCKADDR_INET};
@@ -45,8 +44,8 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         network, target, interface_name
     );
 
-    // [安全策略] 不再删除冲突路由。改用低 Metric 让 VPN 路由优先。
-    // 原始系统路由保持不变，VPN 关闭后自动恢复。
+    // [Safety] Don't delete conflicting routes. Use low metric so VPN routes
+    // take priority. Original system routes remain intact for automatic recovery.
 
     let mut route_row = MIB_IPFORWARD_ROW2::default();
     unsafe { InitializeIpForwardEntry(&mut route_row) };
@@ -57,8 +56,9 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
         RouteTarget::Gateway(gw_ip) => {
             route_row.NextHop = ip_to_sockaddr(*gw_ip);
 
-            // [核心逻辑] 优先使用明确的接口名 (如 "tun0") 查找索引
-            // 只有当名字无效时，才回退到自动网关查找（防止 Windows 错误地选到物理网卡）
+            // [Core] Prefer explicit interface name (e.g. "tun0") lookup.
+            // Only fall back to gateway-based lookup when name is invalid
+            // (prevents Windows from incorrectly selecting the physical NIC).
             let mut interface_index_found = false;
 
             if interface_name != "auto" {
@@ -75,21 +75,12 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
             }
 
             if !interface_index_found {
-                match get_best_interface_index_for_gateway(*gw_ip) {
-                    Ok(index) => {
-                        debug!("Resolved gateway {} to interface index {}", gw_ip, index);
-                        route_row.InterfaceIndex = index;
-                    }
-                    Err(e) => {
-                        return Err(RouteError::PlatformError {
-                            message: format!(
-                                "Failed to resolve interface for gateway {}: {}",
-                                gw_ip, e
-                            ),
-                        }
-                        .into());
-                    }
-                }
+                let (best, _) = best_route2_for_ip(*gw_ip)?;
+                debug!(
+                    "Resolved gateway {} to interface index {}",
+                    gw_ip, best.InterfaceIndex
+                );
+                route_row.InterfaceIndex = best.InterfaceIndex;
             }
         }
         RouteTarget::GatewayOnInterface(gw_ip, iface_name) => {
@@ -138,8 +129,8 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     }
 
     route_row.Metric = VPN_ROUTE_METRIC;
-    // Protocol = 3 (MIB_IPPROTO_NETMGMT) - 静态路由
-    route_row.Protocol = unsafe { std::mem::transmute(3i32) };
+    // MIB_IPPROTO_NETMGMT (3) — marks this as a static/management route
+    route_row.Protocol = NL_ROUTE_PROTOCOL(3);
     route_row.ValidLifetime = 0xffffffff;
     route_row.PreferredLifetime = 0xffffffff;
 
@@ -169,7 +160,7 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
 }
 
 fn delete_route(network: &IpNet, _target: &RouteTarget, interface_name: &str) -> Result<()> {
-    // 只删除我们添加的 VPN 路由（通过 Metric 和接口名匹配），不影响系统原始路由
+    // Only delete our VPN routes (matched by metric + interface name), preserving system routes
     remove_vpn_routes(network, interface_name).map_err(|e| {
         RouteError::PlatformError {
             message: format!("Delete failed: {}", e),
@@ -178,8 +169,8 @@ fn delete_route(network: &IpNet, _target: &RouteTarget, interface_name: &str) ->
     })
 }
 
-/// [辅助] 扫描路由表，只删除我们添加的 VPN 路由（通过 Metric 匹配）
-/// 不删除系统原始路由，确保 VPN 关闭后网络自动恢复
+/// Scans the routing table and deletes only VPN routes we added (matched by metric).
+/// System routes are preserved so networking recovers automatically when VPN stops.
 fn remove_vpn_routes(network: &IpNet, interface_name: &str) -> Result<()> {
     let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
 
@@ -231,29 +222,7 @@ fn remove_vpn_routes(network: &IpNet, interface_name: &str) -> Result<()> {
 }
 
 pub fn get_gateway_for(target: IpAddr) -> Result<RouteTarget> {
-    let dest_addr = ip_to_sockaddr(target);
-    let mut best_route = MIB_IPFORWARD_ROW2::default();
-    let mut best_src_addr = SOCKADDR_INET::default();
-
-    let result = unsafe {
-        GetBestRoute2(
-            None,
-            0,
-            None,
-            &dest_addr as *const _,
-            0,
-            &mut best_route,
-            &mut best_src_addr,
-        )
-    };
-
-    if let Err(e) = result {
-        return Err(RouteError::PlatformError {
-            message: format!("GetBestRoute2 failed: {}", e),
-        }
-        .into());
-    }
-
+    let (best_route, _) = best_route2_for_ip(target)?;
     let next_hop = sockaddr_to_ip(&best_route.NextHop);
 
     if next_hop.is_unspecified() {
@@ -281,7 +250,7 @@ pub fn get_default_gateway() -> Result<IpAddr> {
     }
 }
 
-// --- 辅助函数 ---
+// --- Helper functions ---
 
 fn fill_ip_prefix(network: &IpNet, row: &mut MIB_IPFORWARD_ROW2) {
     let prefix_len = network.prefix_len();
@@ -334,8 +303,10 @@ fn sockaddr_to_ipnet(
     IpNet::new(ip, len).unwrap_or_else(|_| "0.0.0.0/0".parse().unwrap())
 }
 
-fn get_best_interface_index_for_gateway(gateway: IpAddr) -> Result<u32> {
-    let dest_addr = ip_to_sockaddr(gateway);
+/// Calls `GetBestRoute2` for the given IP and returns (route_row, source_addr).
+/// Shared by `get_gateway_for`, `add_route`, and `resolve_source_ip`.
+fn best_route2_for_ip(target: IpAddr) -> Result<(MIB_IPFORWARD_ROW2, SOCKADDR_INET)> {
+    let dest_addr = ip_to_sockaddr(target);
     let mut best_route = MIB_IPFORWARD_ROW2::default();
     let mut best_src_addr = SOCKADDR_INET::default();
 
@@ -353,11 +324,18 @@ fn get_best_interface_index_for_gateway(gateway: IpAddr) -> Result<u32> {
 
     if let Err(e) = result {
         return Err(RouteError::PlatformError {
-            message: format!("{:?}", e),
+            message: format!("GetBestRoute2 failed for {}: {:?}", target, e),
         }
         .into());
     }
-    Ok(best_route.InterfaceIndex)
+    Ok((best_route, best_src_addr))
+}
+
+/// Returns the local source IP address used to reach `target`.
+/// Used by socket_protect to bind sockets to the physical interface.
+pub fn resolve_source_ip(target: IpAddr) -> Result<IpAddr> {
+    let (_, src_addr) = best_route2_for_ip(target)?;
+    Ok(sockaddr_to_ip(&src_addr))
 }
 
 fn get_interface_index_by_name(name: &str) -> Result<u32> {

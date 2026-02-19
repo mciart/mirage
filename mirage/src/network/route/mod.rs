@@ -21,7 +21,9 @@ mod netlink_socket;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
-pub use windows::{add_routes, delete_routes, get_default_gateway, get_gateway_for};
+pub use windows::{
+    add_routes, delete_routes, get_default_gateway, get_gateway_for, resolve_source_ip,
+};
 
 // iOS: routes are managed by NEPacketTunnelNetworkSettings
 #[cfg(target_os = "ios")]

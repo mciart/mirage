@@ -169,16 +169,60 @@ pub fn detect_outbound_interface(_target: IpAddr) -> Result<String> {
 }
 
 /// Windows: Bind socket to the physical interface's local IP address.
+/// This prevents the socket from using the TUN interface.
 #[cfg(target_os = "windows")]
 pub fn protect_socket(
     fd: std::os::windows::io::RawSocket,
     interface: &str,
-    _is_ipv6: bool,
+    is_ipv6: bool,
 ) -> Result<()> {
-    // On Windows, socket binding is done via bind() to the local IP.
-    // The caller should use protect_tcp_stream / protect_udp_socket instead.
-    warn!("protect_socket on Windows requires bind() to local IP — use protect_tcp_stream");
-    Ok(())
+    use std::os::windows::io::FromRawSocket;
+
+    // Look up the physical interface's local IP by probing the routing table.
+    // We resolve the interface's address via GetBestRoute2 for a well-known
+    // public IP, which returns the source address on the matched interface.
+    let probe: IpAddr = if is_ipv6 {
+        "2001:4860:4860::8888".parse().unwrap()
+    } else {
+        "8.8.8.8".parse().unwrap()
+    };
+
+    let local_ip = resolve_source_ip_for(probe)?;
+
+    let bind_addr: std::net::SocketAddr = (local_ip, 0).into();
+
+    // Temporarily wrap the raw socket in a socket2::Socket for bind().
+    // We use ManuallyDrop to avoid closing the fd when socket2 drops.
+    let sock2 = unsafe { socket2::Socket::from_raw_socket(fd) };
+    let result = sock2.bind(&bind_addr.into());
+    // Prevent socket2 from closing the fd — caller owns it.
+    std::mem::forget(sock2);
+
+    match result {
+        Ok(_) => {
+            debug!(
+                "Socket fd={} bound to {} (interface '{}')",
+                fd, bind_addr, interface
+            );
+            Ok(())
+        }
+        Err(e) => {
+            warn!(
+                "Failed to bind socket to {} for interface '{}': {}",
+                local_ip, interface, e
+            );
+            Err(RouteError::PlatformError {
+                message: format!("bind() to {}: {}", local_ip, e),
+            }
+            .into())
+        }
+    }
+}
+
+/// Windows: resolve the local source IP used to reach `target`.
+#[cfg(target_os = "windows")]
+fn resolve_source_ip_for(target: IpAddr) -> Result<IpAddr> {
+    crate::network::route::resolve_source_ip(target)
 }
 
 // ─── High-Level Helpers ──────────────────────────────────────────────
@@ -191,6 +235,14 @@ pub fn protect_tcp_socket(socket: &socket2::Socket, interface: &str, is_ipv6: bo
     protect_socket(socket.as_raw_fd(), interface, is_ipv6)
 }
 
+/// Protect a tokio TcpStream by binding it to the physical interface.
+/// Must be called on the socket2 Socket BEFORE connecting.
+#[cfg(target_os = "windows")]
+pub fn protect_tcp_socket(socket: &socket2::Socket, interface: &str, is_ipv6: bool) -> Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    protect_socket(socket.as_raw_socket(), interface, is_ipv6)
+}
+
 /// Protect a std::net::UdpSocket by binding it to the physical interface.
 #[cfg(unix)]
 pub fn protect_udp_socket(
@@ -200,4 +252,15 @@ pub fn protect_udp_socket(
 ) -> Result<()> {
     use std::os::fd::AsRawFd;
     protect_socket(socket.as_raw_fd(), interface, is_ipv6)
+}
+
+/// Protect a std::net::UdpSocket by binding it to the physical interface.
+#[cfg(target_os = "windows")]
+pub fn protect_udp_socket(
+    socket: &std::net::UdpSocket,
+    interface: &str,
+    is_ipv6: bool,
+) -> Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    protect_socket(socket.as_raw_socket(), interface, is_ipv6)
 }
