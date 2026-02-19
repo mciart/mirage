@@ -203,9 +203,7 @@ impl InterfaceIO for AppleInterfaceIO {
         let mut rx = self.packet_rx.lock().await;
         match rx.recv().await {
             Some(data) => {
-                self.metrics
-                    .packets_sent
-                    .fetch_add(1, Ordering::Relaxed);
+                self.metrics.packets_sent.fetch_add(1, Ordering::Relaxed);
                 self.metrics
                     .bytes_sent
                     .fetch_add(data.len() as u64, Ordering::Relaxed);
@@ -248,9 +246,7 @@ impl InterfaceIO for AppleInterfaceIO {
         self.metrics
             .packets_sent
             .fetch_add(count, Ordering::Relaxed);
-        self.metrics
-            .bytes_sent
-            .fetch_add(bytes, Ordering::Relaxed);
+        self.metrics.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
 
         Ok(packets)
     }
