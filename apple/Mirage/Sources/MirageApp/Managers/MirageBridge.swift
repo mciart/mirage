@@ -163,11 +163,12 @@ struct MirageVPNMetrics {
     let packetsSent: UInt64
     let packetsReceived: UInt64
     let uptimeSeconds: UInt64
+    let activeProtocol: String
 
     static let zero = MirageVPNMetrics(
         bytesSent: 0, bytesReceived: 0,
         packetsSent: 0, packetsReceived: 0,
-        uptimeSeconds: 0
+        uptimeSeconds: 0, activeProtocol: ""
     )
 
     init(_ raw: MirageMetrics) {
@@ -176,16 +177,20 @@ struct MirageVPNMetrics {
         self.packetsSent = raw.packets_sent
         self.packetsReceived = raw.packets_received
         self.uptimeSeconds = raw.uptime_seconds
+        self.activeProtocol = withUnsafePointer(to: raw.active_protocol) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 16) { String(cString: $0) }
+        }
     }
 
     init(bytesSent: UInt64, bytesReceived: UInt64,
          packetsSent: UInt64, packetsReceived: UInt64,
-         uptimeSeconds: UInt64) {
+         uptimeSeconds: UInt64, activeProtocol: String = "") {
         self.bytesSent = bytesSent
         self.bytesReceived = bytesReceived
         self.packetsSent = packetsSent
         self.packetsReceived = packetsReceived
         self.uptimeSeconds = uptimeSeconds
+        self.activeProtocol = activeProtocol
     }
 
     var formattedUptime: String {

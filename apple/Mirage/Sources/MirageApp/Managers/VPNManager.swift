@@ -245,6 +245,7 @@ class VPNManager {
         metrics.bytesSent = 0
         metrics.bytesReceived = 0
         metrics.uptime = 0
+        metrics.activeProtocol = ""
     }
 
     private func fetchMetrics() {
@@ -258,6 +259,7 @@ class VPNManager {
                     self?.metrics.bytesSent = (json["bytes_sent"] as? UInt64) ?? 0
                     self?.metrics.bytesReceived = (json["bytes_received"] as? UInt64) ?? 0
                     self?.metrics.uptime = (json["uptime"] as? Int) ?? 0
+                    self?.metrics.activeProtocol = (json["active_protocol"] as? String) ?? ""
                 }
             }
         } catch {
@@ -280,6 +282,7 @@ class VPNMetrics {
     var bytesSent: UInt64 = 0
     var bytesReceived: UInt64 = 0
     var uptime: Int = 0
+    var activeProtocol: String = ""
 }
 
 // MARK: - Status Display Extensions

@@ -338,6 +338,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             "packets_sent": m.packetsSent,
             "packets_received": m.packetsReceived,
             "uptime": uptime,
+            "active_protocol": m.activeProtocol,
         ]
         if let data = try? JSONSerialization.data(withJSONObject: dict) {
             completionHandler?(data)

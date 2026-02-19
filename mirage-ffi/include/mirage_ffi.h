@@ -126,6 +126,10 @@ typedef struct MirageMetrics {
     uint64_t packets_sent;
     uint64_t packets_received;
     uint64_t uptime_seconds;
+    /**
+     * Active transport protocol (e.g. "TCP", "UDP"), null-terminated
+     */
+    char active_protocol[16];
 } MirageMetrics;
 
 #ifdef __cplusplus

@@ -122,7 +122,9 @@ struct TunnelDetailView: View {
                            value: Self.formatBytes(vpn.metrics.bytesReceived))
                 MetricCard(icon: "clock", label: "Uptime",
                            value: Self.formatUptime(vpn.metrics.uptime))
-                MetricCard(icon: "bolt.horizontal", label: "Protocol", value: tunnel.protocols)
+                MetricCard(icon: "bolt.horizontal", label: "Protocol",
+                           value: vpn.metrics.activeProtocol.isEmpty
+                               ? tunnel.protocols : vpn.metrics.activeProtocol)
             }
         }
     }

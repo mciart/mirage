@@ -41,6 +41,8 @@ pub(crate) struct MirageMetricsInner {
     pub packets_sent: AtomicU64,
     pub packets_received: AtomicU64,
     pub start_time: std::sync::Mutex<Option<std::time::Instant>>,
+    /// The transport protocol actually in use (e.g. "TCP" or "UDP").
+    pub active_protocol: std::sync::Mutex<String>,
 }
 
 impl Default for MirageMetricsInner {
@@ -51,6 +53,7 @@ impl Default for MirageMetricsInner {
             packets_sent: AtomicU64::new(0),
             packets_received: AtomicU64::new(0),
             start_time: std::sync::Mutex::new(None),
+            active_protocol: std::sync::Mutex::new(String::new()),
         }
     }
 }
@@ -126,13 +129,18 @@ impl MirageRuntime {
             .ok()
             .and_then(|t| t.map(|s| s.elapsed().as_secs()))
             .unwrap_or(0);
-        MirageMetrics {
+        let mut metrics = MirageMetrics {
             bytes_sent: self.metrics.bytes_sent.load(Ordering::Relaxed),
             bytes_received: self.metrics.bytes_received.load(Ordering::Relaxed),
             packets_sent: self.metrics.packets_sent.load(Ordering::Relaxed),
             packets_received: self.metrics.packets_received.load(Ordering::Relaxed),
             uptime_seconds: uptime,
+            active_protocol: [0; 16],
+        };
+        if let Ok(proto) = self.metrics.active_protocol.lock() {
+            copy_str_to_buf(&proto, &mut metrics.active_protocol);
         }
+        metrics
     }
 
     /// Starts the VPN connection on the Tokio runtime.
@@ -190,6 +198,7 @@ impl MirageRuntime {
 
         let config = self.config.clone();
         let status = self.status.clone();
+        let metrics_for_proto = self.metrics.clone();
         // Wrap the context in SendPtr so it can cross the spawn boundary
         let ctx = SendPtr(context);
 
@@ -209,6 +218,12 @@ impl MirageRuntime {
             let ctx_clone = SendPtr(ctx.0);
             tokio::spawn(async move {
                 if event_rx.await.is_ok() {
+                    // Store the active protocol in metrics
+                    let active_proto = mirage::client::get_active_protocol();
+                    if let Ok(mut proto) = metrics_for_proto.active_protocol.lock() {
+                        *proto = active_proto;
+                    }
+
                     // Client connected and relayer started!
                     // First, fire tunnel_config_cb with server-assigned network config
                     if let Some(config_cb) = tunnel_config_cb {

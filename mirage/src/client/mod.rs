@@ -39,6 +39,18 @@ pub type TransportStream = Box<dyn TransportStreamTrait>;
 use crate::client::relayer::ClientRelayer;
 use tracing::{info, warn};
 
+/// Global storage for the active transport protocol, set during connection.
+static ACTIVE_PROTOCOL: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Returns the currently active transport protocol (e.g. "TCP" or "UDP").
+/// Called by the FFI layer to report it in metrics.
+pub fn get_active_protocol() -> String {
+    ACTIVE_PROTOCOL
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+}
+
 /// Represents a Mirage client that connects to a server and relays packets between the server and a TUN interface.
 pub struct MirageClient {
     pub(super) config: ClientConfig,
@@ -110,6 +122,10 @@ impl MirageClient {
         let (tls_stream, remote_addr, protocol): (TransportStream, SocketAddr, String) =
             self.connect_to_server(&resolved_addrs).await?;
 
+        // Store the active protocol for metrics reporting
+        if let Ok(mut proto) = ACTIVE_PROTOCOL.lock() {
+            *proto = protocol.to_uppercase();
+        }
         // Setup exclusion routes (server IP anti-loop on Windows + user excluded_routes)
         let _route_guards = Self::setup_exclusion_routes(&self.config, remote_addr.ip());
 
