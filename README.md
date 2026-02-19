@@ -1,4 +1,4 @@
-# Mirage（仍在开发测试中）
+# Mirage（开发测试中）
 
 [![Crates.io](https://img.shields.io/crates/v/mirage.svg)](https://crates.io/crates/mirage)
 [![Documentation](https://docs.rs/mirage/badge.svg)](https://docs.rs/mirage/)

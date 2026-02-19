@@ -170,8 +170,32 @@ fn create_platform_endpoint(
     {
         use std::sync::Arc;
 
-        // Create a standard UDP socket
-        let socket = std::net::UdpSocket::bind(bind_addr).map_err(|e| {
+        // On Windows, we achieve socket protection by binding directly to the
+        // physical interface's local IP instead of 0.0.0.0 (double-bind would fail).
+        let effective_bind_addr = if let Some(_iface) = protect_interface {
+            match crate::network::route::resolve_source_ip(if is_ipv6 {
+                "2001:4860:4860::8888".parse().unwrap()
+            } else {
+                "8.8.8.8".parse().unwrap()
+            }) {
+                Ok(local_ip) => {
+                    let addr: std::net::SocketAddr = (local_ip, 0).into();
+                    debug!("QUIC UDP socket binding to physical IP: {}", addr);
+                    addr
+                }
+                Err(e) => {
+                    warn!(
+                        "Could not resolve physical IP for QUIC protect: {}, falling back to {}",
+                        e, bind_addr
+                    );
+                    bind_addr
+                }
+            }
+        } else {
+            bind_addr
+        };
+
+        let socket = std::net::UdpSocket::bind(effective_bind_addr).map_err(|e| {
             MirageError::connection_failed(format!("Failed to bind UDP socket: {}", e))
         })?;
 

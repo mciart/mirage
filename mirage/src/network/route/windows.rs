@@ -10,7 +10,7 @@ use windows::core::{HRESULT, PCWSTR};
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToAlias, ConvertInterfaceLuidToIndex,
     CreateIpForwardEntry2, DeleteIpForwardEntry2, FreeMibTable, GetBestRoute2, GetIpForwardTable2,
-    InitializeIpForwardEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2, NL_ROUTE_PROTOCOL,
+    InitializeIpForwardEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
 };
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, IN6_ADDR, IN_ADDR, SOCKADDR_INET};
@@ -129,8 +129,9 @@ fn add_route(network: &IpNet, target: &RouteTarget, interface_name: &str) -> Res
     }
 
     route_row.Metric = VPN_ROUTE_METRIC;
-    // MIB_IPPROTO_NETMGMT (3) — marks this as a static/management route
-    route_row.Protocol = NL_ROUTE_PROTOCOL(3);
+    // MIB_IPPROTO_NETMGMT (3) — marks this as a static/management route.
+    // NL_ROUTE_PROTOCOL is not re-exported in windows 0.52, use transmute.
+    route_row.Protocol = unsafe { std::mem::transmute::<i32, _>(3) };
     route_row.ValidLifetime = 0xffffffff;
     route_row.PreferredLifetime = 0xffffffff;
 

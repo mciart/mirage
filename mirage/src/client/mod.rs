@@ -47,12 +47,19 @@ async fn tcp_connect_raw(addr: SocketAddr, physical_interface: Option<&str>) -> 
     .map_err(|e| MirageError::connection_failed(format!("Failed to create TCP socket: {e}")))?;
 
     // Bind socket to physical interface (anti-loop protection)
-    #[cfg(unix)]
+    #[cfg(not(target_os = "ios"))]
     if let Some(iface) = physical_interface {
-        use std::os::fd::AsRawFd;
-        if let Err(e) =
-            socket_protect::protect_socket(tcp_socket.as_raw_fd(), iface, addr.is_ipv6())
-        {
+        #[cfg(unix)]
+        let raw_fd = {
+            use std::os::fd::AsRawFd;
+            tcp_socket.as_raw_fd()
+        };
+        #[cfg(windows)]
+        let raw_fd = {
+            use std::os::windows::io::AsRawSocket;
+            tcp_socket.as_raw_socket()
+        };
+        if let Err(e) = socket_protect::protect_socket(raw_fd, iface, addr.is_ipv6()) {
             warn!(
                 "Socket protect failed ({}), continuing without binding: {}",
                 iface, e
