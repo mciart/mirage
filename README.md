@@ -27,8 +27,11 @@ TCP 和 QUIC 双协议均具备完整伪装能力，探测者只能看到合法�
 - **QUIC 模式**: JLS 伪装 + 0-RTT 快速握手 + 端口跳跃 (Port Hopping)
 - **协议优先级回退**: `protocols = ["udp", "tcp"]`，先尝试 QUIC，失败自动回退 TCP
 
-### 🌊 流量混淆
+### 🌊 流量混淆与纵深加密
+- **应用层加密 (Inner Encryption)**: ChaCha20-Poly1305 AEAD 独立加密 DATA 帧，即使外层 TLS 被 CDN 剥离，内层数据仍为密文
+- **TLS 记录填充**: 将写入填充到 16KB TLS Record 边界，对抗记录大小指纹
 - **加权拟态轮廓 (Weighted Traffic Mimicry)**: 模拟真实 HTTPS 的三态分布
+- **双向填充对称 (Bidirectional Padding)**: 检测非对称传输并自动增强填充
 - **智能时序抖动 (Jitter)**: 随机化发包间隔，对抗时序关联分析
 - **应用层心跳 (Heartbeat)**: 空闲时自动保活，防止"长连接零吞吐"特征
 
@@ -48,8 +51,8 @@ TCP 和 QUIC 双协议均具备完整伪装能力，探测者只能看到合法�
 | **TCP 伪装** | **类 Reality** (SNI + 抗主动探测) | Reality | 无 (特征明显) |
 | **QUIC 伪装** | **JLS** (无需证书 + 抗主动探测 + 0-RTT) | 无 | 无 |
 | **VPN 层级** | **L3 VPN** (原生 ICMP/TCP/UDP) | L4 代理 (SOCKS/HTTP) | L3 VPN (TUN/TAP) |
-| **流量混淆** | Padding + Jitter + Heartbeat | Vision 流控 | 无 (需插件) |
-| **抗封锁** | Port Hopping + Dual Stack + 连接轮换 | CDN (WS/gRPC) | 弱 (协议指纹易识别) |
+| **流量混淆** | Padding + Jitter + Heartbeat + **Inner Encryption** | Vision 流控 | 无 (需插件) |
+| **抗封锁** | Port Hopping + Dual Stack + 连接轮换 + TLS Record Padding | CDN (WS/gRPC) | 弱 (协议指纹易识别) |
 
 | 维度 | Xray REALITY | Mirage |
 |---|---|---|
@@ -172,6 +175,7 @@ mirage users --delete /path/to/users   # 删除用户
 - [x] **Phase 5**: 双栈聚合 + 连接轮换
 - [x] **Phase 6**: **JLS 集成** — QUIC 层 Mirage 伪装 (无需证书, 0-RTT, 抗主动探测)
 - [x] **Phase 7**: **Apple 原生 GUI** — SwiftUI (macOS + iOS/iPadOS) + Network Extension
+- [x] **Phase 7.5**: **纵深加密** — 应用层 ChaCha20-Poly1305 AEAD + TLS 记录填充 + 双向填充对称
 - [ ] **Phase 8**: CDN 支持 (WebSocket, gRPC)
 
 ---
