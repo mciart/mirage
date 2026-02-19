@@ -26,7 +26,7 @@ pub enum MirageStatus {
 
 /// Connection metrics.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct MirageMetrics {
     pub bytes_sent: u64,
     pub bytes_received: u64,
@@ -35,19 +35,6 @@ pub struct MirageMetrics {
     pub uptime_seconds: u64,
     /// Active transport protocol (e.g. "TCP", "UDP"), null-terminated
     pub active_protocol: [c_char; 16],
-}
-
-impl Default for MirageMetrics {
-    fn default() -> Self {
-        Self {
-            bytes_sent: 0,
-            bytes_received: 0,
-            packets_sent: 0,
-            packets_received: 0,
-            uptime_seconds: 0,
-            active_protocol: [0; 16],
-        }
-    }
 }
 
 /// Error information returned from FFI calls.
