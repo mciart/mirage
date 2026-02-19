@@ -34,6 +34,200 @@ use crate::transport::quic::QuicStream;
 use crate::client::relayer::ClientRelayer;
 use tracing::{debug, info, warn};
 
+// ─── Happy Eyeballs (RFC 8305) ──────────────────────────────────────────────
+
+/// Raw TCP connect to a single address with optional socket protection.
+/// Standalone — no `&mut self` needed, safe to call concurrently.
+async fn tcp_connect_raw(addr: SocketAddr, physical_interface: Option<&str>) -> Result<TcpStream> {
+    let tcp_socket = if addr.is_ipv4() {
+        tokio::net::TcpSocket::new_v4()
+    } else {
+        tokio::net::TcpSocket::new_v6()
+    }
+    .map_err(|e| MirageError::connection_failed(format!("Failed to create TCP socket: {e}")))?;
+
+    // Bind socket to physical interface (anti-loop protection)
+    #[cfg(unix)]
+    if let Some(iface) = physical_interface {
+        use std::os::fd::AsRawFd;
+        if let Err(e) =
+            socket_protect::protect_socket(tcp_socket.as_raw_fd(), iface, addr.is_ipv6())
+        {
+            warn!(
+                "Socket protect failed ({}), continuing without binding: {}",
+                iface, e
+            );
+        }
+    }
+
+    tcp_socket
+        .connect(addr)
+        .await
+        .map_err(|e| MirageError::connection_failed(format!("TCP connect to {addr}: {e}")))
+}
+
+/// Happy Eyeballs (RFC 8305): race TCP connections with staggered starts.
+///
+/// 1. Start connecting to `addrs[0]`
+/// 2. After `attempt_delay` (250ms), if not done, *also* start `addrs[1]`
+/// 3. Continue staggering until one succeeds or all fail
+/// 4. First success cancels all others
+async fn happy_eyeballs_tcp(
+    addrs: &[SocketAddr],
+    physical_interface: Option<&str>,
+    attempt_delay: Duration,
+    overall_timeout: Duration,
+) -> Result<(TcpStream, SocketAddr)> {
+    use std::pin::Pin;
+    use tokio::time::sleep;
+
+    if addrs.is_empty() {
+        return Err(MirageError::connection_failed("No addresses to connect to"));
+    }
+
+    // Single address — no racing needed
+    if addrs.len() == 1 {
+        let stream = tokio::time::timeout(
+            overall_timeout,
+            tcp_connect_raw(addrs[0], physical_interface),
+        )
+        .await
+        .map_err(|_| {
+            MirageError::connection_failed(format!(
+                "Connection to {} timed out after {}s",
+                addrs[0],
+                overall_timeout.as_secs()
+            ))
+        })??;
+        return Ok((stream, addrs[0]));
+    }
+
+    // Multiple addresses — race with staggered starts (RFC 8305 §5)
+    #[allow(unused_assignments)]
+    let mut last_error: Option<crate::error::MirageError> = None;
+    let mut pending_futures: Vec<Pin<Box<dyn Future<Output = (usize, Result<TcpStream>)> + Send>>> =
+        Vec::new();
+    let mut next_addr_idx = 1; // First attempt started immediately below
+
+    // Start the first connection attempt immediately
+    let iface = physical_interface.map(|s| s.to_owned());
+    let addr = addrs[0];
+    let iface_clone = iface.clone();
+    pending_futures.push(Box::pin(async move {
+        let result = tcp_connect_raw(addr, iface_clone.as_deref()).await;
+        (0usize, result)
+    }));
+    info!("Happy Eyeballs: started attempt 0 → {}", addrs[0]);
+
+    let deadline = tokio::time::Instant::now() + overall_timeout;
+
+    loop {
+        // Build the stagger delay (250ms until next attempt, or until deadline)
+        let stagger = if next_addr_idx < addrs.len() {
+            Some(sleep(attempt_delay))
+        } else {
+            None // No more addresses to start
+        };
+
+        tokio::select! {
+            biased;
+
+            // Check if any pending connections completed
+            result = async {
+                // Poll all pending futures, return the first to complete
+                // We use a simple approach: select on the first few futures
+                // Since we can't use FuturesUnordered without &mut, we use a custom approach
+                poll_any(&mut pending_futures).await
+            } => {
+                let (idx, connect_result) = result;
+                match connect_result {
+                    Ok(stream) => {
+                        info!(
+                            "Happy Eyeballs: attempt {} succeeded → {} (first to connect)",
+                            idx, addrs[idx]
+                        );
+                        // Drop all other pending futures (cancels them)
+                        return Ok((stream, addrs[idx]));
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Happy Eyeballs: attempt {} failed → {}: {}",
+                            idx, addrs[idx], e
+                        );
+                        last_error = Some(e);
+
+                        // If no more pending and no more to start, give up
+                        if pending_futures.is_empty() && next_addr_idx >= addrs.len() {
+                            break;
+                        }
+
+                        // If stagger timer already fired for this round, start next immediately
+                        if next_addr_idx < addrs.len() && pending_futures.is_empty() {
+                            let addr = addrs[next_addr_idx];
+                            let idx = next_addr_idx;
+                            let iface_clone = iface.clone();
+                            pending_futures.push(Box::pin(async move {
+                                let result = tcp_connect_raw(addr, iface_clone.as_deref()).await;
+                                (idx, result)
+                            }));
+                            info!("Happy Eyeballs: started attempt {} → {}", idx, addr);
+                            next_addr_idx += 1;
+                        }
+                    }
+                }
+            }
+
+            // Stagger timer: start the next connection attempt
+            _ = async { stagger.unwrap().await }, if stagger.is_some() => {
+                if next_addr_idx < addrs.len() {
+                    let addr = addrs[next_addr_idx];
+                    let idx = next_addr_idx;
+                    let iface_clone = iface.clone();
+                    pending_futures.push(Box::pin(async move {
+                        let result = tcp_connect_raw(addr, iface_clone.as_deref()).await;
+                        (idx, result)
+                    }));
+                    info!("Happy Eyeballs: started attempt {} → {} (after {}ms stagger)", idx, addr, attempt_delay.as_millis());
+                    next_addr_idx += 1;
+                }
+            }
+
+            // Overall deadline
+            _ = tokio::time::sleep_until(deadline) => {
+                warn!("Happy Eyeballs: overall timeout ({}s) reached", overall_timeout.as_secs());
+                return Err(MirageError::connection_failed(format!(
+                    "All connection attempts timed out after {}s",
+                    overall_timeout.as_secs()
+                )));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        MirageError::connection_failed("All Happy Eyeballs connection attempts failed")
+    }))
+}
+
+/// Poll a vec of boxed futures, returning the first to complete.
+/// Removes the completed future from the vec.
+async fn poll_any<T>(futures: &mut Vec<std::pin::Pin<Box<dyn Future<Output = T> + Send>>>) -> T {
+    use std::task::Poll;
+    use tokio::macros::support::poll_fn;
+
+    assert!(!futures.is_empty(), "poll_any called with empty futures");
+
+    poll_fn(|cx| {
+        for i in 0..futures.len() {
+            if let Poll::Ready(val) = futures[i].as_mut().poll(cx) {
+                let _ = futures.swap_remove(i);
+                return Poll::Ready(val);
+            }
+        }
+        Poll::Pending
+    })
+    .await
+}
+
 /// Represents a Mirage client that connects to a server and relays packets between the server and a TUN interface.
 pub struct MirageClient {
     config: ClientConfig,
@@ -571,7 +765,8 @@ impl MirageClient {
     }
 
     /// Connects to the server using the configured protocols.
-    /// For each protocol, tries all resolved addresses before falling back to the next protocol.
+    /// For TCP: uses Happy Eyeballs (RFC 8305) to race connections concurrently.
+    /// For QUIC: tries addresses sequentially (endpoint reuse constraint).
     async fn connect_to_server(
         &mut self,
         resolved_addrs: &[SocketAddr],
@@ -590,52 +785,124 @@ impl MirageClient {
             resolved_addrs, protocols
         );
 
+        let connect_timeout = Duration::from_secs(self.config.connection.timeout_s.min(10));
         let mut last_error = None;
 
-        // Per-address connection timeout: prevents a single unreachable address
-        // (e.g. IPv6 on IPv4-only network) from blocking for 30+ seconds.
-        let connect_timeout = Duration::from_secs(self.config.connection.timeout_s.min(5));
-
         for protocol in &protocols {
-            for server_addr in resolved_addrs {
-                info!(
-                    "Attempting connection to {} using protocol: {} (timeout: {}s)",
-                    server_addr,
-                    protocol,
-                    connect_timeout.as_secs()
-                );
+            match protocol {
+                TransportProtocol::Tcp => {
+                    // ── TCP: Happy Eyeballs (RFC 8305) ──
+                    info!(
+                        "TCP Happy Eyeballs: racing {} addresses with 250ms stagger",
+                        resolved_addrs.len()
+                    );
 
-                match tokio::time::timeout(
-                    connect_timeout,
-                    self.connect_with_protocol(*server_addr, protocol, &connection_string),
-                )
-                .await
-                {
-                    Ok(Ok(stream)) => {
+                    match happy_eyeballs_tcp(
+                        resolved_addrs,
+                        self.physical_interface.as_deref(),
+                        Duration::from_millis(250), // RFC 8305 §5: 250ms stagger
+                        connect_timeout,
+                    )
+                    .await
+                    {
+                        Ok((tcp_stream, winner_addr)) => {
+                            // Apply TCP optimizations on the winning connection
+                            tcp_stream.set_nodelay(self.config.transport.tcp_nodelay)?;
+                            let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
+                            let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
+                            let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
+                            let _ = crate::transport::tcp::set_tcp_keepalive(&tcp_stream, 10);
+
+                            debug!("TCP connection established to {}", winner_addr);
+
+                            // TLS handshake
+                            let mut connector_builder =
+                                crate::protocol::tcp::build_connector(&self.config)?;
+
+                            let sni = if self.config.camouflage.is_mirage() {
+                                crate::protocol::camouflage::configure(
+                                    &mut connector_builder,
+                                    &self.config,
+                                )?
+                            } else {
+                                let host = crate::protocol::tcp::resolve_sni(
+                                    &self.config,
+                                    &connection_string,
+                                );
+                                connector_builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
+                                host.to_string()
+                            };
+
+                            let connector = connector_builder.build();
+                            let mut ssl_config = connector.configure().map_err(|e| {
+                                MirageError::system(format!("Failed to configure SSL: {e}"))
+                            })?;
+
+                            if self.config.camouflage.is_mirage() || self.config.transport.insecure
+                            {
+                                ssl_config.set_verify_hostname(false);
+                                debug!("Hostname verification disabled");
+                            }
+
+                            let tls_stream = tokio_boring::connect(ssl_config, &sni, tcp_stream)
+                                .await
+                                .map_err(|e| {
+                                    MirageError::connection_failed(format!(
+                                        "TLS handshake failed: {e}"
+                                    ))
+                                })?;
+
+                            info!(
+                                "TLS connection established: {} (Protocol: TCP, Winner: {})",
+                                connection_string, winner_addr
+                            );
+
+                            return Ok((Box::new(tls_stream), winner_addr, protocol.to_string()));
+                        }
+                        Err(e) => {
+                            warn!("TCP Happy Eyeballs failed: {}", e);
+                            last_error = Some(e);
+                        }
+                    }
+                }
+                TransportProtocol::Udp => {
+                    // ── QUIC: sequential (endpoint reuse constraint) ──
+                    for server_addr in resolved_addrs {
                         info!(
-                            "Successfully connected to {} using protocol: {}",
-                            server_addr, protocol
-                        );
-                        return Ok((stream, *server_addr, protocol.to_string()));
-                    }
-                    Ok(Err(e)) => {
-                        warn!(
-                            "Failed to connect to {} using {}: {}",
-                            server_addr, protocol, e
-                        );
-                        last_error = Some(e);
-                    }
-                    Err(_) => {
-                        warn!(
-                            "Connection to {} using {} timed out after {}s",
+                            "Attempting QUIC connection to {} (timeout: {}s)",
                             server_addr,
-                            protocol,
                             connect_timeout.as_secs()
                         );
-                        last_error = Some(MirageError::connection_failed(format!(
-                            "Connection to {} timed out",
-                            server_addr
-                        )));
+
+                        match tokio::time::timeout(
+                            connect_timeout,
+                            self.connect_quic(*server_addr, &connection_string),
+                        )
+                        .await
+                        {
+                            Ok(Ok(stream)) => {
+                                info!(
+                                    "QUIC connection established: {} (Winner: {})",
+                                    connection_string, server_addr
+                                );
+                                return Ok((stream, *server_addr, protocol.to_string()));
+                            }
+                            Ok(Err(e)) => {
+                                warn!("QUIC connect to {} failed: {}", server_addr, e);
+                                last_error = Some(e);
+                            }
+                            Err(_) => {
+                                warn!(
+                                    "QUIC connect to {} timed out after {}s",
+                                    server_addr,
+                                    connect_timeout.as_secs()
+                                );
+                                last_error = Some(MirageError::connection_failed(format!(
+                                    "QUIC connect to {} timed out",
+                                    server_addr
+                                )));
+                            }
+                        }
                     }
                 }
             }
@@ -649,62 +916,62 @@ impl MirageClient {
         }))
     }
 
-    async fn connect_with_protocol(
+    /// QUIC connection handler. Manages endpoint caching, port hopping, and connection reuse.
+    async fn connect_quic(
         &mut self,
         server_addr: SocketAddr,
-        protocol: &TransportProtocol,
         connection_string: &str,
     ) -> Result<TransportStream> {
-        info!("Connecting: {} ({})", connection_string, protocol);
+        info!(
+            "Connecting via QUIC: {} → {}",
+            connection_string, server_addr
+        );
 
-        if matches!(protocol, TransportProtocol::Udp) {
-            // Check for Port Hopping Rotation
-            if let Some(last_refresh) = self.last_quic_refresh {
-                if self.config.transport.port_hopping_interval_s > 0
-                    && last_refresh.elapsed()
-                        > std::time::Duration::from_secs(
-                            self.config.transport.port_hopping_interval_s,
-                        )
-                {
-                    info!("Port Hopping: Rotating QUIC connection and endpoint to new port...");
-                    self.quic_connection = None;
-                    self.quic_endpoint = None; // Force new endpoint creation (new port)
-                    self.last_quic_refresh = None;
-                }
+        // Check for Port Hopping Rotation
+        if let Some(last_refresh) = self.last_quic_refresh {
+            if self.config.transport.port_hopping_interval_s > 0
+                && last_refresh.elapsed()
+                    > std::time::Duration::from_secs(self.config.transport.port_hopping_interval_s)
+            {
+                info!("Port Hopping: Rotating QUIC connection and endpoint to new port...");
+                self.quic_connection = None;
+                self.quic_endpoint = None;
+                self.last_quic_refresh = None;
             }
+        }
 
-            // QUIC Connection - Attempt Reuse
-            if let Some(conn) = &self.quic_connection {
-                if conn.close_reason().is_none() {
-                    match conn.open_bi().await {
-                        Ok((send, recv)) => {
-                            debug!("Reusing existing QUIC connection to {}", server_addr);
-                            let stream = QuicStream::new(send, recv);
-                            return Ok(Box::new(stream));
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to open stream on cached connection: {}, reconnecting...",
-                                e
-                            );
-                            self.quic_connection = None;
-                        }
+        // QUIC Connection - Attempt Reuse
+        if let Some(conn) = &self.quic_connection {
+            if conn.close_reason().is_none() {
+                match conn.open_bi().await {
+                    Ok((send, recv)) => {
+                        debug!("Reusing existing QUIC connection to {}", server_addr);
+                        let stream = QuicStream::new(send, recv);
+                        return Ok(Box::new(stream));
                     }
-                } else {
-                    self.quic_connection = None;
+                    Err(e) => {
+                        warn!(
+                            "Failed to open stream on cached connection: {}, reconnecting...",
+                            e
+                        );
+                        self.quic_connection = None;
+                    }
                 }
+            } else {
+                self.quic_connection = None;
             }
+        }
 
-            // Get or Create Endpoint (invalidate if address family changed)
-            let endpoint = if let Some(endpoint) = &self.quic_endpoint {
-                // Check if cached endpoint's address family matches the target
+        // Get or Create Endpoint (invalidate if address family changed)
+        let endpoint =
+            if let Some(endpoint) = &self.quic_endpoint {
                 let cached_is_ipv6 = endpoint.local_addr().map(|a| a.is_ipv6()).unwrap_or(false);
                 if cached_is_ipv6 != server_addr.is_ipv6() {
                     info!(
-                        "QUIC endpoint address family mismatch (cached: {}, target: {}), recreating",
-                        if cached_is_ipv6 { "IPv6" } else { "IPv4" },
-                        if server_addr.is_ipv6() { "IPv6" } else { "IPv4" }
-                    );
+                    "QUIC endpoint address family mismatch (cached: {}, target: {}), recreating",
+                    if cached_is_ipv6 { "IPv6" } else { "IPv4" },
+                    if server_addr.is_ipv6() { "IPv6" } else { "IPv4" }
+                );
                     self.quic_connection = None;
                     let endpoint = crate::protocol::udp::create_endpoint_with_protect(
                         &self.config,
@@ -726,148 +993,71 @@ impl MirageClient {
                 endpoint
             };
 
-            let host = crate::protocol::udp::resolve_sni(&self.config, connection_string);
-
-            info!(
-                "Connecting via QUIC to {} ({}, SNI: {}, JLS: {})",
-                server_addr,
-                if server_addr.is_ipv4() {
-                    "IPv4"
-                } else {
-                    "IPv6"
-                },
-                host,
-                if self.config.camouflage.is_jls() {
-                    "enabled"
-                } else {
-                    "disabled"
-                },
-            );
-
-            let connection = endpoint
-                .connect(server_addr, host)
-                .map_err(|e| {
-                    MirageError::connection_failed(format!(
-                        "Failed to initiate QUIC connection to {} ({}): {}",
-                        server_addr,
-                        if server_addr.is_ipv4() {
-                            "IPv4"
-                        } else {
-                            "IPv6"
-                        },
-                        e
-                    ))
-                })?
-                .await
-                .map_err(|e| {
-                    MirageError::connection_failed(format!(
-                        "QUIC handshake failed to {} ({}, JLS: {}): {:?}",
-                        server_addr,
-                        if server_addr.is_ipv4() {
-                            "IPv4"
-                        } else {
-                            "IPv6"
-                        },
-                        if self.config.camouflage.is_jls() {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        },
-                        e
-                    ))
-                })?;
-
-            info!("QUIC connection established with {}", server_addr);
-
-            // Cache the connection
-            self.quic_connection = Some(connection.clone());
-            if self.last_quic_refresh.is_none() {
-                self.last_quic_refresh = Some(std::time::Instant::now());
-            }
-
-            let (send, recv) = connection.open_bi().await.map_err(|e| {
-                MirageError::connection_failed(format!("Failed to open QUIC stream: {}", e))
-            })?;
-
-            let stream = QuicStream::new(send, recv);
-            return Ok(Box::new(stream));
-        }
-
-        // TCP: Create socket → protect (bind to physical NIC) → async connect
-        let tcp_stream = {
-            let tcp_socket = if server_addr.is_ipv4() {
-                tokio::net::TcpSocket::new_v4()
-            } else {
-                tokio::net::TcpSocket::new_v6()
-            }
-            .map_err(|e| {
-                MirageError::connection_failed(format!("Failed to create TCP socket: {e}"))
-            })?;
-
-            // Bind socket to physical interface (anti-loop)
-            #[cfg(unix)]
-            if let Some(ref iface) = self.physical_interface {
-                use std::os::fd::AsRawFd;
-                if let Err(e) = socket_protect::protect_socket(
-                    tcp_socket.as_raw_fd(),
-                    iface,
-                    server_addr.is_ipv6(),
-                ) {
-                    warn!(
-                        "Socket protect failed ({}), continuing without binding: {}",
-                        iface, e
-                    );
-                }
-            }
-
-            tcp_socket.connect(server_addr).await.map_err(|e| {
-                MirageError::connection_failed(format!("TCP connect to {server_addr}: {e}"))
-            })?
-        };
-        tcp_stream.set_nodelay(self.config.transport.tcp_nodelay)?;
-
-        // Apply TCP optimizations
-        let _ = crate::transport::tcp::optimize_tcp_socket(&tcp_stream);
-        let _ = crate::transport::tcp::set_tcp_congestion_bbr(&tcp_stream);
-        let _ = crate::transport::tcp::set_tcp_quickack(&tcp_stream);
-        let _ = crate::transport::tcp::set_tcp_keepalive(&tcp_stream, 10);
-
-        debug!("TCP connection established to {}", server_addr);
-
-        let mut connector_builder = crate::protocol::tcp::build_connector(&self.config)?;
-
-        let sni = if self.config.camouflage.is_mirage() {
-            crate::protocol::camouflage::configure(&mut connector_builder, &self.config)?
-        } else {
-            // Standard TCP/TLS (no camouflage)
-            let host = crate::protocol::tcp::resolve_sni(&self.config, connection_string);
-            connector_builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
-            host.to_string()
-        };
-
-        let connector = connector_builder.build();
-        let mut ssl_config = connector
-            .configure()
-            .map_err(|e| MirageError::system(format!("Failed to configure SSL: {e}")))?;
-
-        // For camouflage mode or insecure mode, disable hostname verification as well
-        // SslVerifyMode::NONE only disables certificate chain validation,
-        // but hostname verification is a separate check that must also be disabled.
-        if self.config.camouflage.is_mirage() || self.config.transport.insecure {
-            ssl_config.set_verify_hostname(false);
-            debug!("Hostname verification disabled");
-        }
-
-        let tls_stream = tokio_boring::connect(ssl_config, &sni, tcp_stream)
-            .await
-            .map_err(|e| MirageError::connection_failed(format!("TLS handshake failed: {e}")))?;
+        let host = crate::protocol::udp::resolve_sni(&self.config, connection_string);
 
         info!(
-            "TLS connection established: {} (Protocol: {})",
-            connection_string, protocol
+            "Connecting via QUIC to {} ({}, SNI: {}, JLS: {})",
+            server_addr,
+            if server_addr.is_ipv4() {
+                "IPv4"
+            } else {
+                "IPv6"
+            },
+            host,
+            if self.config.camouflage.is_jls() {
+                "enabled"
+            } else {
+                "disabled"
+            },
         );
 
-        Ok(Box::new(tls_stream))
+        let connection = endpoint
+            .connect(server_addr, host)
+            .map_err(|e| {
+                MirageError::connection_failed(format!(
+                    "Failed to initiate QUIC connection to {} ({}): {}",
+                    server_addr,
+                    if server_addr.is_ipv4() {
+                        "IPv4"
+                    } else {
+                        "IPv6"
+                    },
+                    e
+                ))
+            })?
+            .await
+            .map_err(|e| {
+                MirageError::connection_failed(format!(
+                    "QUIC handshake failed to {} ({}, JLS: {}): {:?}",
+                    server_addr,
+                    if server_addr.is_ipv4() {
+                        "IPv4"
+                    } else {
+                        "IPv6"
+                    },
+                    if self.config.camouflage.is_jls() {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    },
+                    e
+                ))
+            })?;
+
+        info!("QUIC connection established with {}", server_addr);
+
+        // Cache the connection
+        self.quic_connection = Some(connection.clone());
+        if self.last_quic_refresh.is_none() {
+            self.last_quic_refresh = Some(std::time::Instant::now());
+        }
+
+        let (send, recv) = connection.open_bi().await.map_err(|e| {
+            MirageError::connection_failed(format!("Failed to open QUIC stream: {}", e))
+        })?;
+
+        let stream = QuicStream::new(send, recv);
+        Ok(Box::new(stream))
     }
 
     /// Creates a TCP+TLS stream for connection rotation.
