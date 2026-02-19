@@ -128,6 +128,7 @@ pub async fn run_quic_listener(
         let session_queues = session_queues.clone();
         let address_pool = address_pool.clone();
         let obfuscation = config.obfuscation.clone();
+        let inner_key = config.camouflage.inner_key.clone();
 
         tokio::spawn(async move {
             let remote = connecting.remote_address();
@@ -159,6 +160,7 @@ pub async fn run_quic_listener(
                         let session_queues = session_queues.clone();
                         let address_pool = address_pool.clone();
                         let obfuscation = obfuscation.clone();
+                        let inner_key = inner_key.clone();
 
                         tokio::spawn(async move {
                             match handler::handle_authenticated_stream(
@@ -171,6 +173,7 @@ pub async fn run_quic_listener(
                                 session_queues,
                                 address_pool,
                                 obfuscation,
+                                inner_key,
                             )
                             .await
                             {

@@ -70,6 +70,11 @@ hex = { workspace = true }
 zeroize = { workspace = true }
 subtle = { workspace = true }
 
+# Inner encryption (application-layer)
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+
 # Tracing/Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

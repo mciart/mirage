@@ -180,6 +180,7 @@ impl MirageClient {
                 primary_reader,
                 primary_writer,
                 self.config.obfuscation.clone(),
+                self.config.camouflage.inner_key.clone(),
             )?
         };
 

@@ -35,6 +35,7 @@ pub async fn run_connection_relay<R, W>(
     egress_queue: Option<Receiver<Bytes>>,
     ingress_queue: Sender<Packet>,
     obfuscation: ObfuscationConfig,
+    inner_key: Option<String>,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -48,9 +49,22 @@ where
     );
 
     // FramedReader has internal buffering, no need for BufReader
-    let framed_reader = FramedReader::new(reader);
+    let mut framed_reader = FramedReader::new(reader);
     let mut framed_writer = FramedWriter::new(writer);
     framed_writer.set_tls_record_padding(obfuscation.tls_record_padding);
+
+    // Application-layer encryption setup
+    if obfuscation.inner_encryption {
+        if let Some(key_str) = &inner_key {
+            let derived = crate::transport::crypto::derive_key(key_str);
+            framed_writer.set_cipher(crate::transport::crypto::FrameCipher::new(&derived));
+            framed_reader.set_cipher(crate::transport::crypto::FrameCipher::new(&derived));
+            debug!(
+                "Application-layer encryption enabled for user '{}'",
+                username
+            );
+        }
+    }
 
     // Shared flag for bidirectional padding symmetry
     let receive_activity = Arc::new(AtomicBool::new(false));

@@ -45,6 +45,7 @@ pub async fn handle_authenticated_stream<S>(
     session_queues: SessionQueues,
     address_pool: Arc<AddressPool>,
     obfuscation: ObfuscationConfig,
+    inner_key: Option<String>,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -176,6 +177,7 @@ where
         connection_receiver,
         ingress_queue,
         obfuscation,
+        inner_key,
     )
     .await;
 

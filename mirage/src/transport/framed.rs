@@ -12,6 +12,7 @@
 
 use crate::constants::MAX_FRAME_SIZE;
 use crate::error::{NetworkError, Result};
+use crate::transport::crypto::{FrameCipher, TAG_SIZE};
 use bytes::{BufMut, BytesMut};
 use rand::RngCore;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -73,6 +74,7 @@ async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R, buffer: &mut BytesMut)
 pub struct FramedReader<R> {
     reader: R,
     read_buffer: BytesMut,
+    cipher: Option<FrameCipher>,
 }
 
 impl<R: AsyncRead + Unpin> FramedReader<R> {
@@ -80,15 +82,38 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
         Self {
             reader,
             read_buffer: BytesMut::with_capacity(2048),
+            cipher: None,
         }
     }
 
+    /// Sets the decryption cipher for this reader.
+    pub fn set_cipher(&mut self, cipher: FrameCipher) {
+        self.cipher = Some(cipher);
+    }
+
     /// Receives a data packet from the reader, skipping padding frames.
+    /// If a cipher is set, DATA payloads are decrypted automatically.
     pub async fn recv_packet(&mut self) -> Result<BytesMut> {
         loop {
             let type_byte = read_frame(&mut self.reader, &mut self.read_buffer).await?;
             match type_byte {
-                FRAME_TYPE_DATA => return Ok(self.read_buffer.split()),
+                FRAME_TYPE_DATA => {
+                    if let Some(cipher) = &mut self.cipher {
+                        // Build AAD from the original frame header (type + encrypted length)
+                        let encrypted_len = self.read_buffer.len();
+                        let (aad, _) = encode_compact_header(encrypted_len, FRAME_TYPE_DATA);
+
+                        let plaintext = cipher.decrypt(&aad, &self.read_buffer).map_err(|e| {
+                            NetworkError::PacketError {
+                                reason: format!("Decryption failed: {}", e),
+                            }
+                        })?;
+
+                        self.read_buffer.clear();
+                        self.read_buffer.extend_from_slice(&plaintext);
+                    }
+                    return Ok(self.read_buffer.split());
+                }
                 FRAME_TYPE_PADDING => continue,
                 _ => continue,
             }
@@ -110,7 +135,20 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
             let type_byte = read_frame(&mut self.reader, &mut self.read_buffer).await?;
             match type_byte {
                 FRAME_TYPE_DATA => {
-                    write_fn(&self.read_buffer);
+                    if let Some(cipher) = &mut self.cipher {
+                        let encrypted_len = self.read_buffer.len();
+                        let (aad, _) = encode_compact_header(encrypted_len, FRAME_TYPE_DATA);
+
+                        let plaintext = cipher.decrypt(&aad, &self.read_buffer).map_err(|e| {
+                            NetworkError::PacketError {
+                                reason: format!("Decryption failed: {}", e),
+                            }
+                        })?;
+
+                        write_fn(&plaintext);
+                    } else {
+                        write_fn(&self.read_buffer);
+                    }
                     return Ok(());
                 }
                 FRAME_TYPE_PADDING => continue,
@@ -127,6 +165,8 @@ pub struct FramedWriter<W> {
     write_buffer: BytesMut,
     /// Whether to pad write buffers to TLS record boundaries (16KB)
     tls_record_padding: bool,
+    /// Optional encryption cipher for DATA payloads
+    cipher: Option<FrameCipher>,
 }
 
 /// TLS record payload size (16KB). Real browsers fill entire records during data transfer.
@@ -143,12 +183,18 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
             // BytesMut will grow on demand if needed.
             write_buffer: BytesMut::with_capacity(8 * 1024),
             tls_record_padding: false,
+            cipher: None,
         }
     }
 
     /// Enables TLS record boundary padding on this writer.
     pub fn set_tls_record_padding(&mut self, enabled: bool) {
         self.tls_record_padding = enabled;
+    }
+
+    /// Sets the encryption cipher for this writer.
+    pub fn set_cipher(&mut self, cipher: FrameCipher) {
+        self.cipher = Some(cipher);
     }
 
     /// Sends a data packet immediately (buffers then flushes).
@@ -159,6 +205,7 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
     }
 
     /// Buffers a data packet into memory.
+    /// If a cipher is set, the payload is encrypted before buffering.
     /// DOES NOT perform any system calls or encryption until flush() is called.
     /// This achieves True Write Coalescing.
     pub async fn send_packet_no_flush(&mut self, packet: &[u8]) -> Result<()> {
@@ -175,14 +222,26 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
             self.flush_internal(false).await?;
         }
 
-        // Use compact header for minimal overhead
-        let (header, header_len) = encode_compact_header(packet.len(), FRAME_TYPE_DATA);
+        if let Some(cipher) = &mut self.cipher {
+            // Encrypted path: encrypt payload, then write header with encrypted length
+            let encrypted_len = packet.len() + TAG_SIZE;
+            let (header, header_len) = encode_compact_header(encrypted_len, FRAME_TYPE_DATA);
 
-        // 1. Write Header to Buffer (Memory Op)
-        self.write_buffer.put_slice(&header[..header_len]);
+            // Encrypt with AAD = frame header (type + length)
+            let ciphertext = cipher.encrypt(&header[..header_len], packet).map_err(|e| {
+                NetworkError::PacketError {
+                    reason: format!("Encryption failed: {}", e),
+                }
+            })?;
 
-        // 2. Write Payload to Buffer (Memory Op)
-        self.write_buffer.put_slice(packet);
+            self.write_buffer.put_slice(&header[..header_len]);
+            self.write_buffer.put_slice(&ciphertext);
+        } else {
+            // Plaintext path: use compact header for minimal overhead
+            let (header, header_len) = encode_compact_header(packet.len(), FRAME_TYPE_DATA);
+            self.write_buffer.put_slice(&header[..header_len]);
+            self.write_buffer.put_slice(packet);
+        }
 
         Ok(())
     }

@@ -104,6 +104,11 @@ pub struct ObfuscationConfig {
     /// Increases bandwidth usage but makes TLS record sizes more uniform (default = false)
     #[serde(default = "default_false_fn")]
     pub tls_record_padding: bool,
+    /// Whether to enable application-layer encryption (ChaCha20-Poly1305) for DATA payloads.
+    /// Protects against CDN TLS stripping — even if outer TLS is terminated, inner data remains encrypted.
+    /// Requires `inner_key` to be set in [camouflage] section. (default = false)
+    #[serde(default = "default_false_fn")]
+    pub inner_encryption: bool,
 }
 
 impl Default for ObfuscationConfig {
@@ -116,6 +121,7 @@ impl Default for ObfuscationConfig {
             jitter_min_ms: 0,
             jitter_max_ms: 20,
             tls_record_padding: false,
+            inner_encryption: false,
         }
     }
 }

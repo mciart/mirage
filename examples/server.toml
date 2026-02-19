@@ -59,6 +59,9 @@ jitter_max_ms = 0
 # 将写入缓冲区填充到 TLS Record 边界 (16KB)，使 TLS 记录大小更均匀 (默认: false)
 # 启用后带宽开销增加，但可有效对抗 TLS 记录大小指纹识别
 # tls_record_padding = false
+# 应用层加密 (ChaCha20-Poly1305)，即使外层 TLS 被 CDN 剥离，内层数据仍加密 (默认: false)
+# 启用时需在 [camouflage] 中设置 inner_key，客户端和服务端必须一致
+# inner_encryption = false
 
 # ========== 伪装层 ==========
 [camouflage]
@@ -76,6 +79,9 @@ short_ids = [
 # jls_password = "your-jls-password"
 # JLS 初始化向量 (启用 QUIC/UDP 传输时填写，客户端和服务端必须一致)
 # jls_iv = "your-jls-iv"
+# 应用层加密密钥 (与 inner_encryption 配合使用)
+# 客户端和服务端必须设置相同的密钥
+# inner_key = "your-inner-encryption-key"
 
 # ========== NAT ==========
 [nat]

@@ -85,6 +85,11 @@ pub struct CamouflageConfig {
     /// JLS initialization vector (must match on client and server)
     #[serde(default)]
     pub jls_iv: Option<String>,
+    /// Pre-shared key for application-layer encryption (ChaCha20-Poly1305).
+    /// When set with inner_encryption = true, DATA payloads are encrypted
+    /// independently of the outer TLS layer. (must match on client and server)
+    #[serde(default)]
+    pub inner_key: Option<String>,
 }
 
 impl Default for CamouflageConfig {
@@ -95,6 +100,7 @@ impl Default for CamouflageConfig {
             short_ids: Vec::new(),
             jls_password: None,
             jls_iv: None,
+            inner_key: None,
         }
     }
 }

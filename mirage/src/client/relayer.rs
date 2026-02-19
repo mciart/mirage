@@ -31,6 +31,7 @@ impl ClientRelayer {
         reader: R,
         writer: W,
         obfuscation: crate::config::ObfuscationConfig,
+        inner_key: Option<String>,
     ) -> Result<Self>
     where
         R: AsyncRead + Unpin + Send + 'static,
@@ -45,6 +46,7 @@ impl ClientRelayer {
             writer,
             shutdown_rx,
             obfuscation,
+            inner_key,
         ));
 
         Ok(Self {
@@ -67,15 +69,30 @@ impl ClientRelayer {
         writer: W,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         obfuscation: crate::config::ObfuscationConfig,
+        inner_key: Option<String>,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
         // FramedReader has internal buffering, no need for BufReader
-        let framed_reader = crate::transport::framed::FramedReader::new(reader);
+        let mut framed_reader = crate::transport::framed::FramedReader::new(reader);
         let mut framed_writer = crate::transport::framed::FramedWriter::new(writer);
         framed_writer.set_tls_record_padding(obfuscation.tls_record_padding);
+
+        // Application-layer encryption setup
+        if obfuscation.inner_encryption {
+            if let Some(key_str) = &inner_key {
+                let derived = crate::transport::crypto::derive_key(key_str);
+                framed_writer.set_cipher(crate::transport::crypto::FrameCipher::new(&derived));
+                framed_reader.set_cipher(crate::transport::crypto::FrameCipher::new(&derived));
+                tracing::info!("Application-layer encryption enabled (ChaCha20-Poly1305)");
+            } else {
+                tracing::warn!(
+                    "inner_encryption is enabled but inner_key is not set — encryption disabled"
+                );
+            }
+        }
 
         // Shared flag for bidirectional padding symmetry:
         // The inbound reader sets this when it receives data, and the

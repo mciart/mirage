@@ -194,6 +194,7 @@ impl MirageServer {
                     let address_pool = self.address_pool.clone();
                     let acceptor = acceptor.clone();
                     let obfuscation = self.config.obfuscation.clone();
+                    let inner_key = self.config.camouflage.inner_key.clone();
 
                     connection_tasks.push(tokio::spawn(async move {
                         match dispatcher.dispatch(tcp_stream).await {
@@ -216,6 +217,7 @@ impl MirageServer {
                                     session_queues,
                                     address_pool,
                                     obfuscation.clone(),
+                                    inner_key,
                                 ).await
                             }
                             Ok(DispatchResult::Proxy(stream, target)) => {
@@ -262,6 +264,7 @@ impl MirageServer {
         session_queues: SessionQueues,
         address_pool: Arc<AddressPool>,
         obfuscation: ObfuscationConfig,
+        inner_key: Option<String>,
     ) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -276,6 +279,7 @@ impl MirageServer {
             session_queues,
             address_pool,
             obfuscation,
+            inner_key,
         )
         .await
     }
