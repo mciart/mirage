@@ -18,6 +18,7 @@ use crate::auth::users_file::UsersFileClientAuthenticator;
 
 use crate::config::ClientConfig;
 use crate::network::interface::{Interface, InterfaceIO};
+#[cfg(not(target_os = "ios"))]
 use crate::network::socket_protect;
 use crate::Result;
 use tokio::sync::oneshot;
@@ -103,18 +104,27 @@ impl MirageClient {
         //    This must happen before TUN is created, while default route is on physical NIC.
         #[cfg(not(target_os = "ios"))]
         {
-            let probe_addr = resolved_addrs[0].ip();
-            match socket_protect::detect_outbound_interface(probe_addr) {
-                Ok(iface) => {
-                    info!("Physical interface for anti-loop binding: {}", iface);
-                    self.physical_interface = Some(iface);
+            // In macOS Network Extension sandbox, socket bind/protect is denied.
+            // Skip detect_outbound_interface and rely on exclusion routes instead.
+            let skip = cfg!(target_os = "macos")
+                && std::env::var_os("APP_SANDBOX_CONTAINER_ID").is_some();
+
+            if !skip {
+                let probe_addr = resolved_addrs[0].ip();
+                match socket_protect::detect_outbound_interface(probe_addr) {
+                    Ok(iface) => {
+                        info!("Physical interface for anti-loop binding: {}", iface);
+                        self.physical_interface = Some(iface);
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Could not detect physical interface: {}. Falling back to exclusion routes.",
+                            e
+                        );
+                    }
                 }
-                Err(e) => {
-                    warn!(
-                        "Could not detect physical interface: {}. Falling back to exclusion routes.",
-                        e
-                    );
-                }
+            } else {
+                info!("macOS sandbox detected, skipping socket protection (using exclusion routes)");
             }
         }
 
