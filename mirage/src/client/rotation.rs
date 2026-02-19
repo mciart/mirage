@@ -188,7 +188,25 @@ impl MirageClient {
             }
         });
 
-        let mux = MuxController::new(connections, mode, rotation_config, conn_request_tx);
+        let cipher_keys = if self.config.obfuscation.inner_encryption {
+            self.config.camouflage.inner_key.as_ref().map(|key_str| {
+                let pair = crate::transport::crypto::derive_key_pair(key_str);
+                tracing::info!(
+                    "Application-layer encryption enabled (ChaCha20-Poly1305) for MUX connections"
+                );
+                pair
+            })
+        } else {
+            None
+        };
+
+        let mux = MuxController::new(
+            connections,
+            mode,
+            rotation_config,
+            conn_request_tx,
+            cipher_keys,
+        );
 
         ClientRelayer::start_mux(interface, mux, self.config.obfuscation.clone())
     }

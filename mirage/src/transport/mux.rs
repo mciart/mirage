@@ -151,6 +151,8 @@ pub struct MuxController<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> {
     conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
     /// Shared throughput statistics
     stats: Arc<MuxStats>,
+    /// Derived key pair for application-layer encryption: (c2s_key, s2c_key)
+    cipher_keys: Option<([u8; 32], [u8; 32])>,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
@@ -167,6 +169,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         mode: MuxMode,
         rotation_config: RotationConfig,
         conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
+        cipher_keys: Option<([u8; 32], [u8; 32])>,
     ) -> Self {
         let now = Instant::now();
         let mut writers = Vec::with_capacity(connections.len());
@@ -175,8 +178,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         let mut lifetimes = Vec::with_capacity(connections.len());
 
         for (read_half, write_half) in connections {
-            readers.push(Some(FramedReader::new(read_half)));
-            writers.push(Arc::new(Mutex::new(FramedWriter::new(write_half))));
+            let mut reader = FramedReader::new(read_half);
+            let mut writer = FramedWriter::new(write_half);
+            if let Some((c2s, s2c)) = &cipher_keys {
+                // Client: writer=c2s, reader=s2c
+                writer.set_cipher(crate::transport::crypto::FrameCipher::new(c2s));
+                reader.set_cipher(crate::transport::crypto::FrameCipher::new(s2c));
+            }
+            readers.push(Some(reader));
+            writers.push(Arc::new(Mutex::new(writer)));
             birth_times.push(now);
             lifetimes.push(rotation_config.randomized_lifetime());
         }
@@ -190,6 +200,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             readers,
             conn_request_tx,
             stats: Arc::new(MuxStats::default()),
+            cipher_keys,
         }
     }
 
@@ -282,6 +293,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             let dead_writers_for_rotation = dead_writers.clone();
             let stats_for_rotation = self.stats.clone();
             let reader_handles_for_rotation = reader_handles.clone();
+            let cipher_keys_for_rotation = self.cipher_keys;
 
             tasks.push(tokio::spawn(async move {
                 Self::rotation_supervisor(
@@ -294,6 +306,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     dead_writers_for_rotation,
                     reader_handles_for_rotation,
                     stats_for_rotation,
+                    cipher_keys_for_rotation,
                 )
                 .await
             }));
@@ -314,6 +327,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         let inbound_tx_for_heal = inbound_tx.clone();
         let reader_handles_for_heal = reader_handles.clone();
         let stats_for_heal = self.stats.clone();
+        let cipher_keys_for_heal = self.cipher_keys;
         tasks.push(tokio::spawn(async move {
             Self::heartbeat_and_heal_task(
                 writers_for_heartbeat,
@@ -322,6 +336,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 inbound_tx_for_heal,
                 reader_handles_for_heal,
                 stats_for_heal,
+                cipher_keys_for_heal,
             )
             .await
         }));
@@ -659,6 +674,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         inbound_tx: mpsc::Sender<Packet>,
         reader_handles: ReaderHandles,
         stats: Arc<MuxStats>,
+        cipher_keys: Option<([u8; 32], [u8; 32])>,
     ) -> Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(15));
         // Skip immediate first tick
@@ -688,7 +704,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                             // Replace writer
                             {
                                 let mut w = writer.lock().await;
-                                *w = FramedWriter::new(new_writer);
+                                let mut new_fw = FramedWriter::new(new_writer);
+                                if let Some((c2s, _)) = &cipher_keys {
+                                    new_fw.set_cipher(crate::transport::crypto::FrameCipher::new(
+                                        c2s,
+                                    ));
+                                }
+                                *w = new_fw;
                             }
                             // Mark alive
                             dead_writers[i].store(false, Ordering::Relaxed);
@@ -701,14 +723,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                                 let tx = inbound_tx.clone();
                                 let conn_id = i;
                                 let stats_clone = stats.clone();
+                                let mut new_fr = FramedReader::new(new_reader);
+                                if let Some((_, s2c)) = &cipher_keys {
+                                    new_fr.set_cipher(crate::transport::crypto::FrameCipher::new(
+                                        s2c,
+                                    ));
+                                }
                                 handles[i] = Some(tokio::spawn(async move {
-                                    if let Err(e) = Self::inbound_reader_task(
-                                        conn_id,
-                                        FramedReader::new(new_reader),
-                                        tx,
-                                        stats_clone,
-                                    )
-                                    .await
+                                    if let Err(e) =
+                                        Self::inbound_reader_task(conn_id, new_fr, tx, stats_clone)
+                                            .await
                                     {
                                         debug!("Auto-healed reader {} ended: {}", conn_id, e);
                                     }
@@ -750,6 +774,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         dead_writers: Arc<Vec<AtomicBool>>,
         reader_handles: ReaderHandles,
         stats: Arc<MuxStats>,
+        cipher_keys: Option<([u8; 32], [u8; 32])>,
     ) -> Result<()> {
         // Use mutable local copies for tracking
         let num_connections = writers.len();
@@ -811,7 +836,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     // Replace the writer
                     {
                         let mut w = writers[expire_idx].lock().await;
-                        *w = FramedWriter::new(new_writer);
+                        let mut new_fw = FramedWriter::new(new_writer);
+                        if let Some((c2s, _)) = &cipher_keys {
+                            new_fw.set_cipher(crate::transport::crypto::FrameCipher::new(c2s));
+                        }
+                        *w = new_fw;
                     }
 
                     // Mark this writer as alive again
@@ -832,14 +861,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                         let tx = inbound_tx.clone();
                         let conn_id = expire_idx;
                         let stats_for_reader = stats.clone();
+                        let mut new_fr = FramedReader::new(new_reader);
+                        if let Some((_, s2c)) = &cipher_keys {
+                            new_fr.set_cipher(crate::transport::crypto::FrameCipher::new(s2c));
+                        }
                         let new_handle = tokio::spawn(async move {
-                            if let Err(e) = Self::inbound_reader_task(
-                                conn_id,
-                                FramedReader::new(new_reader),
-                                tx,
-                                stats_for_reader,
-                            )
-                            .await
+                            if let Err(e) =
+                                Self::inbound_reader_task(conn_id, new_fr, tx, stats_for_reader)
+                                    .await
                             {
                                 debug!("Rotated inbound reader {} ended: {}", conn_id, e);
                             }
