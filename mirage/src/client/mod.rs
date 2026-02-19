@@ -105,8 +105,10 @@ async fn happy_eyeballs_tcp(
     // Multiple addresses — race with staggered starts (RFC 8305 §5)
     #[allow(unused_assignments)]
     let mut last_error: Option<crate::error::MirageError> = None;
-    let mut pending_futures: Vec<Pin<Box<dyn Future<Output = (usize, Result<TcpStream>)> + Send>>> =
-        Vec::new();
+    #[allow(clippy::type_complexity)]
+    let mut pending_futures: Vec<
+        Pin<Box<dyn Future<Output = (usize, Result<TcpStream>)> + Send>>,
+    > = Vec::new();
     let mut next_addr_idx = 1; // First attempt started immediately below
 
     // Start the first connection attempt immediately
@@ -219,7 +221,7 @@ async fn poll_any<T>(futures: &mut Vec<std::pin::Pin<Box<dyn Future<Output = T> 
     poll_fn(|cx| {
         for i in 0..futures.len() {
             if let Poll::Ready(val) = futures[i].as_mut().poll(cx) {
-                let _ = futures.swap_remove(i);
+                drop(futures.swap_remove(i));
                 return Poll::Ready(val);
             }
         }

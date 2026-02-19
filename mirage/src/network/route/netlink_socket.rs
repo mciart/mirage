@@ -34,7 +34,6 @@ const NLM_F_REPLACE: u16 = 0x0100;
 
 // Netlink message done
 const NLMSG_ERROR: u16 = 2;
-const NLMSG_DONE: u16 = 3;
 
 // Route table & protocol
 const RT_TABLE_MAIN: u8 = 254;
