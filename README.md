@@ -51,6 +51,14 @@ TCP 和 QUIC 双协议均具备完整伪装能力，探测者只能看到合法�
 | **流量混淆** | Padding + Jitter + Heartbeat | Vision 流控 | 无 (需插件) |
 | **抗封锁** | Port Hopping + Dual Stack + 连接轮换 | CDN (WS/gRPC) | 弱 (协议指纹易识别) |
 
+| 维度 | Xray REALITY | Mirage |
+|---|---|---|
+| CCS 阈值攻击 | ❌ **致命** (Go 16 vs 源网站 32) | ✅ **免疫** (BoringSSL 32 全链路) |
+| 回落对比攻击 | ❌ 两种 TLS 栈行为差异 150% | ✅ 同系 TLS 栈，无差异 |
+| "Caddy 困境" | ❌ 修复后反而更分裂 | ⚠️ 仅当 target_sni 指向 Go 服务器时有风险 |
+| 被动识别 (域名/IP 不匹配) | ⚠️ 通用风险 | ⚠️ 同等风险 |
+| 被动识别 (多源单聚) | ⚠️ 通用风险 | ⚠️ 同等风险 |
+
 ---
 
 ## 快速开始

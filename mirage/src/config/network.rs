@@ -3,6 +3,7 @@
 use ipnet::IpNet;
 use serde::Deserialize;
 use std::net::IpAddr;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::defaults::*;
 
@@ -63,16 +64,19 @@ pub enum CamouflageMode {
 }
 
 /// Camouflage configuration for SNI impersonation
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct CamouflageConfig {
     /// Camouflage mode: "none", "mirage", or "jls"
+    #[zeroize(skip)]
     #[serde(default = "default_camouflage_mode")]
     pub mode: String,
     /// Target SNI to impersonate (e.g., "www.microsoft.com")
     /// Also used as JLS upstream SNI when mode = "jls"
+    #[zeroize(skip)]
     #[serde(default = "default_camouflage_sni")]
     pub target_sni: String,
     /// Short IDs for client identification (hex strings)
+    #[zeroize(skip)]
     #[serde(default)]
     pub short_ids: Vec<String>,
     /// JLS password for QUIC camouflage (must match on client and server)

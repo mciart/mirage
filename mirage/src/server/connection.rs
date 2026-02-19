@@ -13,6 +13,8 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use ipnet::IpNet;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::debug;
@@ -48,6 +50,10 @@ where
     // FramedReader has internal buffering, no need for BufReader
     let framed_reader = FramedReader::new(reader);
     let mut framed_writer = FramedWriter::new(writer);
+    framed_writer.set_tls_record_padding(obfuscation.tls_record_padding);
+
+    // Shared flag for bidirectional padding symmetry
+    let receive_activity = Arc::new(AtomicBool::new(false));
 
     let mut tasks = FuturesUnordered::new();
 
@@ -96,6 +102,7 @@ where
         } else {
             // Use Jitter Actor
             use crate::transport::jitter::spawn_jitter_sender;
+            let recv_flag = receive_activity.clone();
             let packet_rx = {
                 let (tx, rx) = tokio::sync::mpsc::channel(1024);
                 tasks.push(tokio::spawn(async move {
@@ -111,7 +118,7 @@ where
             };
 
             tasks.push(tokio::spawn(async move {
-                spawn_jitter_sender(packet_rx, framed_writer, obfuscation)
+                spawn_jitter_sender(packet_rx, framed_writer, obfuscation, Some(recv_flag))
                     .await
                     .map_err(|e| MirageError::system(format!("Jitter sender task failed: {}", e)))
             }));
@@ -122,6 +129,7 @@ where
     tasks.push(tokio::spawn(process_incoming_data(
         framed_reader,
         ingress_queue,
+        receive_activity,
     )));
 
     // Wait for either task to complete
@@ -140,6 +148,7 @@ where
 async fn process_incoming_data<R>(
     mut reader: FramedReader<R>,
     ingress_queue: Sender<Packet>,
+    receive_activity: Arc<AtomicBool>,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
@@ -147,6 +156,8 @@ where
     loop {
         // FramedReader handles length & type parsing (discards padding transparently)
         let packet_bytes = reader.recv_packet().await?;
+        // Signal to outbound jitter sender that we're receiving data
+        receive_activity.store(true, Ordering::Relaxed);
         ingress_queue.send(Bytes::from(packet_bytes).into()).await?;
     }
 }

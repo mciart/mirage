@@ -119,14 +119,20 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
         }
     }
 }
-
 /// Write half of a split FramedStream.
 pub struct FramedWriter<W> {
     writer: W,
     padding_buffer: Vec<u8>,
     // Accumulation buffer for Write Coalescing
     write_buffer: BytesMut,
+    /// Whether to pad write buffers to TLS record boundaries (16KB)
+    tls_record_padding: bool,
 }
+
+/// TLS record payload size (16KB). Real browsers fill entire records during data transfer.
+const TLS_RECORD_SIZE: usize = 16384;
+/// Minimum buffer size before considering TLS record padding (avoids padding tiny writes)
+const TLS_PAD_THRESHOLD: usize = 4096;
 
 impl<W: AsyncWrite + Unpin> FramedWriter<W> {
     pub fn new(writer: W) -> Self {
@@ -136,7 +142,13 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
             // Pre-allocate buffer for batch coalescing. 8KB holds ~5 MTU packets.
             // BytesMut will grow on demand if needed.
             write_buffer: BytesMut::with_capacity(8 * 1024),
+            tls_record_padding: false,
         }
+    }
+
+    /// Enables TLS record boundary padding on this writer.
+    pub fn set_tls_record_padding(&mut self, enabled: bool) {
+        self.tls_record_padding = enabled;
     }
 
     /// Sends a data packet immediately (buffers then flushes).
@@ -211,6 +223,27 @@ impl<W: AsyncWrite + Unpin> FramedWriter<W> {
     // Helper to flush buffer to stream, optionally flushing the stream itself
     async fn flush_internal(&mut self, flush_stream: bool) -> Result<()> {
         if !self.write_buffer.is_empty() {
+            // TLS Record Padding: when enabled, pad buffers between 4KB-16KB to fill
+            // an entire TLS record. This makes all records a uniform 16KB, matching
+            // real HTTPS browser behavior (browsers always fill records during data transfer).
+            if self.tls_record_padding
+                && self.write_buffer.len() >= TLS_PAD_THRESHOLD
+                && self.write_buffer.len() < TLS_RECORD_SIZE
+            {
+                let gap = TLS_RECORD_SIZE - self.write_buffer.len();
+                // Account for the padding frame header (3 bytes)
+                if gap > 3 {
+                    let pad_payload_len = gap - 3;
+                    let (header, header_len) =
+                        encode_compact_header(pad_payload_len, FRAME_TYPE_PADDING);
+                    self.write_buffer.put_slice(&header[..header_len]);
+                    // Fill with random bytes
+                    let start = self.write_buffer.len();
+                    self.write_buffer.resize(start + pad_payload_len, 0);
+                    rand::thread_rng().fill_bytes(&mut self.write_buffer[start..]);
+                }
+            }
+
             // This Single Write Call will be encrypted as one (or few) large TLS records
             self.writer.write_all(&self.write_buffer).await?;
             self.write_buffer.clear();

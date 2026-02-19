@@ -98,15 +98,15 @@ pub fn default_zero_fn() -> u64 {
 }
 
 pub fn default_padding_probability() -> f64 {
-    0.05
+    0.15
 }
 
 pub fn default_padding_min() -> usize {
-    100
+    40
 }
 
 pub fn default_padding_max() -> usize {
-    1000
+    1200
 }
 
 pub fn default_jitter_min() -> u64 {

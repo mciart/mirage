@@ -43,18 +43,22 @@ timeout_s = 30
 [obfuscation]
 # 是否启用流量混淆 (默认: true)
 enabled = true
-# 发送随机填充包的概率 (0.0-1.0, 默认: 0.05)
-# 配合加权拟态轮廓 (Weighted Traffic Mimicry)，这会触发 60% 小包 / 30% 中包 / 10% 大包的分布
-padding_probability = 0.05
+# 发送随机填充包的概率 (0.0-1.0, 默认: 0.15)
+# 配合加权拟态轮廓 (Weighted Traffic Mimicry)，触发 60% 小包 / 30% 中包 / 10% 大包的分布
+# 同时启用独立填充定时器 (2-8s 随机间隔)，打破填充包仅跟随数据包的可识别模式
+padding_probability = 0.15
 # 随机填充包的最小长度 (字节, 默认: 40)
 padding_min = 40
 # 随机填充包的最大长度 (字节, 默认: 1200)
 padding_max = 1200
 # Jitter (抖动) 延迟范围 (毫秒)
-# 模拟网络自然波动，打乱时序特征
+# 自适应模式：空闲时自动放大抖动模拟浏览行为，高流量时自动缩小保障吞吐
 # 建议 0-20ms，过大会影响性能
 jitter_min_ms = 0
 jitter_max_ms = 0
+# 将写入缓冲区填充到 TLS Record 边界 (16KB)，使 TLS 记录大小更均匀 (默认: false)
+# 启用后带宽开销增加，但可有效对抗 TLS 记录大小指纹识别
+# tls_record_padding = false
 
 # ========== 伪装层 ==========
 [camouflage]

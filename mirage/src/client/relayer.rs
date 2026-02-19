@@ -8,6 +8,7 @@ use crate::utils::tasks::abort_all;
 use crate::Result;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::signal;
@@ -73,14 +74,22 @@ impl ClientRelayer {
     {
         // FramedReader has internal buffering, no need for BufReader
         let framed_reader = crate::transport::framed::FramedReader::new(reader);
-        let framed_writer = crate::transport::framed::FramedWriter::new(writer);
+        let mut framed_writer = crate::transport::framed::FramedWriter::new(writer);
+        framed_writer.set_tls_record_padding(obfuscation.tls_record_padding);
+
+        // Shared flag for bidirectional padding symmetry:
+        // The inbound reader sets this when it receives data, and the
+        // outbound jitter sender checks it to boost padding during asymmetric transfers.
+        let receive_activity = Arc::new(AtomicBool::new(false));
 
         let mut tasks = FuturesUnordered::new();
 
         // 2. Spawn Inbound Task (TLS -> TUN)
+        let recv_flag = receive_activity.clone();
         tasks.push(tokio::spawn(Self::process_inbound_traffic(
             framed_reader,
             interface.clone(),
+            recv_flag,
         )));
 
         // 3. Spawn Outbound Task
@@ -99,11 +108,16 @@ impl ClientRelayer {
 
             use crate::transport::jitter::spawn_jitter_sender;
             tasks.push(tokio::spawn(async move {
-                spawn_jitter_sender(jitter_rx, framed_writer, obfuscation)
-                    .await
-                    .map_err(|e| {
-                        crate::MirageError::system(format!("Jitter sender task failed: {}", e))
-                    })
+                spawn_jitter_sender(
+                    jitter_rx,
+                    framed_writer,
+                    obfuscation,
+                    Some(receive_activity),
+                )
+                .await
+                .map_err(|e| {
+                    crate::MirageError::system(format!("Jitter sender task failed: {}", e))
+                })
             }));
 
             tasks.push(tokio::spawn(Self::process_outgoing_traffic_pump(
@@ -184,6 +198,7 @@ impl ClientRelayer {
     async fn process_inbound_traffic<R>(
         mut reader: crate::transport::framed::FramedReader<R>,
         interface: Arc<Interface<impl InterfaceIO>>,
+        receive_activity: Arc<AtomicBool>,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send + 'static,
@@ -199,6 +214,10 @@ impl ClientRelayer {
                     let _ = interface.write_packet_data(data);
                 })
                 .await?;
+
+            // Signal to the outbound jitter sender that we're receiving data
+            // (for bidirectional padding symmetry)
+            receive_activity.store(true, Ordering::Relaxed);
         }
     }
 

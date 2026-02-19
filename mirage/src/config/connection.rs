@@ -100,17 +100,22 @@ pub struct ObfuscationConfig {
     /// Maximum timing jitter delay in milliseconds (default = 20)
     #[serde(default = "default_jitter_max")]
     pub jitter_max_ms: u64,
+    /// Whether to pad write buffers to TLS record boundaries (16KB) for traffic analysis resistance
+    /// Increases bandwidth usage but makes TLS record sizes more uniform (default = false)
+    #[serde(default = "default_false_fn")]
+    pub tls_record_padding: bool,
 }
 
 impl Default for ObfuscationConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            padding_probability: 0.05,
-            padding_min: 100,
-            padding_max: 1000,
+            padding_probability: 0.15,
+            padding_min: 40,
+            padding_max: 1200,
             jitter_min_ms: 0,
             jitter_max_ms: 20,
+            tls_record_padding: false,
         }
     }
 }
