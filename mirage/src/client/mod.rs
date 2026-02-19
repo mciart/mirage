@@ -301,8 +301,8 @@ impl MirageClient {
         let (tls_stream, remote_addr, protocol): (TransportStream, SocketAddr, String) =
             self.connect_to_server(&resolved_addrs).await?;
 
-        // Setup exclusion routes for user-configured excluded_routes (if any)
-        let _route_guards = Self::setup_exclusion_routes(&self.config);
+        // Setup exclusion routes (server IP anti-loop on Windows + user excluded_routes)
+        let _route_guards = Self::setup_exclusion_routes(&self.config, remote_addr.ip());
 
         // 4. Authenticate
         let session = self.authenticate_connection(tls_stream).await?;
@@ -366,19 +366,80 @@ impl MirageClient {
         Ok(())
     }
 
-    /// Sets up exclusion routes for user-configured excluded networks.
+    /// Sets up exclusion routes for anti-loop and user-configured excluded networks.
     ///
-    /// Server IP anti-loop is now handled by socket binding (IP_BOUND_IF / SO_BINDTODEVICE).
-    /// This function only handles `config.network.excluded_routes` which are
-    /// arbitrary network ranges that still need routing table entries.
+    /// On Unix: server IP anti-loop is handled by socket binding (IP_BOUND_IF / SO_BINDTODEVICE).
+    /// On Windows: socket binding is not available, so we add a routing table entry for the
+    /// server IP via the physical gateway to prevent VPN traffic from looping through TUN.
+    /// On all platforms: user-configured `excluded_routes` get routing table entries.
     fn setup_exclusion_routes(
         config: &ClientConfig,
+        server_ip: std::net::IpAddr,
     ) -> Vec<crate::network::route::ExclusionRouteGuard> {
         use crate::network::route::{
             add_routes, get_gateway_for, ExclusionRouteGuard, RouteTarget,
         };
 
         let mut route_guards: Vec<ExclusionRouteGuard> = Vec::new();
+
+        // Windows: add server IP exclusion route (socket binding not available)
+        #[cfg(target_os = "windows")]
+        {
+            let needs_server_exclusion = config
+                .network
+                .routes
+                .iter()
+                .any(|route| route.contains(&server_ip));
+
+            if needs_server_exclusion {
+                let server_net: ipnet::IpNet = match server_ip {
+                    std::net::IpAddr::V4(v4) => {
+                        ipnet::IpNet::V4(ipnet::Ipv4Net::new(v4, 32).unwrap())
+                    }
+                    std::net::IpAddr::V6(v6) => {
+                        ipnet::IpNet::V6(ipnet::Ipv6Net::new(v6, 128).unwrap())
+                    }
+                };
+
+                if let Ok(target) = get_gateway_for(server_ip) {
+                    let (iface, result) = match &target {
+                        RouteTarget::Gateway(_) => (
+                            "auto".to_string(),
+                            add_routes(&[server_net], &target, "auto"),
+                        ),
+                        RouteTarget::GatewayOnInterface(_, iface)
+                        | RouteTarget::Interface(iface) => {
+                            (iface.clone(), add_routes(&[server_net], &target, iface))
+                        }
+                    };
+                    match result {
+                        Ok(()) => {
+                            info!(
+                                "Added server IP exclusion route: {} (Windows anti-loop)",
+                                server_net
+                            );
+                            route_guards.push(ExclusionRouteGuard {
+                                network: server_net,
+                                target: target.clone(),
+                                interface: iface,
+                            });
+                        }
+                        Err(e) => {
+                            warn!("Failed to add server IP exclusion route: {}", e);
+                        }
+                    }
+                } else {
+                    warn!(
+                        "Could not detect gateway for server IP {}. Anti-loop may fail!",
+                        server_ip
+                    );
+                }
+            }
+        }
+
+        // Suppress unused variable warning on non-Windows
+        #[cfg(not(target_os = "windows"))]
+        let _ = server_ip;
 
         if config.network.excluded_routes.is_empty() {
             return route_guards;
