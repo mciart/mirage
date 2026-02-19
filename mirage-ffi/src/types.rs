@@ -86,6 +86,8 @@ pub struct MirageTunnelConfig {
     pub dns_servers_json: [c_char; 512],
     /// Routes as JSON array string (e.g. '["0.0.0.0/0","::0/0"]')
     pub routes_json: [c_char; 2048],
+    /// Excluded routes as JSON array string (e.g. '["110.42.53.245/32"]')
+    pub excluded_routes_json: [c_char; 2048],
 }
 
 impl MirageTunnelConfig {
@@ -98,6 +100,7 @@ impl MirageTunnelConfig {
             mtu: 0,
             dns_servers_json: [0; 512],
             routes_json: [0; 2048],
+            excluded_routes_json: [0; 2048],
         }
     }
 }

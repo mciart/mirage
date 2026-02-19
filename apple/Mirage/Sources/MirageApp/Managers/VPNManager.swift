@@ -54,13 +54,12 @@ class VPNManager {
                 "config_toml": tunnel.tomlContent,
                 "tunnel_id": tunnel.id.uuidString,
             ]
-            // Prevent iOS from tearing down the tunnel during sleep/system tests
+            // Prevent iOS from tearing down the tunnel during sleep
             proto.disconnectOnSleep = false
-            // Route all traffic through the tunnel (iOS 14+); exclude local LAN
-            if #available(iOS 14.0, macOS 11.0, *) {
-                proto.includeAllNetworks = true
-                proto.excludeLocalNetworks = true
-            }
+            // DO NOT set includeAllNetworks = true — it creates a compulsory NECP agent
+            // that forces ALL traffic through VPN, ignoring excludedRoutes.
+            // DO NOT set excludeLocalNetworks = true — if the home network is 10.x,
+            // all VPN subnet (10.9.8.x) traffic gets excluded too.
 
             manager.protocolConfiguration = proto
             manager.localizedDescription = "Mirage - \(tunnel.name)"

@@ -102,6 +102,10 @@ typedef struct MirageTunnelConfig {
      * Routes as JSON array string (e.g. '["0.0.0.0/0","::0/0"]')
      */
     char routes_json[2048];
+    /**
+     * Excluded routes as JSON array string (e.g. '["110.42.53.245/32"]')
+     */
+    char excluded_routes_json[2048];
 } MirageTunnelConfig;
 
 /**

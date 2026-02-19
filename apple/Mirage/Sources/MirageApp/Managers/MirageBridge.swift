@@ -213,6 +213,7 @@ struct MirageTunnelNetworkConfig {
     let mtu: UInt16
     let dnsServers: [String]
     let routes: [String]
+    let excludedRoutes: [String]
 
     init(_ raw: MirageTunnelConfig) {
         self.clientAddress = withUnsafePointer(to: raw.client_address) {
@@ -242,6 +243,13 @@ struct MirageTunnelNetworkConfig {
         )) ?? []
         self.routes = (try? JSONDecoder().decode(
             [String].self, from: Data(routesJson.utf8)
+        )) ?? []
+
+        let excludedJson = withUnsafePointer(to: raw.excluded_routes_json) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 2048) { String(cString: $0) }
+        }
+        self.excludedRoutes = (try? JSONDecoder().decode(
+            [String].self, from: Data(excludedJson.utf8)
         )) ?? []
     }
 }

@@ -179,6 +179,13 @@ impl MirageRuntime {
             context,
             packet_rx,
             metrics: self.metrics.clone(),
+            excluded_routes: self
+                .config
+                .network
+                .excluded_routes
+                .iter()
+                .map(|r| r.to_string())
+                .collect(),
         });
 
         let config = self.config.clone();
@@ -220,10 +227,14 @@ impl MirageRuntime {
                             let routes_json = serde_json::to_string(&info.routes)
                                 .unwrap_or_else(|_| "[]".to_string());
                             copy_str_to_buf(&routes_json, &mut tc.routes_json);
+                            // Excluded routes as JSON array (from client config)
+                            let excluded_json = serde_json::to_string(&info.excluded_routes)
+                                .unwrap_or_else(|_| "[]".to_string());
+                            copy_str_to_buf(&excluded_json, &mut tc.excluded_routes_json);
 
                             info!(
-                                "Sending tunnel config: addr={}, v6={}, mtu={}",
-                                info.client_address, info.client_address_v6, info.mtu
+                                "Sending tunnel config: addr={}, v6={}, mtu={}, excluded_routes={:?}",
+                                info.client_address, info.client_address_v6, info.mtu, info.excluded_routes
                             );
                             unsafe {
                                 config_cb(&tc, ctx_clone.0);

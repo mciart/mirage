@@ -42,6 +42,7 @@ pub(crate) struct TunnelConfigInfo {
     pub mtu: u16,
     pub dns_servers: Vec<String>,
     pub routes: Vec<String>,
+    pub excluded_routes: Vec<String>,
 }
 
 /// Global state for tunnel config, set during create_interface().
@@ -61,6 +62,7 @@ pub(crate) struct AppleIOInit {
     pub context: *mut c_void,
     pub packet_rx: mpsc::Receiver<bytes::Bytes>,
     pub metrics: Arc<MirageMetricsInner>,
+    pub excluded_routes: Vec<String>,
 }
 
 // Safety: The context pointer lifetime is managed by Swift caller.
@@ -139,6 +141,7 @@ impl InterfaceIO for AppleInterfaceIO {
                 routes: routes
                     .map(|r| r.iter().map(|n| n.to_string()).collect())
                     .unwrap_or_default(),
+                excluded_routes: init.excluded_routes,
             });
         }
 

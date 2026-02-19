@@ -107,78 +107,10 @@ docker run --rm \
 
 ## 配置指南
 
-### 客户端 (`client.toml`)
-
-```toml
-[server]
-host = "1.2.3.4"
-port = 443
-
-[authentication]
-username = "myuser"
-password = "mypassword"
-
-[transport]
-# 协议优先级列表，按顺序尝试
-protocols = ["tcp"]
-# 并行连接数 (1-4)
-parallel_connections = 2
-# IPv4/IPv6 双栈聚合
-dual_stack = true
-# 自定义 SNI (连接 IP 时伪装域名)
-# sni = "www.example.com"
-
-[camouflage]
-mode = "mirage"
-target_sni = "www.microsoft.com"
-short_ids = ["abcd1234deadbeef"]
-# JLS 伪装 (启用 QUIC/UDP 传输时填写，客户端和服务端必须一致)
-# jls_password = "your-jls-password"
-# jls_iv = "your-jls-iv"
-
-[obfuscation]
-enabled = true
-padding_probability = 0.05
-
-[network]
-routes = ["0.0.0.0/1", "128.0.0.0/1"]
-dns_servers = ["1.1.1.1"]
-
-[log]
-level = "info"
-```
-
 > [!TIP]
-> **全局路由**: 使用 `0.0.0.0/1` + `128.0.0.0/1` 拆分路由，利用最长前缀匹配原则稳定接管流量。
+> **全局路由**: 建议使用 `0.0.0.0/1` + `128.0.0.0/1` 拆分路由，利用最长前缀匹配原则稳定接管流量。
 
-### 服务端 (`server.toml`)
-
-```toml
-bind_address = "::0"
-bind_port = 443
-tunnel_network = "10.0.0.1/24"
-tunnel_network_v6 = "fd00::1/64"
-quic_enabled = true
-
-[authentication]
-users_file = "users"
-
-[camouflage]
-mode = "mirage"
-target_sni = "www.microsoft.com"
-short_ids = ["abcd1234deadbeef"]
-# jls_password = "your-jls-password"
-# jls_iv = "your-jls-iv"
-
-[obfuscation]
-enabled = true
-
-[connection]
-mtu = 1280
-timeout_s = 30
-```
-
-更多示例请参考 [`examples/`](examples/) 目录。
+示例请参考 [`examples/`](examples/) 目录。
 
 ---
 

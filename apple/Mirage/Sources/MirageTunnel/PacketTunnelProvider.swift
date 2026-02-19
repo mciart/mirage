@@ -242,8 +242,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             },
             onTunnelConfig: { [weak self] config in
                 // This fires BEFORE onStatusChange(Connected) with server-assigned addresses
-                NSLog("[MirageTunnel] 🎯 Tunnel config from server: addr=%@, v6=%@, mtu=%d",
-                      config.clientAddress, config.clientAddressV6, config.mtu)
+                NSLog("[MirageTunnel] 🎯 Tunnel config from server: addr=%@, v6=%@, mtu=%d, excludedRoutes=%@",
+                      config.clientAddress, config.clientAddressV6, config.mtu,
+                      config.excludedRoutes.description)
                 guard let self else { return }
                 self.pendingSettings = self.buildNetworkSettings(from: config, serverIP: serverIP)
             }
@@ -433,43 +434,55 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // IPv4 — use /32 mask to avoid creating a connected route for the VPN subnet
         let ipv4 = NEIPv4Settings(addresses: [clientAddr], subnetMasks: ["255.255.255.255"])
 
-        // Build routes from server config
-        var ipv4Routes: [NEIPv4Route] = []
-        var ipv6Routes: [NEIPv6Route] = []
-        for route in config.routes {
+        // Use .default() for both IPv4 & IPv6.
+        // DO NOT use includeAllNetworks=true in VPNManager — it creates a compulsory
+        // NECP agent that ignores excludedRoutes. Without it, .default() still captures
+        // traffic and excludedRoutes work via longest-prefix-match in the routing table.
+        var ipv4Included: [NEIPv4Route] = [NEIPv4Route.default()]
+
+        // Add VPN subnet as explicit included route — without this, the home network's
+        // 10.x route (more specific than default) would capture VPN subnet traffic.
+        if let prefix = config.clientAddress.split(separator: "/").last.flatMap({ Int($0) }),
+           prefix > 0 && prefix <= 32 {
+            let addrParts = clientAddr.split(separator: ".").compactMap { UInt32($0) }
+            if addrParts.count == 4 {
+                let addrInt = (addrParts[0] << 24) | (addrParts[1] << 16) | (addrParts[2] << 8) | addrParts[3]
+                let mask = ~UInt32(0) << (32 - prefix)
+                let netInt = addrInt & mask
+                let netStr = "\((netInt >> 24) & 0xFF).\((netInt >> 16) & 0xFF).\((netInt >> 8) & 0xFF).\(netInt & 0xFF)"
+                let maskStr = "\((mask >> 24) & 0xFF).\((mask >> 16) & 0xFF).\((mask >> 8) & 0xFF).\(mask & 0xFF)"
+                ipv4Included.append(NEIPv4Route(destinationAddress: netStr, subnetMask: maskStr))
+                NSLog("[MirageTunnel] Added VPN subnet route: %@/%d", netStr, prefix)
+            }
+        }
+        ipv4.includedRoutes = ipv4Included
+
+        // Parse excluded routes from client config
+        var ipv4Excluded: [NEIPv4Route] = []
+        var ipv6Excluded: [NEIPv6Route] = []
+        for route in config.excludedRoutes {
             let parts = route.split(separator: "/")
             guard let dest = parts.first.map(String.init),
                   let prefix = parts.last.flatMap({ Int($0) })
             else { continue }
-
             if dest.contains(":") {
-                ipv6Routes.append(NEIPv6Route(
+                ipv6Excluded.append(NEIPv6Route(
                     destinationAddress: dest,
                     networkPrefixLength: prefix as NSNumber
                 ))
             } else {
                 let mask = prefix == 0 ? UInt32(0) : ~UInt32(0) << (32 - prefix)
                 let maskStr = "\((mask >> 24) & 0xFF).\((mask >> 16) & 0xFF).\((mask >> 8) & 0xFF).\(mask & 0xFF)"
-                ipv4Routes.append(NEIPv4Route(
+                ipv4Excluded.append(NEIPv4Route(
                     destinationAddress: dest,
                     subnetMask: maskStr
                 ))
             }
         }
-        if ipv4Routes.isEmpty { ipv4Routes.append(NEIPv4Route.default()) }
-
-        // Apple NE converts 0.0.0.0/0 to split routes that EXCLUDE the local
-        // subnet's parent range (e.g., entire 10.0.0.0/8 when LAN is 10.0.0.x).
-        // Add explicit private-range routes so VPN-subnet IPs route through tunnel.
-        let privateRanges: [(String, String)] = [
-            ("10.0.0.0", "255.0.0.0"),       // 10.0.0.0/8
-            ("172.16.0.0", "255.240.0.0"),    // 172.16.0.0/12
-            ("192.168.0.0", "255.255.0.0"),   // 192.168.0.0/16
-        ]
-        for (dest, mask) in privateRanges {
-            ipv4Routes.append(NEIPv4Route(destinationAddress: dest, subnetMask: mask))
+        if !ipv4Excluded.isEmpty {
+            ipv4.excludedRoutes = ipv4Excluded
         }
-        ipv4.includedRoutes = ipv4Routes
+        NSLog("[MirageTunnel] IPv4: default route + %d excluded routes", ipv4Excluded.count)
         settings.ipv4Settings = ipv4
 
         // IPv6
@@ -478,8 +491,43 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let v6Host = v6Addr.split(separator: "/").first.map(String.init) ?? v6Addr
             let v6Prefix = v6Addr.split(separator: "/").last.flatMap { Int($0) } ?? 64
             let ipv6 = NEIPv6Settings(addresses: [v6Host], networkPrefixLengths: [v6Prefix as NSNumber])
-            if ipv6Routes.isEmpty { ipv6Routes.append(NEIPv6Route.default()) }
-            ipv6.includedRoutes = ipv6Routes
+
+            // .default() + VPN subnet (same reason as IPv4: override local IPv6 routes)
+            var ipv6Included: [NEIPv6Route] = [NEIPv6Route.default()]
+            if v6Prefix > 0 && v6Prefix <= 128 {
+                // Compute network address by zeroing host bits
+                var addr = in6_addr()
+                if inet_pton(AF_INET6, v6Host, &addr) == 1 {
+                    var bytes = withUnsafeBytes(of: &addr) { Array($0) }
+                    // Zero out host bits beyond the prefix
+                    let fullBytes = v6Prefix / 8
+                    let remainBits = v6Prefix % 8
+                    if remainBits > 0 && fullBytes < 16 {
+                        bytes[fullBytes] &= ~UInt8(0) << (8 - remainBits)
+                    }
+                    for i in (fullBytes + (remainBits > 0 ? 1 : 0))..<16 {
+                        bytes[i] = 0
+                    }
+                    // Convert back to string
+                    var netAddr = in6_addr()
+                    _ = bytes.withUnsafeBytes { ptr in
+                        memcpy(&netAddr, ptr.baseAddress!, 16)
+                    }
+                    var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                    inet_ntop(AF_INET6, &netAddr, &buf, socklen_t(INET6_ADDRSTRLEN))
+                    let netStr = String(cString: buf)
+                    ipv6Included.append(NEIPv6Route(
+                        destinationAddress: netStr,
+                        networkPrefixLength: v6Prefix as NSNumber
+                    ))
+                    NSLog("[MirageTunnel] Added VPN IPv6 subnet route: %@/%d", netStr, v6Prefix)
+                }
+            }
+            ipv6.includedRoutes = ipv6Included
+            if !ipv6Excluded.isEmpty {
+                ipv6.excludedRoutes = ipv6Excluded
+            }
+            NSLog("[MirageTunnel] IPv6: default route + %d excluded routes", ipv6Excluded.count)
             settings.ipv6Settings = ipv6
         }
 

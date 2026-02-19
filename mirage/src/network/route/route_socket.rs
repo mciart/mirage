@@ -322,10 +322,29 @@ pub fn route_add(network: &IpNet, target: &RouteTarget, interface_name: &str) ->
         flags |= libc::RTF_GATEWAY;
     }
 
+    // Determine interface index for ifscope (GatewayOnInterface)
+    let ifscope_index: u16 = if let RouteTarget::GatewayOnInterface(_, iface) = target {
+        // RTF_IFSCOPE scopes the route to a specific interface (like `route add -ifscope en0`)
+        flags |= libc::RTF_IFSCOPE;
+        let c_name = std::ffi::CString::new(iface.as_str()).unwrap_or_default();
+        let idx = unsafe { libc::if_nametoindex(c_name.as_ptr()) };
+        if idx == 0 {
+            debug!(
+                "route_socket: interface '{}' not found, adding without ifscope",
+                iface
+            );
+            0
+        } else {
+            idx as u16
+        }
+    } else {
+        0
+    };
+
     let addrs = if has_gateway {
         libc::RTA_DST | libc::RTA_GATEWAY | libc::RTA_NETMASK
     } else {
-        libc::RTA_DST | libc::RTA_GATEWAY | libc::RTA_NETMASK
+        libc::RTA_DST | libc::RTA_NETMASK
     };
 
     let sock = RouteSocket::open().map_err(|e| RouteError::PlatformError {
@@ -335,6 +354,12 @@ pub fn route_add(network: &IpNet, target: &RouteTarget, interface_name: &str) ->
     let mut buf = Vec::with_capacity(256);
     build_header(&mut buf, libc::RTM_ADD as u8, flags, addrs);
 
+    // Set rtm_index for ifscope
+    if ifscope_index > 0 {
+        let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut libc::rt_msghdr) };
+        hdr.rtm_index = ifscope_index;
+    }
+
     // DST
     push_addr(&mut buf, network.addr());
     // GATEWAY
@@ -342,8 +367,13 @@ pub fn route_add(network: &IpNet, target: &RouteTarget, interface_name: &str) ->
         RouteTarget::Gateway(gw) | RouteTarget::GatewayOnInterface(gw, _) => {
             push_addr(&mut buf, *gw);
         }
-        RouteTarget::Interface(_) => {
-            push_sockaddr_dl(&mut buf, interface_name);
+        RouteTarget::Interface(iface) => {
+            let dl_name = if !iface.is_empty() && iface != "auto" {
+                iface.as_str()
+            } else {
+                interface_name
+            };
+            push_sockaddr_dl(&mut buf, dl_name);
         }
     }
     // NETMASK
@@ -353,7 +383,10 @@ pub fn route_add(network: &IpNet, target: &RouteTarget, interface_name: &str) ->
 
     match sock.send(&buf) {
         Ok(()) => {
-            debug!("route_socket: added {} via {:?}", network, target);
+            debug!(
+                "route_socket: added {} via {:?} (ifscope_idx={})",
+                network, target, ifscope_index
+            );
             Ok(())
         }
         Err(e) if e.raw_os_error() == Some(libc::EEXIST) => {
