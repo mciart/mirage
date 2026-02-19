@@ -191,7 +191,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 self?.writeBuffer?.append(data)
             },
             onStatusChange: { [weak self] status, message in
-                Self.log.info("🔄 Rust status: \(status.displayName, privacy: .public) - \(message ?? \"\", privacy: .public)")
+                let msg = message ?? ""
+                PacketTunnelProvider.log.info("🔄 Rust status: \(status.displayName, privacy: .public) - \(msg, privacy: .public)")
 
                 if status == .connected {
                     // Rust connected! Apply NE settings (already built from onTunnelConfig)
@@ -243,7 +244,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             },
             onTunnelConfig: { [weak self] config in
                 // This fires BEFORE onStatusChange(Connected) with server-assigned addresses
-                Self.log.info("🎯 Tunnel config from server: addr=\(config.clientAddress, privacy: .public), v6=\(config.clientAddressV6, privacy: .public), mtu=\(config.mtu, privacy: .public), excludedRoutes=\(config.excludedRoutes.description, privacy: .public)")
+                PacketTunnelProvider.log.info("🎯 Tunnel config from server: addr=\(config.clientAddress, privacy: .public), v6=\(config.clientAddressV6, privacy: .public), mtu=\(config.mtu, privacy: .public), excludedRoutes=\(config.excludedRoutes.description, privacy: .public)")
                 guard let self else { return }
                 self.pendingSettings = self.buildNetworkSettings(from: config, serverIP: serverIP)
             }
