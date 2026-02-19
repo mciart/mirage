@@ -61,7 +61,7 @@ TCP 和 QUIC 双协议均具备完整伪装能力，探测者只能看到合法�
 |------|------|------|
 | Windows | x86_64 | CLI (Wintun) |
 | Linux | x86_64, aarch64 | CLI |
-| macOS | aarch64 (Apple Silicon) | **原生 SwiftUI GUI** + CLI |
+| macOS | aarch64, x86_64 | **原生 SwiftUI GUI** + CLI |
 | iOS / iPadOS | aarch64 | **原生 SwiftUI GUI** (Network Extension) |
 | FreeBSD | x86_64, aarch64 | CLI |
 
@@ -77,12 +77,12 @@ cargo install --path mirage
 **macOS / iOS GUI**:
 
 ```bash
-# 编译 Rust FFI 库
-cargo build --release --target aarch64-apple-darwin -p mirage-ffi   # macOS
-cargo build --release --target aarch64-apple-ios -p mirage-ffi      # iOS
+# 一键编译所有 Apple 平台 Rust FFI 库
+zsh scripts/build-apple.sh
 
 # 用 Xcode 打开并构建
 open apple/Mirage/Mirage.xcodeproj
+# ⌘⇧K (Clean Build Folder) → ⌘R (Run)
 ```
 
 ### 使用
@@ -149,8 +149,8 @@ ip6tables -I FORWARD -o tun+ -j ACCEPT && ip6tables -I FORWARD -i tun+ -j ACCEPT
 使用 `Argon2` 加密存储密码：
 
 ```bash
-mirage users --add users      # 添加用户
-mirage users --delete users   # 删除用户
+mirage users --add /path/to/users      # 添加用户（users 为用户文件路径，默认 ./users）
+mirage users --delete /path/to/users   # 删除用户
 ```
 
 ---
