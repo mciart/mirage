@@ -94,7 +94,8 @@ impl ClientRelayer {
             )));
         } else {
             // Use Jitter Actor
-            let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(1024);
+            let jitter_channel_size = if cfg!(target_os = "ios") { 64 } else { 1024 };
+            let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(jitter_channel_size);
 
             use crate::transport::jitter::spawn_jitter_sender;
             tasks.push(tokio::spawn(async move {
@@ -190,14 +191,14 @@ impl ClientRelayer {
         debug!("Started inbound traffic task (TLS tunnel -> interface)");
 
         loop {
-            match reader.recv_packet().await {
-                Ok(packet) => {
-                    interface
-                        .write_packet(bytes::Bytes::from(packet).into())
-                        .await?;
-                }
-                Err(e) => return Err(e),
-            }
+            // Zero-allocation path: reads into FramedReader's reused buffer,
+            // then passes &[u8] directly to the interface's FFI callback.
+            // Avoids BytesMut::split() + Bytes::from() + Packet allocation per packet.
+            reader
+                .recv_and_write(|data| {
+                    let _ = interface.write_packet_data(data);
+                })
+                .await?;
         }
     }
 

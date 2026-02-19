@@ -111,6 +111,22 @@ impl MirageTunnelConfig {
 pub type MiragePacketWriteCallback =
     Option<unsafe extern "C" fn(data: *const u8, len: usize, context: *mut c_void)>;
 
+/// Batch callback invoked by Rust to deliver multiple outbound packets in one FFI call.
+/// Reduces per-packet C-call overhead for downlink bursts.
+///
+/// - `data_ptrs`: array of pointers to raw IP packet bytes
+/// - `data_lens`: array of corresponding packet lengths
+/// - `count`: number of packets
+/// - `context`: opaque pointer passed via `mirage_start()`
+pub type MiragePacketWriteBatchCallback = Option<
+    unsafe extern "C" fn(
+        data_ptrs: *const *const u8,
+        data_lens: *const usize,
+        count: usize,
+        context: *mut c_void,
+    ),
+>;
+
 /// Callback invoked by Rust to report status changes.
 ///
 /// - `status`: new connection status

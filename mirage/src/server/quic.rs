@@ -112,6 +112,7 @@ pub async fn run_quic_listener(
         config.connection.keep_alive_interval_s,
         config.connection.timeout_s,
         config.connection.outer_mtu,
+        false,
     );
     server_config.transport_config(Arc::new(transport));
 

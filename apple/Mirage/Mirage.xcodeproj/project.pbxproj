@@ -7,9 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0A1B2C3D4E5F6A7B8C9D0E1F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FA /* Assets.xcassets */; };
-		B2C3D4E5F6A7B8C9D0E1F2A3 /* Mirage.icns in Resources */ = {isa = PBXBuildFile; fileRef = C3D4E5F6A7B8C9D0E1F2A3B4 /* Mirage.icns */; };
 		019CB2EA5318801793377D25 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 378C47EABCC4386F27A00398 /* Constants.swift */; };
+		0A1B2C3D4E5F6A7B8C9D0E1F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FA /* Assets.xcassets */; };
 		11E7F3B13655B1ED2BE9ED26 /* TunnelConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 337B00D8AFC5E9BC473289CB /* TunnelConfig.swift */; };
 		2B7071FD69861C79FA97F09E /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 809B5D6DBA2FE9D606F3E9E4 /* Security.framework */; };
 		45BB8E1285FDAD464EE5ED3F /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 378C47EABCC4386F27A00398 /* Constants.swift */; };
@@ -23,6 +22,7 @@
 		80F9AC6EBCCEF9D3F3E47F69 /* TunnelStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FEED0AEB19C23B5BBF225FB /* TunnelStore.swift */; };
 		98B62BB3A798B13B819D2879 /* MirageBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F523E517F982A2336EEFD9F /* MirageBridge.swift */; };
 		9E1611254BC588E6D35172D1 /* MirageTunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2137575B7D2C056A9CB676B6 /* MirageTunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B2C3D4E5F6A7B8C9D0E1F2A3 /* Mirage.icns in Resources */ = {isa = PBXBuildFile; fileRef = C3D4E5F6A7B8C9D0E1F2A3B4 /* Mirage.icns */; };
 		B5DF900C39C0B22D506DCE78 /* TunnelDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A5A60FAABC8A3F6B4FD9BE6 /* TunnelDetailView.swift */; };
 		CD8C63E83A7CD1C34527BE44 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C524DE863320D8184AE13E9C /* NetworkExtension.framework */; };
 		F14EDABAF01604AC0C9D0CB5 /* MirageApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE02568E93053F434F591C23 /* MirageApp.swift */; };
@@ -54,8 +54,6 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		A1B2C3D4E5F6A7B8C9D0E1FA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		C3D4E5F6A7B8C9D0E1F2A3B4 /* Mirage.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Mirage.icns; sourceTree = "<group>"; };
 		1F1B24601B3BA9FBB7FA9EBA /* Mirage.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mirage.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2137575B7D2C056A9CB676B6 /* MirageTunnel.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MirageTunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		24D0318169394E19BD9B6A47 /* VPNManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VPNManager.swift; sourceTree = "<group>"; };
@@ -67,7 +65,9 @@
 		5FEED0AEB19C23B5BBF225FB /* TunnelStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelStore.swift; sourceTree = "<group>"; };
 		7FCDB0AA26FAD2C80BED4AC5 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		809B5D6DBA2FE9D606F3E9E4 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		A1B2C3D4E5F6A7B8C9D0E1FA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		BB8218AB2962C3E0E896B532 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		C3D4E5F6A7B8C9D0E1F2A3B4 /* Mirage.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Mirage.icns; sourceTree = "<group>"; };
 		C524DE863320D8184AE13E9C /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		EC2BCCF3C44F2C9A1675DF19 /* TunnelListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelListView.swift; sourceTree = "<group>"; };
 		EE02568E93053F434F591C23 /* MirageApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirageApp.swift; sourceTree = "<group>"; };
@@ -248,7 +248,6 @@
 						ProvisioningStyle = Automatic;
 					};
 					B48E88F0AED84BCCAF04F865 = {
-						DevelopmentTeam = 99MSH62BM8;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -332,9 +331,10 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 99MSH62BM8;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "MirageApp-Info.plist";
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
+				INFOPLIST_FILE = "MirageApp-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -573,9 +573,10 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 99MSH62BM8;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "MirageApp-Info.plist";
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/../../mirage-ffi/include";
+				INFOPLIST_FILE = "MirageApp-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

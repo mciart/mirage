@@ -29,7 +29,7 @@ pub struct MirageRuntime {
     /// Shutdown signal sender
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// Channel to send packets from Swift → Rust (into the tunnel)
-    packet_tx: Option<mpsc::Sender<Vec<u8>>>,
+    packet_tx: Option<mpsc::Sender<bytes::Bytes>>,
     /// Metrics counters
     pub(crate) metrics: Arc<MirageMetricsInner>,
 }
@@ -58,41 +58,37 @@ impl Default for MirageMetricsInner {
 impl MirageRuntime {
     /// Creates a new runtime with parsed configuration.
     pub fn new(config: ClientConfig) -> Result<Self, String> {
-        // Initialize tracing subscriber — write to file since stderr is invisible
-        // in sandboxed app extensions. Path comes from Swift via environment variable.
-        let log_dir = std::env::var("MIRAGE_LOG_DIR").unwrap_or_else(|_| "/tmp".to_string());
-        let log_path = format!("{}/mirage_tunnel.log", log_dir);
-        if let Ok(log_file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
+        // iOS: skip tracing entirely to save ~1-2 MB of formatter/writer memory.
+        // On iOS we rely on NSLog from Swift for diagnostics.
+        // macOS: write to file since stderr is invisible in sandboxed app extensions.
+        #[cfg(not(target_os = "ios"))]
         {
-            let _ = tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                        // iOS: use warn to avoid massive memory allocation from debug logging
-                        // macOS: use debug for development
-                        if cfg!(target_os = "ios") {
-                            tracing_subscriber::EnvFilter::new("warn")
-                        } else {
-                            tracing_subscriber::EnvFilter::new("debug")
-                        }
-                    }),
-                )
-                .with_writer(std::sync::Mutex::new(log_file))
-                .with_ansi(false)
-                .try_init();
+            let log_dir = std::env::var("MIRAGE_LOG_DIR").unwrap_or_else(|_| "/tmp".to_string());
+            let log_path = format!("{}/mirage_tunnel.log", log_dir);
+            if let Ok(log_file) = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&log_path)
+            {
+                let subscriber = tracing_subscriber::fmt()
+                    .with_env_filter(
+                        tracing_subscriber::EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")),
+                    )
+                    .with_writer(std::sync::Mutex::new(log_file))
+                    .with_ansi(false)
+                    .finish();
+                let _ = tracing::subscriber::set_global_default(subscriber);
+            }
         }
 
-        // iOS Network Extensions have ~15MB memory limit.
-        // Default multi-threaded runtime creates num_cpus threads × 2MB stack = ~12MB on iPhone.
-        // We limit to 1 worker thread with 1MB stack = ~1MB, saving ~11MB for VPN buffers.
-        // Note: current_thread won't work here because runtime.spawn() needs a background
-        // thread to drive tasks (the FFI start() method must return immediately).
+        // iOS Network Extensions have 50MB hard memory limit (jetsam).
+        // 1 worker thread with 512KB stack is sufficient for single-connection mode.
         #[cfg(target_os = "ios")]
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_stack_size(512 * 1024) // 512KB × 2 threads = 1MB total (same as before)
+            .worker_threads(1)
+            .thread_stack_size(512 * 1024)
             .enable_all()
             .build()
             .map_err(|e| format!("Failed to create Tokio runtime: {e}"))?;
@@ -159,7 +155,9 @@ impl MirageRuntime {
         self.shutdown_tx = Some(shutdown_tx);
 
         // Create the packet channel (Swift → Rust)
-        let (packet_tx, packet_rx) = mpsc::channel::<Vec<u8>>(256);
+        // iOS: smaller buffer to stay under 50MB jetsam limit
+        let channel_size = if cfg!(target_os = "ios") { 32 } else { 256 };
+        let (packet_tx, packet_rx) = mpsc::channel::<bytes::Bytes>(channel_size);
         self.packet_tx = Some(packet_tx);
 
         // Update status to Connecting
@@ -288,7 +286,7 @@ impl MirageRuntime {
     /// Sends a packet from Swift into the Rust tunnel (TUN → Tunnel).
     pub fn write_packet(&self, data: &[u8]) -> bool {
         if let Some(tx) = &self.packet_tx {
-            tx.try_send(data.to_vec()).is_ok()
+            tx.try_send(bytes::Bytes::copy_from_slice(data)).is_ok()
         } else {
             false
         }
@@ -300,7 +298,7 @@ impl MirageRuntime {
         if let Some(tx) = &self.packet_tx {
             let mut sent = 0;
             for pkt in packets {
-                if tx.try_send(pkt.to_vec()).is_ok() {
+                if tx.try_send(bytes::Bytes::copy_from_slice(pkt)).is_ok() {
                     sent += 1;
                 } else {
                     break; // Channel full

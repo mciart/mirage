@@ -63,6 +63,17 @@ pub trait InterfaceIO: Send + Sync + 'static {
     /// Writes a packet to the interface.
     fn write_packet(&self, packet: Packet) -> impl Future<Output = Result<()>> + Send;
 
+    /// Zero-copy synchronous write: passes raw packet bytes to the interface
+    /// without allocating a Packet. Used by the FFI inbound path with
+    /// `FramedReader::recv_and_write()` to avoid per-packet heap allocations.
+    ///
+    /// Only meaningful for FFI implementations where the write callback is
+    /// synchronous. The default is a no-op; override in FFI implementations.
+    #[inline]
+    fn write_packet_data(&self, _data: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
     /// Writes multiple packets to the interface.
     #[inline]
     fn write_packets(&self, packets: Vec<Packet>) -> impl Future<Output = Result<()>> + Send {
@@ -152,6 +163,13 @@ impl<I: InterfaceIO> Interface<I> {
     #[inline]
     pub async fn write_packet(&self, packet: Packet) -> Result<()> {
         self.inner.write_packet(packet).await
+    }
+
+    /// Zero-copy write: passes raw bytes directly to the interface without
+    /// allocating a Packet. On iOS FFI, this calls the C callback directly.
+    #[inline]
+    pub fn write_packet_data(&self, data: &[u8]) -> Result<()> {
+        self.inner.write_packet_data(data)
     }
 
     #[inline]

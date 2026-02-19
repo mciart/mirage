@@ -69,12 +69,15 @@ impl MirageClient {
         F: Future<Output = ()> + Send + 'static,
     {
         // Resolve server addresses (support Dual Stack)
+        eprintln!("[MEM-CHECKPOINT] client.start() ENTRY");
         let resolved_addrs = self.resolve_server_address().await?;
+        eprintln!("[MEM-CHECKPOINT] after DNS resolve");
 
         // Connect to server via TCP/TLS (Primary Connection)
         // Try all resolved addresses for each protocol before falling back
         let (tls_stream, remote_addr, protocol): (TransportStream, SocketAddr, String) =
             self.connect_to_server(&resolved_addrs).await?;
+        eprintln!("[MEM-CHECKPOINT] after TLS connect");
 
         // Anti-Loop & Excluded Routes: Add exclusion routes via the gateway used to reach them
         let server_ip = remote_addr.ip();
@@ -208,6 +211,7 @@ impl MirageClient {
         let session = auth_client.authenticate(read_half, write_half).await?;
 
         info!("Successfully authenticated");
+        eprintln!("[MEM-CHECKPOINT] after auth");
         info!("Session ID: {:02x?}", session.session_id);
         info!(
             "Parallel connections configured: {}",
@@ -460,6 +464,7 @@ impl MirageClient {
                 self.config.obfuscation.clone(),
             )?
         };
+        eprintln!("[MEM-CHECKPOINT] after relayer start");
 
         // [恢复] 发送连接成功信号
         if let Some(tx) = connection_event_tx {

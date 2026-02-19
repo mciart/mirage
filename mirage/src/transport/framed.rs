@@ -94,6 +94,30 @@ impl<R: AsyncRead + Unpin> FramedReader<R> {
             }
         }
     }
+
+    /// Zero-allocation packet processing: reads a data frame into the internal
+    /// buffer and calls `write_fn` with a reference to the packet data.
+    ///
+    /// Unlike `recv_packet()`, this does NOT call `split()` on the buffer,
+    /// so the buffer retains its capacity across calls — zero heap allocations
+    /// per packet after the first.
+    #[inline]
+    pub async fn recv_and_write<F>(&mut self, write_fn: F) -> Result<()>
+    where
+        F: FnOnce(&[u8]),
+    {
+        loop {
+            let type_byte = read_frame(&mut self.reader, &mut self.read_buffer).await?;
+            match type_byte {
+                FRAME_TYPE_DATA => {
+                    write_fn(&self.read_buffer);
+                    return Ok(());
+                }
+                FRAME_TYPE_PADDING => continue,
+                _ => continue,
+            }
+        }
+    }
 }
 
 /// Write half of a split FramedStream.

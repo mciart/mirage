@@ -123,6 +123,7 @@ pub fn create_endpoint(
         config.connection.keep_alive_interval_s,
         config.connection.timeout_s,
         config.connection.outer_mtu,
+        cfg!(target_os = "ios"),
     );
     client_config.transport_config(std::sync::Arc::new(transport_config));
 

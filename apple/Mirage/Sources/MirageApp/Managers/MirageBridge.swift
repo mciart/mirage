@@ -61,7 +61,7 @@ final class MirageBridge {
 
         mirage_start(
             handle,
-            // write_cb: Rust → Swift packet delivery
+            // write_cb: Rust → Swift single-packet delivery
             { dataPtr, len, context in
                 guard let dataPtr, let context else { return }
                 let data = Data(bytes: dataPtr, count: Int(len))

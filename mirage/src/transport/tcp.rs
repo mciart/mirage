@@ -37,6 +37,8 @@ pub fn optimize_tcp_socket<S: std::os::unix::io::AsRawFd>(_socket: &S) -> std::i
 }
 
 /// No-op on non-Linux platforms.
+/// Buffer tuning on macOS/iOS isn't needed — the real memory fix is the
+/// autoreleasepool in Swift's PacketWriteBuffer.flush().
 #[cfg(not(target_os = "linux"))]
 pub fn optimize_tcp_socket<S>(_socket: &S) -> std::io::Result<()> {
     Ok(())

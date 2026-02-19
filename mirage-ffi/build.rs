@@ -15,7 +15,7 @@ fn main() {
         .unwrap_or_else(|_| cbindgen::Config::default());
 
     cbindgen::Builder::new()
-        .with_crate(crate_dir)
+        .with_crate(&crate_dir)
         .with_config(config)
         .generate()
         .expect("Unable to generate C bindings")

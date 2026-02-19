@@ -56,12 +56,16 @@ impl AsyncWrite for QuicStream {
 unsafe impl Send for QuicStream {}
 unsafe impl Sync for QuicStream {}
 
-/// Creates a high-performance QUIC transport configuration
-/// Tunes window sizes and usage BBR congestion control to mimic Hysteria 2's performance characteristics.
+/// Creates a QUIC transport configuration.
+///
+/// When `constrained` is true (e.g. iOS Network Extension with 50 MB jetsam limit),
+/// uses small window sizes (~1.5 MB total) to stay within memory limits.
+/// Otherwise uses large Hysteria 2-style windows for maximum throughput.
 pub fn common_transport_config(
     keep_alive_interval_s: u64,
     idle_timeout_s: u64,
     outer_mtu: u16,
+    constrained: bool,
 ) -> quinn::TransportConfig {
     let mut transport = quinn::TransportConfig::default();
 
@@ -70,29 +74,41 @@ pub fn common_transport_config(
         quinn::congestion::BbrConfig::default(),
     ));
 
-    // 2. Increase Window Sizes
-    let stream_rw = 20 * 1024 * 1024;
-    transport.stream_receive_window(u32::try_from(stream_rw).expect("stream_rw fits u32").into());
+    if constrained {
+        // iOS / memory-constrained mode: tiny windows to stay under 50 MB jetsam limit.
+        // Total potential buffer: ~1.5 MB vs ~100 MB in unconstrained mode.
+        let stream_rw = 256 * 1024; // 256 KB
+        transport
+            .stream_receive_window(u32::try_from(stream_rw).expect("stream_rw fits u32").into());
 
-    let conn_rw = 40 * 1024 * 1024;
-    transport.receive_window(u32::try_from(conn_rw).expect("conn_rw fits u32").into());
+        let conn_rw = 512 * 1024; // 512 KB
+        transport.receive_window(u32::try_from(conn_rw).expect("conn_rw fits u32").into());
+        transport.send_window(u64::try_from(conn_rw).expect("conn_rw fits u64"));
 
-    // 3. Send Window
-    transport.send_window(u64::try_from(conn_rw).expect("conn_rw fits u64"));
+        transport.datagram_receive_buffer_size(Some(64 * 1024)); // 64 KB
+        transport.max_concurrent_bidi_streams(4u32.into());
+        transport.max_concurrent_uni_streams(4u32.into());
+    } else {
+        // Desktop / server mode: large windows for maximum throughput.
+        let stream_rw = 20 * 1024 * 1024;
+        transport
+            .stream_receive_window(u32::try_from(stream_rw).expect("stream_rw fits u32").into());
 
-    // 4. Keep-alive, timeout
+        let conn_rw = 40 * 1024 * 1024;
+        transport.receive_window(u32::try_from(conn_rw).expect("conn_rw fits u32").into());
+        transport.send_window(u64::try_from(conn_rw).expect("conn_rw fits u64"));
+
+        transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
+        transport.max_concurrent_bidi_streams(10_000u32.into());
+        transport.max_concurrent_uni_streams(10_000u32.into());
+    }
+
+    // Keep-alive, timeout
     transport.keep_alive_interval(Some(std::time::Duration::from_secs(keep_alive_interval_s)));
     transport.max_idle_timeout(Some(
         quinn::IdleTimeout::try_from(std::time::Duration::from_secs(idle_timeout_s))
             .expect("idle timeout within range"),
     ));
-
-    // 5. Datagrams
-    transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
-
-    // 6. Concurrency
-    transport.max_concurrent_bidi_streams(10_000u32.into());
-    transport.max_concurrent_uni_streams(10_000u32.into());
 
     // 7. Outer MTU / UDP Payload Size
     // Strictly cap MTU to prevent WSAEMSGSIZE (error 10040) on Windows.
@@ -136,7 +152,7 @@ pub fn configure_client(outer_mtu: u16) -> Result<quinn::ClientConfig> {
 
     // Apply high-performance transport config
     // Default keep-alive: 25s, Timeout: 30s, MTU: user-defined
-    let transport = common_transport_config(25, 30, outer_mtu);
+    let transport = common_transport_config(25, 30, outer_mtu, false);
     client_config.transport_config(std::sync::Arc::new(transport));
 
     Ok(client_config)

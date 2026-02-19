@@ -1,12 +1,18 @@
 // Network Extension — handles the actual VPN tunnel
 // Integrates with the Rust core via MirageBridge (libmirage_ffi)
 import NetworkExtension
+import os.log
 
 // MARK: - Packet Write Buffer (batches downlink packets to reduce memory pressure)
 
 /// Accumulates packets from Rust callbacks and flushes them in batches
-/// to `packetFlow.writePackets()`. This is critical on iOS where Network Extensions
-/// have a strict ~15MB memory limit — per-packet allocation causes OOM during speedtest.
+/// to `packetFlow.writePackets()`. The flush is wrapped in `autoreleasepool`
+/// because the Rust/tokio callback thread has no ObjC autorelease pool —
+/// without it, bridged NSArray/NSData/NSNumber objects accumulate unboundedly.
+///
+/// Latency strategy: immediate flush after each append(), with a 50ms fallback timer.
+/// This gives near-zero downlink latency while still coalescing bursts naturally
+/// (multiple packets arrive within the same lock window → single writePackets call).
 private final class PacketWriteBuffer {
     private let lock = NSLock()
     private var packets: [Data] = []
@@ -14,17 +20,18 @@ private final class PacketWriteBuffer {
     private let maxBatch = 64
     private weak var provider: PacketTunnelProvider?
     private var flushTimer: DispatchSourceTimer?
-    private let timerQueue = DispatchQueue(label: "com.mciart.mirage.flush", qos: .userInteractive)
+    private let flushQueue = DispatchQueue(label: "com.mciart.mirage.flush", qos: .userInteractive)
 
     init(provider: PacketTunnelProvider) {
         self.provider = provider
         packets.reserveCapacity(maxBatch)
         protocols.reserveCapacity(maxBatch)
 
-        // 10ms flush deadline — balances latency vs iOS CPU wake limits
-        // (iOS kills processes exceeding ~150 wakes/sec; 1ms timer = 1000 wakes/sec = violation)
-        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
-        timer.schedule(deadline: .now() + .milliseconds(10), repeating: .milliseconds(10))
+        // 50ms fallback timer — catches edge cases where append() flush races with lock.
+        // 20 wakes/sec is well under the iOS ~150/sec kill threshold.
+        // Latency is unaffected: append() flushes immediately on every call.
+        let timer = DispatchSource.makeTimerSource(queue: flushQueue)
+        timer.schedule(deadline: .now() + .milliseconds(50), repeating: .milliseconds(50))
         timer.setEventHandler { [weak self] in
             self?.flush()
         }
@@ -36,7 +43,9 @@ private final class PacketWriteBuffer {
         flushTimer?.cancel()
     }
 
-    /// Adds a packet to the buffer; flushes if buffer is full
+    /// Adds a packet to the buffer and flushes immediately.
+    /// During bursts, multiple packets accumulate between lock acquisitions,
+    /// so a single flush() call naturally coalesces them.
     func append(_ data: Data) {
         let proto: NSNumber
         if let firstByte = data.first {
@@ -49,15 +58,19 @@ private final class PacketWriteBuffer {
         lock.lock()
         packets.append(data)
         protocols.append(proto)
-        let shouldFlush = packets.count >= maxBatch
         lock.unlock()
 
-        if shouldFlush {
-            flush()
-        }
+        // Flush immediately — this is the key latency optimization.
+        // If another thread is already flushing, this is a no-op (lock + empty check).
+        flush()
     }
 
-    /// Flushes buffered packets to packetFlow
+    /// Flushes buffered packets to packetFlow.
+    /// CRITICAL: wrapped in autoreleasepool because this is called from a Rust/tokio thread
+    /// that has NO Objective-C autorelease pool. The writePackets() call bridges Swift
+    /// [Data] → NSArray<NSData> and [NSNumber] → NSArray<NSNumber>, creating autoreleased
+    /// objects. Without the pool, these objects accumulate ~13 MB/s at high throughput,
+    /// causing jetsam kill at 50 MB within seconds.
     func flush() {
         lock.lock()
         guard !packets.isEmpty else {
@@ -72,11 +85,14 @@ private final class PacketWriteBuffer {
         protocols.reserveCapacity(maxBatch)
         lock.unlock()
 
-        provider?.packetFlow.writePackets(batch, withProtocols: protos)
+        autoreleasepool {
+            provider?.packetFlow.writePackets(batch, withProtocols: protos)
+        }
     }
 }
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
+    private static let memLog = Logger(subsystem: "com.mciart.mirage.tunnel", category: "memory")
     private var bridge: MirageBridge?
     /// Batched packet writer for downlink (Rust → TUN)
     private var writeBuffer: PacketWriteBuffer?
@@ -92,7 +108,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         NSLog("[MirageTunnel] startTunnel called")
         #if os(iOS)
         let availMB = Double(os_proc_available_memory()) / 1_048_576.0
-        NSLog("[MirageTunnel] 📊 Initial memory: %.1f MB available", availMB)
+        let footprintMB = Double(Self.physicalFootprint()) / 1_048_576.0
+        Self.memLog.fault("📊 INIT footprint=\(footprintMB, privacy: .public) MB avail=\(availMB, privacy: .public) MB")
         #endif
 
         guard let proto = protocolConfiguration as? NETunnelProviderProtocol,
@@ -123,13 +140,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // 2. Wait for onTunnelConfig → apply NE settings with SERVER-ASSIGNED address
         // 3. Then onStatusChange(Connected) → call completionHandler
 
-        // Set log directory to app group container for Rust logging
-        if let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.mciart.mirage"
-        ) {
-            setenv("MIRAGE_LOG_DIR", containerURL.path, 1)
-            NSLog("[MirageTunnel] Log dir: %@", containerURL.path)
-        }
+
 
         let bridge = MirageBridge()
         self.bridge = bridge
@@ -372,23 +383,37 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startMemoryMonitoring() {
         #if os(iOS)
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        timer.schedule(deadline: .now() + 3, repeating: 3)
+        timer.schedule(deadline: .now() + 1, repeating: 2)
         timer.setEventHandler { [weak self] in
             let available = os_proc_available_memory()
             let availMB = Double(available) / 1_048_576.0
-            // Always log memory so we can see the trend before a crash
-            NSLog("[MirageTunnel] 📊 Memory: %.1f MB available", availMB)
+            let footprint = Self.physicalFootprint()
+            let footprintMB = Double(footprint) / 1_048_576.0
+            // fault level + privacy: .public = ALWAYS visible, NEVER redacted
+            Self.memLog.fault("📊 MEM footprint=\(footprintMB, privacy: .public) MB avail=\(availMB, privacy: .public) MB")
             if availMB < 3.0 {
-                NSLog("[MirageTunnel] 🚨 CRITICAL MEMORY: %.1f MB — emergency flush", availMB)
+                Self.memLog.fault("🚨 CRITICAL footprint=\(footprintMB, privacy: .public) MB avail=\(availMB, privacy: .public) MB")
                 self?.writeBuffer?.flush()
             } else if availMB < 5.0 {
-                NSLog("[MirageTunnel] ⚠️ LOW MEMORY: %.1f MB — flushing", availMB)
+                Self.memLog.fault("⚠️ LOW footprint=\(footprintMB, privacy: .public) MB avail=\(availMB, privacy: .public) MB")
                 self?.writeBuffer?.flush()
             }
         }
         timer.resume()
         self.memoryTimer = timer
         #endif
+    }
+
+    /// Returns the physical footprint in bytes — this is the exact metric jetsam uses to kill.
+    private static func physicalFootprint() -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) { infoPtr in
+            infoPtr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { ptr in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), ptr, &count)
+            }
+        }
+        return kr == KERN_SUCCESS ? UInt64(info.phys_footprint) : 0
     }
 
     // MARK: - Helpers

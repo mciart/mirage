@@ -59,7 +59,7 @@ static APPLE_IO_INIT: StdMutex<Option<AppleIOInit>> = StdMutex::new(None);
 pub(crate) struct AppleIOInit {
     pub write_cb: MiragePacketWriteCallback,
     pub context: *mut c_void,
-    pub packet_rx: mpsc::Receiver<Vec<u8>>,
+    pub packet_rx: mpsc::Receiver<bytes::Bytes>,
     pub metrics: Arc<MirageMetricsInner>,
 }
 
@@ -84,7 +84,9 @@ pub struct AppleInterfaceIO {
     /// Opaque Swift context pointer (passed to callbacks)
     context: *mut c_void,
     /// Receiver for packets from Swift (Swift → Rust)
-    packet_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>>,
+    /// Uses `tokio::sync::Mutex` because `Receiver::recv()` requires `&mut self`
+    /// but `InterfaceIO` trait methods take `&self`.
+    packet_rx: tokio::sync::Mutex<mpsc::Receiver<bytes::Bytes>>,
     /// Interface MTU
     mtu: u16,
     /// Shared metrics counters
@@ -143,7 +145,7 @@ impl InterfaceIO for AppleInterfaceIO {
         Ok(Self {
             write_cb: init.write_cb,
             context: init.context,
-            packet_rx: Arc::new(tokio::sync::Mutex::new(init.packet_rx)),
+            packet_rx: tokio::sync::Mutex::new(init.packet_rx),
             mtu,
             metrics: init.metrics,
         })
@@ -204,7 +206,7 @@ impl InterfaceIO for AppleInterfaceIO {
                 self.metrics
                     .bytes_received
                     .fetch_add(data.len() as u64, Ordering::Relaxed);
-                Ok(Packet::new(bytes::Bytes::from(data)))
+                Ok(Packet::new(data))
             }
             None => Err(mirage::MirageError::system(
                 "Packet channel closed (Swift side disconnected)",
@@ -228,12 +230,12 @@ impl InterfaceIO for AppleInterfaceIO {
         };
 
         let mut packets = Vec::with_capacity(64);
-        packets.push(Packet::new(bytes::Bytes::from(first)));
+        packets.push(Packet::new(first));
 
         // Drain up to 63 more without blocking
         for _ in 0..63 {
             match rx.try_recv() {
-                Ok(data) => packets.push(Packet::new(bytes::Bytes::from(data))),
+                Ok(data) => packets.push(Packet::new(data)),
                 Err(_) => break,
             }
         }
@@ -266,19 +268,36 @@ impl InterfaceIO for AppleInterfaceIO {
         Ok(())
     }
 
+    /// Zero-copy write: passes borrowed bytes directly to the FFI callback.
+    /// No Packet/Bytes allocation — the data lives in FramedReader's reused buffer.
+    #[inline]
+    fn write_packet_data(&self, data: &[u8]) -> Result<()> {
+        if let Some(cb) = self.write_cb {
+            self.metrics.packets_sent.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .bytes_sent
+                .fetch_add(data.len() as u64, Ordering::Relaxed);
+            unsafe {
+                cb(data.as_ptr(), data.len(), self.context);
+            }
+        }
+        Ok(())
+    }
+
     /// Writes multiple packets to Swift via per-packet callback.
-    /// Updates metrics in batch for efficiency.
     async fn write_packets(&self, packets: Vec<Packet>) -> Result<()> {
         if packets.is_empty() {
             return Ok(());
         }
+
+        let count = packets.len() as u64;
+        let bytes: u64 = packets.iter().map(|p| p.data.len() as u64).sum();
+        self.metrics
+            .packets_sent
+            .fetch_add(count, Ordering::Relaxed);
+        self.metrics.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
+
         if let Some(cb) = self.write_cb {
-            let count = packets.len() as u64;
-            let bytes: u64 = packets.iter().map(|p| p.data.len() as u64).sum();
-            self.metrics
-                .packets_sent
-                .fetch_add(count, Ordering::Relaxed);
-            self.metrics.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
             for packet in &packets {
                 let data = packet.data.as_ref();
                 unsafe {
