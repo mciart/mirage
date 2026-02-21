@@ -6,7 +6,7 @@
 
 > **Mirage** 是一款基于 Rust 开发的下一代隐匿 L3 VPN，集成 **BoringSSL** (Chrome 同源)、**Mirage 伪装协议** (TCP SNI 伪装 + 抗主动探测)、**JLS** (QUIC 层伪装 + 0-RTT)，以及智能流量混淆。
 
-<img src="docs/gui.png" alt="GUI" width="800">
+<img src="resources/docs/gui.png" alt="GUI" width="800">
 
 ---
 
