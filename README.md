@@ -89,7 +89,7 @@ cargo install --path mirage
 
 ```bash
 # 一键编译所有 Apple 平台 Rust FFI 库
-zsh scripts/build-apple.sh
+zsh resources/scripts/build-apple.sh
 
 # 用 Xcode 打开并构建
 open apple/Mirage/Mirage.xcodeproj

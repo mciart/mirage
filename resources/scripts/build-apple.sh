@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build libmirage_ffi.a for all Apple platforms
-# Usage: ./scripts/build-apple.sh [--debug]
+# Usage: ./resources/scripts/build-apple.sh [--debug]
 #
 # Targets:
 #   aarch64-apple-ios        — iPhone / iPad / "Designed for iPad" on Mac
