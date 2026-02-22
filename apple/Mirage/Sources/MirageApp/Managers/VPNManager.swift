@@ -64,6 +64,11 @@ class VPNManager {
             manager.protocolConfiguration = proto
             manager.localizedDescription = "Mirage - \(tunnel.name)"
             manager.isEnabled = true
+            // On-Demand: auto-reconnect when tunnel is cancelled (e.g., network switch)
+            let connectRule = NEOnDemandRuleConnect()
+            connectRule.interfaceTypeMatch = .any
+            manager.onDemandRules = [connectRule]
+            manager.isOnDemandEnabled = true
 
             NSLog("[Mirage] Saving to preferences...")
             try await manager.saveToPreferences()
@@ -86,7 +91,13 @@ class VPNManager {
 
     func disconnect() {
         _userDisconnecting = true
-        manager?.connection.stopVPNTunnel()
+        // Disable on-demand so iOS doesn't auto-reconnect after user disconnect
+        if let mgr = manager {
+            mgr.isOnDemandEnabled = false
+            mgr.saveToPreferences { _ in
+                mgr.connection.stopVPNTunnel()
+            }
+        }
     }
 
     func toggle(tunnel: TunnelConfig) async throws {
