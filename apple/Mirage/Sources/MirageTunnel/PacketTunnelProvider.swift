@@ -101,6 +101,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pendingSettings: NEPacketTunnelNetworkSettings?
     /// Memory monitoring timer
     private var memoryTimer: DispatchSourceTimer?
+    /// KVO observation for defaultPath (physical network change detection)
+    private var pathObservation: NSKeyValueObservation?
+    /// Skip the first defaultPath KVO callback (caused by routing table setup)
+    private var skipNextPathChange = false
+    /// Guard against double network-change restarts
+    private var networkChangeRestarting = false
 
     override func startTunnel(
         options: [String: NSObject]?,
@@ -272,6 +278,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             self.writeBuffer = PacketWriteBuffer(provider: self)
             self.startReadingPackets()
             self.startMemoryMonitoring()
+            self.startDefaultPathObservation()
             completeOnce(nil)
         }
     }
@@ -287,11 +294,38 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         #endif
         memoryTimer?.cancel()
         memoryTimer = nil
+        pathObservation?.invalidate()
+        pathObservation = nil
         writeBuffer?.flush()
         writeBuffer = nil
         bridge?.stop()
         bridge = nil
         completionHandler()
+    }
+
+    // MARK: - Network Change Detection
+
+    /// Observe `defaultPath` to detect physical network changes (WiFi ↔ Cellular).
+    /// On change, cancel the tunnel so iOS restarts it fresh.
+    private func startDefaultPathObservation() {
+        skipNextPathChange = true
+        pathObservation = observe(\.defaultPath, options: []) { [weak self] provider, _ in
+            guard let self else { return }
+            if self.skipNextPathChange {
+                self.skipNextPathChange = false
+                Self.log.info("📡 defaultPath: skipping initial change (routing setup)")
+                return
+            }
+            guard !self.networkChangeRestarting else { return }
+            guard let newPath = provider.defaultPath, newPath.status == .satisfied else {
+                Self.log.info("📡 defaultPath: network unavailable")
+                return
+            }
+            Self.log.info("📡 defaultPath changed — restarting tunnel")
+            self.networkChangeRestarting = true
+            self.cancelTunnelWithError(nil)
+        }
+        Self.log.info("📡 defaultPath observation started")
     }
 
     private static func stopReasonName(_ reason: NEProviderStopReason) -> String {
