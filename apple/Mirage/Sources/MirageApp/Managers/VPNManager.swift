@@ -311,6 +311,27 @@ class VPNManager {
         }
     }
 
+    /// Updates the VPN profile name in iOS Settings when a tunnel is renamed.
+    func renameVPNProfile(for tunnel: TunnelConfig) {
+        Task {
+            do {
+                let managers = try await NETunnelProviderManager.loadAllFromPreferences()
+                for mgr in managers {
+                    guard let proto = mgr.protocolConfiguration as? NETunnelProviderProtocol,
+                          let config = proto.providerConfiguration,
+                          let idStr = config["tunnel_id"] as? String,
+                          idStr == tunnel.id.uuidString else { continue }
+                    mgr.localizedDescription = tunnel.name
+                    try await mgr.saveToPreferences()
+                    NSLog("[Mirage] Renamed VPN profile to: %@", tunnel.name)
+                    return
+                }
+            } catch {
+                NSLog("[Mirage] Failed to rename VPN profile: %@", error.localizedDescription)
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     var isConnected: Bool { status == .connected }

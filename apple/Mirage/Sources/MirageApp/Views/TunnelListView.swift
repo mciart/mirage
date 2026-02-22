@@ -113,6 +113,7 @@ struct TunnelListView: View {
                 if var tunnel = renamingTunnel, !renameText.isEmpty {
                     tunnel.name = renameText
                     store.update(tunnel)
+                    vpn.renameVPNProfile(for: tunnel)
                     if selectedTunnel?.id == tunnel.id {
                         selectedTunnel = tunnel
                     }
