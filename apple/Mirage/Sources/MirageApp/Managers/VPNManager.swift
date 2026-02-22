@@ -44,7 +44,7 @@ class VPNManager {
         statusMessage = nil
 
         do {
-            let manager = try await loadOrCreateManager()
+            let manager = try await loadOrCreateManager(for: tunnel)
             NSLog("[Mirage] Manager loaded/created")
 
             let proto = NETunnelProviderProtocol()
@@ -62,7 +62,7 @@ class VPNManager {
             // all VPN subnet (10.9.8.x) traffic gets excluded too.
 
             manager.protocolConfiguration = proto
-            manager.localizedDescription = "Mirage - \(tunnel.name)"
+            manager.localizedDescription = tunnel.name
             manager.isEnabled = true
             // On-Demand: auto-reconnect when tunnel is cancelled (e.g., network switch)
             let connectRule = NEOnDemandRuleConnect()
@@ -159,23 +159,26 @@ class VPNManager {
         }
     }
 
-    private func loadOrCreateManager() async throws -> NETunnelProviderManager {
+    /// Finds an existing manager for the given tunnel ID, or creates a new one.
+    private func loadOrCreateManager(for tunnel: TunnelConfig) async throws -> NETunnelProviderManager {
         let managers = try await NETunnelProviderManager.loadAllFromPreferences()
         NSLog("[Mirage] loadOrCreate: %d managers found", managers.count)
 
-        // Find our existing manager by providerBundleIdentifier
-        let ours = managers.first { mgr in
-            (mgr.protocolConfiguration as? NETunnelProviderProtocol)?
-                .providerBundleIdentifier == MirageConstants.tunnelBundleID
+        // Find existing manager by tunnel_id in providerConfiguration
+        let existing = managers.first { mgr in
+            guard let proto = mgr.protocolConfiguration as? NETunnelProviderProtocol,
+                  let config = proto.providerConfiguration,
+                  let idStr = config["tunnel_id"] as? String else { return false }
+            return idStr == tunnel.id.uuidString
         }
 
-        if let existing = ours {
-            NSLog("[Mirage] Reusing existing Mirage VPN manager")
+        if let existing {
+            NSLog("[Mirage] Reusing existing VPN manager for tunnel: %@", tunnel.name)
             self.manager = existing
             return existing
         }
 
-        NSLog("[Mirage] Creating new NETunnelProviderManager")
+        NSLog("[Mirage] Creating new VPN manager for tunnel: %@", tunnel.name)
         let mgr = NETunnelProviderManager()
         self.manager = mgr
         return mgr
@@ -275,6 +278,36 @@ class VPNManager {
             }
         } catch {
             // Extension not running or IPC failed — ignore
+        }
+    }
+
+    // MARK: - Profile Management
+
+    /// Removes the VPN profile for a deleted tunnel from iOS Settings.
+    func removeVPNProfile(for tunnel: TunnelConfig) {
+        Task {
+            do {
+                let managers = try await NETunnelProviderManager.loadAllFromPreferences()
+                for mgr in managers {
+                    guard let proto = mgr.protocolConfiguration as? NETunnelProviderProtocol,
+                          let config = proto.providerConfiguration,
+                          let idStr = config["tunnel_id"] as? String,
+                          idStr == tunnel.id.uuidString else { continue }
+                    // If this tunnel is currently connected, stop it first
+                    if mgr.connection.status != .disconnected {
+                        mgr.connection.stopVPNTunnel()
+                    }
+                    try await mgr.removeFromPreferences()
+                    NSLog("[Mirage] Removed VPN profile for tunnel: %@", tunnel.name)
+                    if self.connectedTunnelID == tunnel.id {
+                        self.connectedTunnelID = nil
+                    }
+                    return
+                }
+                NSLog("[Mirage] No VPN profile found for tunnel: %@", tunnel.name)
+            } catch {
+                NSLog("[Mirage] Failed to remove VPN profile: %@", error.localizedDescription)
+            }
         }
     }
 

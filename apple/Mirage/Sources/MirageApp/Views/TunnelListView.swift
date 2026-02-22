@@ -43,9 +43,11 @@ struct TunnelListView: View {
             }
             .onDelete { offsets in
                 for i in offsets {
-                    if store.tunnels[i].id == vpn.connectedTunnelID {
+                    let tunnel = store.tunnels[i]
+                    if tunnel.id == vpn.connectedTunnelID {
                         vpn.disconnect()
                     }
+                    vpn.removeVPNProfile(for: tunnel)
                 }
                 store.remove(at: offsets)
                 if !store.tunnels.contains(where: { $0.id == selectedTunnel?.id }) {
@@ -85,6 +87,7 @@ struct TunnelListView: View {
             Button("Delete", role: .destructive) {
                 if let tunnel = tunnelToDelete {
                     if tunnel.id == vpn.connectedTunnelID { vpn.disconnect() }
+                    vpn.removeVPNProfile(for: tunnel)
                     store.remove(tunnel)
                     if selectedTunnel?.id == tunnel.id {
                         selectedTunnel = store.tunnels.first
@@ -135,6 +138,7 @@ struct TunnelListView: View {
             Button {
                 if let tunnel = selectedTunnel {
                     vpn.disconnect()
+                    vpn.removeVPNProfile(for: tunnel)
                     store.remove(tunnel)
                     selectedTunnel = store.tunnels.first
                 }
