@@ -9,6 +9,7 @@ mod linux;
 pub use linux::{add_dns_servers, delete_dns_servers};
 
 #[cfg(target_os = "windows")]
+#[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::{add_dns_servers, delete_dns_servers};
