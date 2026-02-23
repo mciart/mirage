@@ -20,7 +20,7 @@ use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use rand::Rng;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
@@ -83,6 +83,79 @@ impl RotationConfig {
         };
         // Ensure minimum 30 seconds
         Duration::from_secs(lifetime.max(30))
+    }
+}
+
+/// Per-connection quality metrics for minRTT scheduling.
+///
+/// Tracks write latency (EWMA), consecutive rotation failures, and dead state.
+/// Used by the distributor to route packets to the fastest connection.
+pub struct ConnQuality {
+    /// EWMA of write+flush latency in microseconds (α=0.3)
+    latency_us: AtomicU64,
+    /// Consecutive rotation failures for this slot
+    fail_count: AtomicU32,
+    /// Hard dead (write completely failed)
+    is_dead: AtomicBool,
+}
+
+impl ConnQuality {
+    fn new() -> Self {
+        Self {
+            latency_us: AtomicU64::new(0),
+            fail_count: AtomicU32::new(0),
+            is_dead: AtomicBool::new(false),
+        }
+    }
+
+    fn is_dead(&self) -> bool {
+        self.is_dead.load(Ordering::Relaxed)
+    }
+
+    fn mark_dead(&self) {
+        self.is_dead.store(true, Ordering::Relaxed);
+    }
+
+    fn latency_us(&self) -> u64 {
+        self.latency_us.load(Ordering::Relaxed)
+    }
+
+    /// Update EWMA latency with a new measurement (α=0.3)
+    fn update_latency(&self, measured_us: u64) {
+        let old = self.latency_us.load(Ordering::Relaxed);
+        let new = if old == 0 {
+            measured_us // First measurement
+        } else {
+            // EWMA: new = α * measured + (1-α) * old, α=0.3
+            (measured_us * 3 + old * 7) / 10
+        };
+        self.latency_us.store(new, Ordering::Relaxed);
+    }
+
+    /// Reset quality on rotation replacement (give new connection a fresh start)
+    fn reset(&self) {
+        self.latency_us.store(0, Ordering::Relaxed);
+        self.fail_count.store(0, Ordering::Relaxed);
+        self.is_dead.store(false, Ordering::Relaxed);
+    }
+
+    fn fail_count(&self) -> u32 {
+        self.fail_count.load(Ordering::Relaxed)
+    }
+
+    fn increment_fail(&self) {
+        self.fail_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn format_latency(&self) -> String {
+        let us = self.latency_us();
+        if us == 0 {
+            "new".to_string()
+        } else if us < 1000 {
+            format!("{}µs", us)
+        } else {
+            format!("{:.1}ms", us as f64 / 1000.0)
+        }
     }
 }
 
@@ -247,10 +320,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             Self::tun_writer_task(iface_writer, inbound_rx).await
         }));
 
-        // Shared dead-writer tracking between distributor, heartbeat, and rotation
-        let dead_writers: Arc<Vec<AtomicBool>> = Arc::new(
+        // Shared connection quality tracking between distributor, heartbeat, and rotation
+        let conn_quality: Arc<Vec<ConnQuality>> = Arc::new(
             (0..self.writers.len())
-                .map(|_| AtomicBool::new(false))
+                .map(|_| ConnQuality::new())
                 .collect(),
         );
 
@@ -264,7 +337,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         let robin_idx_clone = robin_idx.clone();
         let active_idx_clone = active_idx.clone();
         let obfuscation_clone = obfuscation.clone();
-        let dead_writers_clone = dead_writers.clone();
+        let quality_clone = conn_quality.clone();
         let stats_for_distributor = self.stats.clone();
 
         tasks.push(tokio::spawn(async move {
@@ -275,7 +348,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 robin_idx_clone,
                 active_idx_clone,
                 obfuscation_clone,
-                dead_writers_clone,
+                quality_clone,
                 stats_for_distributor,
             )
             .await
@@ -290,7 +363,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             let conn_request_tx_for_rotation = self.conn_request_tx.clone();
             let inbound_tx_for_rotation = inbound_tx.clone();
 
-            let dead_writers_for_rotation = dead_writers.clone();
+            let quality_for_rotation = conn_quality.clone();
             let stats_for_rotation = self.stats.clone();
             let reader_handles_for_rotation = reader_handles.clone();
             let cipher_keys_for_rotation = self.cipher_keys;
@@ -303,7 +376,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     lifetimes_initial,
                     conn_request_tx_for_rotation,
                     inbound_tx_for_rotation,
-                    dead_writers_for_rotation,
+                    quality_for_rotation,
                     reader_handles_for_rotation,
                     stats_for_rotation,
                     cipher_keys_for_rotation,
@@ -316,13 +389,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
 
         // Spawn periodic stats reporter (every 30 seconds)
         let stats_for_reporter = self.stats.clone();
+        let quality_for_reporter = conn_quality.clone();
         tasks.push(tokio::spawn(async move {
-            Self::stats_reporter_task(stats_for_reporter).await
+            Self::stats_reporter_task(stats_for_reporter, quality_for_reporter).await
         }));
 
         // Spawn heartbeat + auto-heal task (every 15 seconds)
         let writers_for_heartbeat = self.writers.clone();
-        let dead_writers_for_heartbeat = dead_writers.clone();
+        let quality_for_heartbeat = conn_quality.clone();
         let conn_request_tx_for_heal = self.conn_request_tx.clone();
         let inbound_tx_for_heal = inbound_tx.clone();
         let reader_handles_for_heal = reader_handles.clone();
@@ -331,7 +405,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         tasks.push(tokio::spawn(async move {
             Self::heartbeat_and_heal_task(
                 writers_for_heartbeat,
-                dead_writers_for_heartbeat,
+                quality_for_heartbeat,
                 conn_request_tx_for_heal,
                 inbound_tx_for_heal,
                 reader_handles_for_heal,
@@ -426,7 +500,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         robin_idx: Arc<AtomicUsize>,
         active_idx: Arc<AtomicUsize>,
         _obfuscation: ObfuscationConfig,
-        dead_writers: Arc<Vec<AtomicBool>>,
+        conn_quality: Arc<Vec<ConnQuality>>,
         stats: Arc<MuxStats>,
     ) -> Result<()> {
         debug!(
@@ -454,15 +528,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             stats.tx_bytes.fetch_add(batch_bytes, Ordering::Relaxed);
 
             // Auto-heal if all writers are dead
-            Self::wait_for_auto_heal(&dead_writers).await?;
+            Self::wait_for_auto_heal(&conn_quality).await?;
 
             match mode {
                 MuxMode::RoundRobin => {
-                    Self::distribute_round_robin(&packets, &writers, &robin_idx, &dead_writers)
-                        .await;
+                    Self::distribute_min_rtt(&packets, &writers, &robin_idx, &conn_quality).await;
                 }
                 MuxMode::ActiveStandby => {
-                    Self::distribute_active_standby(&packets, &writers, &active_idx, &dead_writers)
+                    Self::distribute_active_standby(&packets, &writers, &active_idx, &conn_quality)
                         .await;
                 }
             }
@@ -470,23 +543,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
     }
 
     /// Waits for at least one writer to recover if all are dead.
-    ///
-    /// Polls once per second for up to 30 seconds. Returns error if
-    /// no writer recovers within the timeout.
-    async fn wait_for_auto_heal(dead_writers: &[AtomicBool]) -> Result<()> {
-        let alive_count = dead_writers
-            .iter()
-            .filter(|d| !d.load(Ordering::Relaxed))
-            .count();
-
-        if alive_count > 0 {
+    async fn wait_for_auto_heal(qualities: &[ConnQuality]) -> Result<()> {
+        if qualities.iter().any(|q| !q.is_dead()) {
             return Ok(());
         }
 
         warn!("All mux writers dead — waiting for auto-heal...");
         for attempt in 1..=30u32 {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            if dead_writers.iter().any(|d| !d.load(Ordering::Relaxed)) {
+            if qualities.iter().any(|q| !q.is_dead()) {
                 info!("Auto-heal recovered after {}s", attempt);
                 return Ok(());
             }
@@ -496,143 +561,186 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         Err(MirageError::system("All mux connections lost"))
     }
 
-    /// Distributes a batch of packets using round-robin scheduling.
+    /// minRTT + tolerance distributor (inspired by MPTCP minRTT + Sing-box tolerance).
     ///
-    /// Selects the next alive writer, writes all packets without flushing,
-    /// then flushes once. Dead writers are skipped.
-    async fn distribute_round_robin(
+    /// Picks the alive connection with the lowest EWMA latency.
+    /// If top-2 are within 50ms tolerance, alternates between them (round-robin).
+    /// Measures write+flush time and updates EWMA. 3s timeout marks connection dead.
+    async fn distribute_min_rtt(
         packets: &[Packet],
         writers: &[Arc<Mutex<FramedWriter<WriteHalf<S>>>>],
         robin_idx: &AtomicUsize,
-        dead_writers: &[AtomicBool],
+        qualities: &[ConnQuality],
+    ) {
+        const TOLERANCE_US: u64 = 50_000; // 50ms
+
+        // Collect alive candidates sorted by latency
+        let mut candidates: Vec<(usize, u64)> = qualities
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| !q.is_dead())
+            .map(|(i, q)| (i, q.latency_us()))
+            .collect();
+
+        if candidates.is_empty() {
+            warn!("No alive writers, dropping {} packets", packets.len());
+            return;
+        }
+
+        candidates.sort_by_key(|(_, lat)| *lat);
+
+        // Pick writer: if top-2 within tolerance, alternate; otherwise use fastest
+        let idx = if candidates.len() >= 2
+            && candidates[1].1.saturating_sub(candidates[0].1) <= TOLERANCE_US
+        {
+            // Within tolerance — round-robin among the close group
+            let close_count = candidates
+                .iter()
+                .take_while(|(_, lat)| lat.saturating_sub(candidates[0].1) <= TOLERANCE_US)
+                .count();
+            let rr = robin_idx.fetch_add(1, Ordering::Relaxed) % close_count;
+            candidates[rr].0
+        } else {
+            candidates[0].0 // Use fastest
+        };
+
+        // Write with timeout + latency measurement
+        let start = Instant::now();
+        let write_result = tokio::time::timeout(Duration::from_secs(3), async {
+            let writer = &writers[idx];
+            let mut w = writer.lock().await;
+            for packet in packets {
+                if w.send_packet_no_flush(packet).await.is_err() {
+                    return Err("write failed");
+                }
+            }
+            w.flush().await.map_err(|_| "flush failed")
+        })
+        .await;
+
+        match write_result {
+            Ok(Ok(())) => {
+                // Update latency EWMA
+                let elapsed_us = start.elapsed().as_micros() as u64;
+                qualities[idx].update_latency(elapsed_us);
+            }
+            Ok(Err(reason)) => {
+                warn!("Mux writer {} {}, marking dead", idx, reason);
+                qualities[idx].mark_dead();
+                // Retry on another writer
+                Self::distribute_min_rtt_fallback(packets, writers, qualities, idx).await;
+            }
+            Err(_timeout) => {
+                warn!("Mux writer {} timed out (>3s), marking dead", idx);
+                qualities[idx].mark_dead();
+                Self::distribute_min_rtt_fallback(packets, writers, qualities, idx).await;
+            }
+        }
+    }
+
+    /// Fallback: retry on the next best alive writer after primary fails.
+    async fn distribute_min_rtt_fallback(
+        packets: &[Packet],
+        writers: &[Arc<Mutex<FramedWriter<WriteHalf<S>>>>],
+        qualities: &[ConnQuality],
+        skip_idx: usize,
+    ) {
+        // Find next best alive writer
+        let fallback = qualities
+            .iter()
+            .enumerate()
+            .filter(|(i, q)| *i != skip_idx && !q.is_dead())
+            .min_by_key(|(_, q)| q.latency_us());
+
+        if let Some((idx, _)) = fallback {
+            let start = Instant::now();
+            let result = tokio::time::timeout(Duration::from_secs(3), async {
+                let mut w = writers[idx].lock().await;
+                for packet in packets {
+                    if w.send_packet_no_flush(packet).await.is_err() {
+                        return Err(());
+                    }
+                }
+                w.flush().await.map_err(|_| ())
+            })
+            .await;
+
+            match result {
+                Ok(Ok(())) => {
+                    qualities[idx].update_latency(start.elapsed().as_micros() as u64);
+                }
+                _ => {
+                    warn!("Fallback writer {} also failed, marking dead", idx);
+                    qualities[idx].mark_dead();
+                }
+            }
+        } else {
+            warn!(
+                "No fallback writers available, dropping {} packets",
+                packets.len()
+            );
+        }
+    }
+
+    /// Distributes a batch of packets using active-standby scheduling.
+    async fn distribute_active_standby(
+        packets: &[Packet],
+        writers: &[Arc<Mutex<FramedWriter<WriteHalf<S>>>>],
+        active_idx: &AtomicUsize,
+        qualities: &[ConnQuality],
     ) {
         let num_writers = writers.len();
         let mut attempts = 0;
 
         loop {
-            let idx = robin_idx.fetch_add(1, Ordering::Relaxed) % num_writers;
+            let idx = active_idx.load(Ordering::Relaxed) % num_writers;
             attempts += 1;
             if attempts > num_writers {
                 warn!(
-                    "No alive writers for batch, dropping {} packets",
+                    "ActiveStandby: all writers dead, dropping {} packets",
                     packets.len()
                 );
                 break;
             }
-            if dead_writers[idx].load(Ordering::Relaxed) {
+
+            if qualities[idx].is_dead() {
+                active_idx.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
 
-            // Timeout: mark slow connections dead so we fail over quickly
+            let start = Instant::now();
             let write_result = tokio::time::timeout(Duration::from_secs(3), async {
                 let writer = &writers[idx];
                 let mut w = writer.lock().await;
                 for packet in packets {
                     if w.send_packet_no_flush(packet).await.is_err() {
-                        return Err("write failed");
+                        return Err(());
                     }
                 }
-                w.flush().await.map_err(|_| "flush failed")
+                w.flush().await.map_err(|_| ())
             })
             .await;
 
             match write_result {
-                Ok(Ok(())) => break, // Successfully sent batch
-                Ok(Err(reason)) => {
-                    warn!("Mux writer {} {}, marking dead", idx, reason);
-                    dead_writers[idx].store(true, Ordering::Relaxed);
-                    continue;
+                Ok(Ok(())) => {
+                    qualities[idx].update_latency(start.elapsed().as_micros() as u64);
+                    break;
                 }
-                Err(_timeout) => {
-                    warn!("Mux writer {} timed out (>3s), marking dead", idx);
-                    dead_writers[idx].store(true, Ordering::Relaxed);
+                _ => {
+                    warn!("ActiveStandby: writer {} failed, failing over", idx);
+                    qualities[idx].mark_dead();
+                    active_idx.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
             }
         }
     }
 
-    /// Distributes a batch of packets using active-standby scheduling.
-    ///
-    /// Writes to the currently active writer with a 3-second timeout.
-    /// On failure, marks the writer dead and fails over to the next alive one.
-    async fn distribute_active_standby(
-        packets: &[Packet],
-        writers: &[Arc<Mutex<FramedWriter<WriteHalf<S>>>>],
-        active_idx: &AtomicUsize,
-        dead_writers: &[AtomicBool],
-    ) {
-        let num_writers = writers.len();
-        let current = active_idx.load(Ordering::Relaxed) % num_writers;
-
-        if dead_writers[current].load(Ordering::Relaxed) {
-            // Find next alive writer
-            for offset in 1..num_writers {
-                let next = (current + offset) % num_writers;
-                if !dead_writers[next].load(Ordering::Relaxed) {
-                    active_idx.store(next, Ordering::Relaxed);
-                    break;
-                }
-            }
-            return; // Retry on next loop iteration with new active writer
-        }
-
-        let writer = &writers[current];
-        let mut w = writer.lock().await;
-
-        // Use timeout to detect truly dead connections.
-        // 3s is generous enough to avoid false positives during congestion,
-        // but short enough to prevent catastrophic latency buildup.
-        let write_result = tokio::time::timeout(Duration::from_secs(3), async {
-            for packet in packets {
-                if w.send_packet_no_flush(packet).await.is_err() {
-                    return false;
-                }
-            }
-            w.flush().await.is_ok()
-        })
-        .await;
-
-        let failed = match write_result {
-            Ok(true) => false, // Write succeeded
-            Ok(false) => {
-                warn!("Mux active-standby: connection {} write error", current);
-                true
-            }
-            Err(_) => {
-                warn!(
-                    "Mux active-standby: connection {} write timed out (>3s), marking dead",
-                    current
-                );
-                true
-            }
-        };
-
-        if failed {
-            dead_writers[current].store(true, Ordering::Relaxed);
-
-            // Find next alive writer and retry
-            for offset in 1..num_writers {
-                let next = (current + offset) % num_writers;
-                if !dead_writers[next].load(Ordering::Relaxed) {
-                    info!("Mux active-standby: switching to connection {}", next);
-                    active_idx.store(next, Ordering::Relaxed);
-                    drop(w);
-
-                    let writer = &writers[next];
-                    let mut w = writer.lock().await;
-                    for packet in packets {
-                        let _ = w.send_packet_no_flush(packet).await;
-                    }
-                    let _ = w.flush().await;
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Periodic stats reporter: logs throughput every 30 seconds.
-    async fn stats_reporter_task(stats: Arc<MuxStats>) -> Result<()> {
+    /// Periodic stats reporter: logs throughput + per-connection quality every 30 seconds.
+    async fn stats_reporter_task(
+        stats: Arc<MuxStats>,
+        qualities: Arc<Vec<ConnQuality>>,
+    ) -> Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         let mut last_tx_bytes: u64 = 0;
         let mut last_rx_bytes: u64 = 0;
@@ -653,14 +761,29 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
             let tx_delta = tx_bytes.saturating_sub(last_tx_bytes);
             let rx_delta = rx_bytes.saturating_sub(last_rx_bytes);
 
+            // Build per-connection quality string
+            let quality_str: String = qualities
+                .iter()
+                .enumerate()
+                .map(|(i, q)| {
+                    if q.is_dead() {
+                        format!("C{}:dead", i)
+                    } else {
+                        format!("C{}:{}", i, q.format_latency())
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+
             info!(
-                "[Stats] TX: {} pkts, {} | RX: {} pkts, {} | Rates: \u{2191} {} \u{2193} {}",
+                "[Stats] TX: {} pkts, {} | RX: {} pkts, {} | Rates: \u{2191} {} \u{2193} {} | {}",
                 tx_pkts,
                 MuxStats::format_bytes(tx_bytes),
                 rx_pkts,
                 MuxStats::format_bytes(rx_bytes),
                 MuxStats::format_rate(tx_delta, elapsed),
                 MuxStats::format_rate(rx_delta, elapsed),
+                quality_str,
             );
 
             last_tx_bytes = tx_bytes;
@@ -674,7 +797,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
     /// the same channel the rotation supervisor uses.
     async fn heartbeat_and_heal_task(
         writers: Vec<Arc<Mutex<FramedWriter<WriteHalf<S>>>>>,
-        dead_writers: Arc<Vec<AtomicBool>>,
+        conn_quality: Arc<Vec<ConnQuality>>,
         conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
         inbound_tx: mpsc::Sender<Packet>,
         reader_handles: ReaderHandles,
@@ -682,15 +805,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         cipher_keys: Option<([u8; 32], [u8; 32])>,
     ) -> Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(15));
-        // Skip immediate first tick
         interval.tick().await;
 
         loop {
             interval.tick().await;
 
             for (i, writer) in writers.iter().enumerate() {
-                if dead_writers[i].load(Ordering::Relaxed) {
-                    // Already dead — attempt to heal
+                if conn_quality[i].is_dead() {
                     info!(
                         "Auto-heal: requesting replacement for dead connection {}",
                         i
@@ -706,7 +827,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                                 "Auto-heal: replacing connection {} with fresh connection",
                                 i
                             );
-                            // Replace writer
                             {
                                 let mut w = writer.lock().await;
                                 let mut new_fw = FramedWriter::new(new_writer);
@@ -717,9 +837,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                                 }
                                 *w = new_fw;
                             }
-                            // Mark alive
-                            dead_writers[i].store(false, Ordering::Relaxed);
-                            // Abort old reader and spawn new one
+                            // Reset quality (fresh start for new connection)
+                            conn_quality[i].reset();
                             {
                                 let mut handles = reader_handles.lock().await;
                                 if let Some(old) = handles[i].take() {
@@ -760,8 +879,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 let mut w = writer.lock().await;
                 if w.send_heartbeat().await.is_err() {
                     warn!("Heartbeat failed on connection {}, marking dead", i);
-                    dead_writers[i].store(true, Ordering::Relaxed);
-                    // Will be healed on next tick
+                    conn_quality[i].mark_dead();
                 }
             }
         }
@@ -776,12 +894,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         initial_lifetimes: Vec<Duration>,
         conn_request_tx: mpsc::Sender<ConnectionRequest<S>>,
         inbound_tx: mpsc::Sender<Packet>,
-        dead_writers: Arc<Vec<AtomicBool>>,
+        conn_quality: Arc<Vec<ConnQuality>>,
         reader_handles: ReaderHandles,
         stats: Arc<MuxStats>,
         cipher_keys: Option<([u8; 32], [u8; 32])>,
     ) -> Result<()> {
-        // Use mutable local copies for tracking
         let num_connections = writers.len();
         let mut current_birth_times = birth_times;
         let mut current_lifetimes = initial_lifetimes;
@@ -792,7 +909,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         );
 
         loop {
-            // Find the connection closest to expiry
             let now = Instant::now();
             let mut min_remaining = Duration::from_secs(u64::MAX);
             let mut expire_idx = 0;
@@ -806,12 +922,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 }
             }
 
-            // Sleep until the next expiry
             if min_remaining > Duration::ZERO {
-                debug!(
-                    "Rotation supervisor: next rotation for connection {} in {:?}",
-                    expire_idx, min_remaining
-                );
                 tokio::time::sleep(min_remaining).await;
             }
 
@@ -820,7 +931,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 expire_idx
             );
 
-            // Request a new connection from the client, including the slot index
             let (response_tx, response_rx) = oneshot::channel();
             if conn_request_tx
                 .send((expire_idx, response_tx))
@@ -838,7 +948,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                         expire_idx
                     );
 
-                    // Replace the writer
                     {
                         let mut w = writers[expire_idx].lock().await;
                         let mut new_fw = FramedWriter::new(new_writer);
@@ -848,21 +957,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                         *w = new_fw;
                     }
 
-                    // Mark this writer as alive again
-                    dead_writers[expire_idx].store(false, Ordering::Relaxed);
+                    // Reset quality (fresh start, latency=0 gives it a chance to be selected)
+                    conn_quality[expire_idx].reset();
 
-                    // Abort the old reader task and spawn new one
                     {
                         let mut handles = reader_handles.lock().await;
                         if let Some(old_handle) = handles[expire_idx].take() {
                             old_handle.abort();
-                            debug!(
-                                "Rotation: aborted old reader task for connection {}",
-                                expire_idx
-                            );
                         }
 
-                        // Spawn a new inbound reader for the replacement connection
                         let tx = inbound_tx.clone();
                         let conn_id = expire_idx;
                         let stats_for_reader = stats.clone();
@@ -882,7 +985,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                         handles[expire_idx] = Some(new_handle);
                     }
 
-                    // Update birth time and lifetime for this slot
                     current_birth_times[expire_idx] = Instant::now();
                     current_lifetimes[expire_idx] = rotation_config.randomized_lifetime();
 
@@ -892,13 +994,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     );
                 }
                 Ok(None) => {
+                    // Rotation failed — track consecutive failures with exponential backoff
+                    conn_quality[expire_idx].increment_fail();
+                    let fails = conn_quality[expire_idx].fail_count();
+                    let backoff_secs =
+                        std::cmp::min(60u64 * 2u64.pow(fails.saturating_sub(1)), 600);
                     warn!(
-                        "Rotation: failed to get replacement connection for slot {}. Keeping old connection.",
-                        expire_idx
+                        "Rotation: failed for slot {} (fail #{}, backoff {}s)",
+                        expire_idx, fails, backoff_secs
                     );
-                    // Extend the lifetime so we don't immediately retry
                     current_birth_times[expire_idx] = Instant::now();
-                    current_lifetimes[expire_idx] = Duration::from_secs(60);
+                    current_lifetimes[expire_idx] = Duration::from_secs(backoff_secs);
                 }
                 Err(_) => {
                     warn!("Rotation: response channel cancelled. Stopping rotation.");
