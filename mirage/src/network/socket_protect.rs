@@ -18,38 +18,40 @@ use crate::Result;
 /// Detects the physical network interface used to reach `target`.
 /// Must be called BEFORE TUN is created (while default route still
 /// points to the physical NIC).
+/// If `tun_name` is provided, any match is rejected (stale route from previous session).
 #[cfg(not(target_os = "ios"))]
-pub fn detect_outbound_interface(target: IpAddr) -> Result<String> {
+pub fn detect_outbound_interface(target: IpAddr, tun_name: Option<&str>) -> Result<String> {
     use crate::network::route::{get_gateway_for, RouteTarget};
 
-    match get_gateway_for(target)? {
-        RouteTarget::Interface(iface) => {
-            info!("Detected outbound interface for {}: {}", target, iface);
-            Ok(iface)
-        }
-        RouteTarget::GatewayOnInterface(_, iface) => {
-            info!("Detected outbound interface for {}: {}", target, iface);
-            Ok(iface)
-        }
+    let iface = match get_gateway_for(target)? {
+        RouteTarget::Interface(iface) => iface,
+        RouteTarget::GatewayOnInterface(_, iface) => iface,
         RouteTarget::Gateway(gw) => {
-            // Gateway w/o interface — try to detect via the gateway itself
             info!(
                 "Detected gateway {} for {}, resolving interface...",
                 gw, target
             );
             match get_gateway_for(gw) {
                 Ok(RouteTarget::Interface(iface))
-                | Ok(RouteTarget::GatewayOnInterface(_, iface)) => {
-                    info!("Resolved outbound interface: {}", iface);
-                    Ok(iface)
-                }
-                _ => {
-                    // Fallback: use a platform-specific method
-                    detect_default_interface()
-                }
+                | Ok(RouteTarget::GatewayOnInterface(_, iface)) => iface,
+                _ => return detect_default_interface(),
             }
         }
+    };
+
+    // Reject if it matches the configured TUN name (stale routes from previous session)
+    if let Some(tun) = tun_name {
+        if iface == tun {
+            warn!(
+                "Detected TUN interface '{}' for {} — stale routes from previous session. Falling back.",
+                iface, target
+            );
+            return detect_default_interface();
+        }
     }
+
+    info!("Detected outbound interface for {}: {}", target, iface);
+    Ok(iface)
 }
 
 /// Fallback: detect the default outbound interface.

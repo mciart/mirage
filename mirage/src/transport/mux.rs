@@ -523,27 +523,32 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                 continue;
             }
 
-            let writer = &writers[idx];
-            let mut w = writer.lock().await;
-            let mut ok = true;
-            for packet in packets {
-                if w.send_packet_no_flush(packet).await.is_err() {
-                    ok = false;
-                    break;
+            // Timeout: mark slow connections dead so we fail over quickly
+            let write_result = tokio::time::timeout(Duration::from_secs(3), async {
+                let writer = &writers[idx];
+                let mut w = writer.lock().await;
+                for packet in packets {
+                    if w.send_packet_no_flush(packet).await.is_err() {
+                        return Err("write failed");
+                    }
                 }
-            }
-            if ok {
-                if let Err(e) = w.flush().await {
-                    warn!("Mux writer {} flush failed, marking dead: {}", idx, e);
+                w.flush().await.map_err(|_| "flush failed")
+            })
+            .await;
+
+            match write_result {
+                Ok(Ok(())) => break, // Successfully sent batch
+                Ok(Err(reason)) => {
+                    warn!("Mux writer {} {}, marking dead", idx, reason);
                     dead_writers[idx].store(true, Ordering::Relaxed);
                     continue;
                 }
-            } else {
-                warn!("Mux writer {} failed, marking dead", idx);
-                dead_writers[idx].store(true, Ordering::Relaxed);
-                continue;
+                Err(_timeout) => {
+                    warn!("Mux writer {} timed out (>3s), marking dead", idx);
+                    dead_writers[idx].store(true, Ordering::Relaxed);
+                    continue;
+                }
             }
-            break; // Successfully sent batch
         }
     }
 

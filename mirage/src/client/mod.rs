@@ -111,7 +111,8 @@ impl MirageClient {
 
             if !skip {
                 let probe_addr = resolved_addrs[0].ip();
-                match socket_protect::detect_outbound_interface(probe_addr) {
+                let tun_name = self.config.network.interface_name.as_deref();
+                match socket_protect::detect_outbound_interface(probe_addr, tun_name) {
                     Ok(iface) => {
                         info!("Physical interface for anti-loop binding: {}", iface);
                         self.physical_interface = Some(iface);
