@@ -793,8 +793,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
     }
 
     /// Heartbeat + auto-heal task: periodically sends keep-alive frames on all alive
-    /// connections. When a connection is found dead, requests a replacement through
-    /// the same channel the rotation supervisor uses.
+    /// connections and measures write latency for quality tracking.
+    /// Interval: 5s — keeps EWMA fresh so minRTT can detect recovery quickly.
     async fn heartbeat_and_heal_task(
         writers: Vec<Arc<Mutex<FramedWriter<WriteHalf<S>>>>>,
         conn_quality: Arc<Vec<ConnQuality>>,
@@ -804,7 +804,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
         stats: Arc<MuxStats>,
         cipher_keys: Option<([u8; 32], [u8; 32])>,
     ) -> Result<()> {
-        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.tick().await;
 
         loop {
@@ -875,11 +875,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> MuxController<S> {
                     continue;
                 }
 
-                // Connection alive — send heartbeat
+                // Connection alive — send heartbeat and measure write latency
+                let start = Instant::now();
                 let mut w = writer.lock().await;
                 if w.send_heartbeat().await.is_err() {
                     warn!("Heartbeat failed on connection {}, marking dead", i);
                     conn_quality[i].mark_dead();
+                } else {
+                    // Update EWMA with heartbeat write time (latency probe)
+                    let elapsed_us = start.elapsed().as_micros() as u64;
+                    conn_quality[i].update_latency(elapsed_us);
                 }
             }
         }
