@@ -152,8 +152,8 @@ fn read_varint(buf: &[u8]) -> Option<(u64, usize)> {
     }
 
     let mut val = (first & 0x3f) as u64;
-    for i in 1..len {
-        val = (val << 8) | buf[i] as u64;
+    for &b in &buf[1..len] {
+        val = (val << 8) | b as u64;
     }
     Some((val, len))
 }
