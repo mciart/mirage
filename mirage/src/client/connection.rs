@@ -6,7 +6,7 @@
 use crate::config::TransportProtocol;
 #[cfg(not(target_os = "ios"))]
 use crate::network::socket_protect;
-use crate::transport::quic::QuicStream;
+use crate::transport::udp::QuicStream;
 use crate::{MirageError, Result};
 use std::future::Future;
 use std::net::SocketAddr;

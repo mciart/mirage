@@ -5,11 +5,11 @@
 
 pub mod address_pool;
 mod connection;
-mod dispatcher;
 mod handler;
 mod nat;
-mod quic;
 mod session;
+mod sni_router;
+mod udp;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -37,9 +37,9 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tracing::{debug, info, warn};
 
 use self::address_pool::AddressPool;
-use self::dispatcher::{proxy_connection, DispatchResult, TlsDispatcher};
 use self::nat::NatManager;
 use self::session::SessionContext;
+use self::sni_router::{proxy_connection, DispatchResult, TlsDispatcher};
 
 type ConnectionQueues = Arc<DashMap<IpAddr, Sender<Bytes>>>;
 /// Maps session_id to session context for connection pooling
@@ -121,14 +121,98 @@ impl MirageServer {
         ]);
 
         if self.config.quic_enabled {
-            tasks.push(tokio::spawn(quic::run_quic_listener(
-                self.config.clone(),
-                auth_server.clone(),
-                sender.clone(),
-                self.connection_queues.clone(),
-                self.session_queues.clone(),
-                self.address_pool.clone(),
-            )));
+            // When SNI router is enabled, quinn listens on an internal loopback port
+            // and the UDP SNI router sits in front on the public port.
+            let has_udp_routes = self.config.sni_router.enabled
+                && self
+                    .config
+                    .sni_router
+                    .routes
+                    .iter()
+                    .any(|r| r.backend.is_some() && r.protocol != "tcp");
+
+            if has_udp_routes {
+                // Internal loopback port for quinn
+                let internal_port = self.config.quic_bind_port + 1;
+                let public_addr =
+                    SocketAddr::new(self.config.bind_address, self.config.quic_bind_port);
+                let internal_addr = SocketAddr::new("127.0.0.1".parse().unwrap(), internal_port);
+
+                // Override quic_bind_port for quinn to use internal port
+                let mut quic_config = self.config.clone();
+                quic_config.quic_bind_port = internal_port;
+                // Bind quinn to loopback only
+                quic_config.bind_address = "127.0.0.1".parse().unwrap();
+
+                tasks.push(tokio::spawn(udp::run_quic_listener(
+                    quic_config,
+                    auth_server.clone(),
+                    sender.clone(),
+                    self.connection_queues.clone(),
+                    self.session_queues.clone(),
+                    self.address_pool.clone(),
+                )));
+
+                // Spawn UDP SNI router in front
+                let sni_config = self.config.sni_router.clone();
+                tasks.push(tokio::spawn(async move {
+                    let router =
+                        sni_router::UdpSniRouter::new(public_addr, internal_addr, sni_config)
+                            .await
+                            .map_err(|e| {
+                                crate::MirageError::system(format!(
+                                    "Failed to start UDP SNI router: {}",
+                                    e
+                                ))
+                            })?;
+                    router.run().await
+                }));
+            } else {
+                // No UDP SNI routes — quinn listens directly on public port
+                tasks.push(tokio::spawn(udp::run_quic_listener(
+                    self.config.clone(),
+                    auth_server.clone(),
+                    sender.clone(),
+                    self.connection_queues.clone(),
+                    self.session_queues.clone(),
+                    self.address_pool.clone(),
+                )));
+            }
+        }
+
+        // Log SNI router configuration
+        if self.config.sni_router.enabled {
+            let route_count = self.config.sni_router.routes.len();
+            let sni_list: Vec<String> = self
+                .config
+                .sni_router
+                .routes
+                .iter()
+                .map(|r| {
+                    let target = r.backend.as_deref().unwrap_or("local");
+                    format!("{} → {}", r.sni.join("|"), target)
+                })
+                .collect();
+            info!(
+                "SNI Router enabled: {} routes [{}]",
+                route_count,
+                sni_list.join(", ")
+            );
+            if let Some(ref cfg) = self.config.sni_router.non_tls {
+                if let Some(ref b) = cfg.backend {
+                    info!("SNI Router: non-TLS → {}", b);
+                }
+            }
+            if let Some(ref cfg) = self.config.sni_router.tls_no_sni {
+                if let Some(ref b) = cfg.backend {
+                    info!("SNI Router: TLS-no-SNI → {}", b);
+                }
+            }
+            if let Some(ref cfg) = self.config.sni_router.unknown_sni {
+                if let Some(ref b) = cfg.backend {
+                    info!("SNI Router: unknown-SNI → {}", b);
+                }
+            }
         }
 
         let handler_task = self.handle_connections(auth_server, sender);

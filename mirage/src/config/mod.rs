@@ -14,7 +14,9 @@ mod transport;
 pub use client::{ClientAuthenticationConfig, ClientConfig, ServerEndpoint};
 pub use connection::{ConnectionConfig, ObfuscationConfig};
 pub use network::{CamouflageConfig, CamouflageMode, LogConfig, NatConfig, NetworkConfig};
-pub use server::{ServerAuthenticationConfig, ServerConfig};
+pub use server::{
+    ServerAuthenticationConfig, ServerConfig, SniDefaultBackend, SniRoute, SniRouterConfig,
+};
 pub use transport::{TransportConfig, TransportProtocol};
 
 use crate::error::{ConfigError, Result};

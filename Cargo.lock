@@ -2719,6 +2719,7 @@ dependencies = [
  "quinn-jls",
  "rand 0.8.5",
  "rand_core 0.6.4",
+ "ring",
  "rpassword",
  "rustls-jls",
  "rustls-native-certs",

@@ -6,7 +6,7 @@
 use crate::config::ClientConfig;
 use crate::crypto::no_verify::NoVerifier;
 use crate::error::{MirageError, Result};
-use crate::transport::quic::common_transport_config;
+use crate::transport::udp::common_transport_config;
 
 use tracing::{debug, info, warn};
 

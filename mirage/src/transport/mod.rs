@@ -1,10 +1,10 @@
-//! Transport layer module for TCP/TLS and QUIC connections.
+//! Transport layer module for TCP/TLS and UDP/QUIC connections.
 
 pub mod crypto;
 pub mod framed;
 pub mod jitter;
 pub mod mux;
-pub mod quic;
 pub mod tcp;
+pub mod udp;
 
-pub use quic::QuicStream;
+pub use udp::QuicStream;

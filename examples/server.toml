@@ -92,6 +92,43 @@ short_ids = [
 # 如果留空或注释，则不进行任何自动网络配置
 # ipv6_interface = "eth0"
 
+# ========== SNI 路由（端口复用） ==========
+# 基于 TLS ClientHello 的 SNI 将连接分流到不同后端
+# 支持 TCP 和 UDP/QUIC，类似 sslh 但更强大
+[sni_router]
+# 是否启用 SNI 路由 (默认: false)
+enabled = false
+
+# SNI 匹配路由 — 按 SNI 转发到指定后端
+# 不填 backend = 本地 Mirage VPN 处理
+# [[sni_router.routes]]
+# sni = ["hk.vpn.com", "hk2.vpn.com"]
+# # backend 不填 = 本地处理 VPN
+
+# 转发到远程服务器 (TCP + UDP 都转发)
+# [[sni_router.routes]]
+# sni = ["tw.vpn.com"]
+# backend = "tw-server.example.com:443"
+# protocol = "both"  # "tcp" / "udp" / "both" (默认)
+
+# 仅转发 TCP
+# [[sni_router.routes]]
+# sni = ["web.example.com"]
+# backend = "127.0.0.1:8080"
+# protocol = "tcp"
+
+# TLS 但没有 SNI 的流量 (如 IP 直连的 HTTPS)
+# [sni_router.tls_no_sni]
+# backend = "127.0.0.1:8443"
+
+# 非 TLS 流量 (Minecraft、SSH、HTTP 明文等)
+# [sni_router.non_tls]
+# backend = "127.0.0.1:25565"
+
+# 未匹配的 SNI (TLS 有 SNI 但不在路由表中)
+# [sni_router.unknown_sni]
+# backend = "127.0.0.1:8080"
+
 # ========== 日志 ==========
 [log]
 # 日志级别 (trace, debug, info, warn, error)

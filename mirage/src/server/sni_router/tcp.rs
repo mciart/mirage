@@ -1,3 +1,4 @@
+use crate::config::SniRouterConfig;
 use crate::protocol::tls_detect::{parse_client_hello, ClientHelloInfo};
 use crate::Result;
 use crate::{config::ServerConfig, MirageError};
@@ -9,15 +10,16 @@ use tracing::{debug, info, warn};
 pub enum DispatchResult {
     /// Matched VPN traffic (authorized). Process as VPN.
     Accept(Box<dyn AsyncIo>),
-    /// Matched probe traffic (valid SNI, invalid auth). Proxy to real target.
+    /// Proxy to a remote backend (host:port).
     Proxy(Box<dyn AsyncIo>, String),
-    /// Standard traffic (invalid SNI or generic). Fallback to standard TLS.
+    /// Standard traffic (fallback to standard TLS).
     Fallback(Box<dyn AsyncIo>),
 }
 
 pub struct TlsDispatcher {
     target_sni: String,
     valid_tokens: Vec<String>,
+    sni_router: SniRouterConfig,
 }
 
 impl TlsDispatcher {
@@ -27,13 +29,12 @@ impl TlsDispatcher {
         Self {
             target_sni: config.camouflage.target_sni.clone(),
             valid_tokens,
+            sni_router: config.sni_router.clone(),
         }
     }
 
     /// Inspects the initial bytes of a TCP stream to decide how to route it.
     pub async fn dispatch(&self, mut stream: TcpStream) -> Result<DispatchResult> {
-        // [新增] 强制开启 TCP_NODELAY，这对降低延迟至关重要
-        // 否则在 Buffer 模式下，小包（如 Ping）会被 OS 卡住等待合并
         if let Err(e) = stream.set_nodelay(true) {
             warn!("Failed to set TCP_NODELAY on incoming connection: {}", e);
         }
@@ -41,25 +42,17 @@ impl TlsDispatcher {
         let mut buf = Vec::with_capacity(4096);
         let mut temp_buf = [0u8; 1024];
 
-        // Loop until we have enough data to decide or fail
         loop {
-            // Check if we hit size limit to prevent DoS
             if buf.len() > 16384 {
-                return Ok(DispatchResult::Fallback(Box::new(PrefixedStream::new(
-                    buf, stream,
-                ))));
+                return self.handle_non_tls(buf, stream);
             }
 
             let n = stream.read(&mut temp_buf).await?;
             if n == 0 {
-                // EOF
                 if buf.is_empty() {
-                    // Empty stream, just return generic Fallback (will likely close)
                     return Ok(DispatchResult::Fallback(Box::new(stream)));
                 } else {
-                    return Ok(DispatchResult::Fallback(Box::new(PrefixedStream::new(
-                        buf, stream,
-                    ))));
+                    return self.handle_non_tls(buf, stream);
                 }
             }
 
@@ -71,37 +64,95 @@ impl TlsDispatcher {
                     return self.decide(prefixed_stream, info);
                 }
                 Ok(None) => {
-                    // Incomplete, continue reading
                     debug!("ClientHello incomplete, buffered {} bytes", buf.len());
                     continue;
                 }
                 Err(e) => {
-                    warn!(
-                        "TLS Parse Failed: {}. Buffer size: {}. First 16 bytes: {:02x?}",
+                    debug!(
+                        "Not a TLS ClientHello: {}. Buffer: {} bytes, first 16: {:02x?}",
                         e,
                         buf.len(),
                         &buf[..std::cmp::min(16, buf.len())]
                     );
-                    // Not a valid ClientHello or protocol mismatch -> Fallback
-                    let prefixed_stream = Box::new(PrefixedStream::new(buf, stream));
-                    return Ok(DispatchResult::Fallback(prefixed_stream));
+                    // Not TLS at all → non_tls route
+                    return self.handle_non_tls(buf, stream);
                 }
             }
         }
     }
 
+    /// Route non-TLS traffic (Minecraft, SSH, HTTP plaintext, etc.)
+    fn handle_non_tls(&self, buf: Vec<u8>, stream: TcpStream) -> Result<DispatchResult> {
+        let prefixed = Box::new(PrefixedStream::new(buf, stream));
+
+        if !self.sni_router.enabled {
+            return Ok(DispatchResult::Fallback(prefixed));
+        }
+
+        if let Some(ref cfg) = self.sni_router.non_tls {
+            if let Some(ref backend) = cfg.backend {
+                info!("SNI Router: non-TLS traffic → {}", backend);
+                return Ok(DispatchResult::Proxy(prefixed, backend.clone()));
+            }
+        }
+
+        debug!("SNI Router: non-TLS traffic, no backend configured → reject");
+        Ok(DispatchResult::Fallback(prefixed))
+    }
+
     fn decide(&self, stream: Box<dyn AsyncIo>, info: ClientHelloInfo) -> Result<DispatchResult> {
+        // ── SNI Router (if enabled) ──
+        if self.sni_router.enabled {
+            match &info.sni {
+                Some(sni) => {
+                    // Check SNI route table first
+                    match self.sni_router.find_route(sni) {
+                        Some(Some(backend)) => {
+                            // SNI matches a route with a remote backend
+                            info!("SNI Router: {} → {}", sni, backend);
+                            return Ok(DispatchResult::Proxy(stream, backend.to_string()));
+                        }
+                        Some(None) => {
+                            // SNI matches a route for local handling → continue to VPN logic below
+                            debug!("SNI Router: {} → local Mirage", sni);
+                        }
+                        None => {
+                            // SNI not in route table → check unknown_sni fallback
+                            // But first check if it matches the camouflage target_sni
+                            // (handles case where target_sni is not in route table)
+                            if sni != &self.target_sni {
+                                if let Some(ref cfg) = self.sni_router.unknown_sni {
+                                    if let Some(ref backend) = cfg.backend {
+                                        info!("SNI Router: unknown SNI {} → {}", sni, backend);
+                                        return Ok(DispatchResult::Proxy(stream, backend.clone()));
+                                    }
+                                }
+                            }
+                            // Fall through to camouflage logic
+                        }
+                    }
+                }
+                None => {
+                    // TLS but no SNI → tls_no_sni fallback
+                    if let Some(ref cfg) = self.sni_router.tls_no_sni {
+                        if let Some(ref backend) = cfg.backend {
+                            info!("SNI Router: TLS without SNI → {}", backend);
+                            return Ok(DispatchResult::Proxy(stream, backend.clone()));
+                        }
+                    }
+                    // Fall through to camouflage logic
+                }
+            }
+        }
+
+        // ── Original camouflage logic ──
         if let Some(sni) = &info.sni {
             if sni == &self.target_sni {
-                // SNI matches the disguised domain!
-
                 if let Some(alpns) = &info.alpn {
-                    // Check if any ALPN string matches a valid token using constant-time comparison
-                    // This prevents timing side-channel attacks that could leak valid tokens
                     for proto in alpns {
                         for valid_token in &self.valid_tokens {
                             if proto.as_bytes().ct_eq(valid_token.as_bytes()).into() {
-                                debug!("Camouflage Match: SNI={} ALPN={} -> VPN", sni, proto);
+                                debug!("Camouflage Match: SNI={} ALPN={} → VPN", sni, proto);
                                 return Ok(DispatchResult::Accept(stream));
                             }
                         }
@@ -109,21 +160,19 @@ impl TlsDispatcher {
                 }
 
                 info!(
-                    "Camouflage Probe Detected: SNI={} No Valid Auth Token -> Proxying to {}",
+                    "Camouflage Probe Detected: SNI={} No Valid Auth Token → Proxying to {}",
                     sni, self.target_sni
                 );
                 return Ok(DispatchResult::Proxy(stream, self.target_sni.clone()));
             }
         }
 
-        // SNI mismatch or no SNI -> Fallback
         debug!("Fallback traffic: SNI={:?}", info.sni);
         Ok(DispatchResult::Fallback(stream))
     }
 }
 
 /// A wrapper that makes `TcpStream` compatible with `dyn AsyncIo`
-/// Not strictly necessary if we use generics, but simplifies `DispatchResult` to use `Box<dyn AsyncIo>`
 pub trait AsyncIo: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync> AsyncIo for T {}
 
@@ -148,7 +197,6 @@ impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for PrefixedStream<S>
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        // First try to read from prefix
         if self.prefix.position() < self.prefix.get_ref().len() as u64 {
             let b = self.prefix.get_ref();
             let pos = self.prefix.position() as usize;
@@ -160,7 +208,6 @@ impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for PrefixedStream<S>
             return std::task::Poll::Ready(Ok(()));
         }
 
-        // If prefix exhausted, read from stream
         std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
@@ -190,10 +237,14 @@ impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for PrefixedStream<
 }
 
 /// Proxies a TCP connection to a remote target.
-/// This acts as a transparent TCP pipe.
+/// `target_host` should be in `host:port` format. Falls back to `:443` if no port specified.
 pub async fn proxy_connection(source: Box<dyn AsyncIo>, target_host: &str) -> Result<()> {
-    // Resolve target
-    let target_addr = format!("{}:443", target_host);
+    // If target already has a port, use as-is; otherwise append :443
+    let target_addr = if target_host.contains(':') {
+        target_host.to_string()
+    } else {
+        format!("{}:443", target_host)
+    };
     info!("Proxying connection to {}", target_addr);
 
     let mut target = TcpStream::connect(&target_addr).await.map_err(|e| {
@@ -203,22 +254,14 @@ pub async fn proxy_connection(source: Box<dyn AsyncIo>, target_host: &str) -> Re
         ))
     })?;
 
-    // Enable TCP_NODELAY on both sides for responsiveness
-    // Note: source is boxed trait object, we can't easily set nodelay unless we downcast
-    // or assume it was already set. For `TcpStream` it was set.
-    // For `PrefixedStream`, we should set it on inner `TcpStream` *before* boxing.
-    // We'll skip setting it on source here for now.
     let _ = target.set_nodelay(true);
 
-    // Bidirectional copy
     let (mut source_read, mut source_write) = tokio::io::split(source);
     let (mut target_read, mut target_write) = target.split();
 
-    // Use tokio::io::copy for efficient piping
     let client_to_server = tokio::io::copy(&mut source_read, &mut target_write);
     let server_to_client = tokio::io::copy(&mut target_read, &mut source_write);
 
-    // Run both directions
     match tokio::try_join!(client_to_server, server_to_client) {
         Ok(_) => {
             debug!("Proxy connection closed normally");

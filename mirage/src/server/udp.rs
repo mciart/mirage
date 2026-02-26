@@ -7,7 +7,7 @@ use crate::config::ServerConfig;
 use crate::network::packet::Packet;
 use crate::server::address_pool::AddressPool;
 use crate::server::handler;
-use crate::transport::quic::QuicStream;
+use crate::transport::udp::QuicStream;
 use crate::{MirageError, Result};
 
 use bytes::Bytes;
@@ -108,7 +108,7 @@ pub async fn run_quic_listener(
     let mut server_config = QuicServerConfig::with_crypto(Arc::new(server_crypto));
 
     // Tuning
-    let transport = crate::transport::quic::common_transport_config(
+    let transport = crate::transport::udp::common_transport_config(
         config.connection.keep_alive_interval_s,
         config.connection.timeout_s,
         config.connection.outer_mtu,
