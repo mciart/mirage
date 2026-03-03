@@ -262,6 +262,26 @@ impl NatManager {
             &["-I", "FORWARD", "-o", &tun_iface, "-j", "ACCEPT"],
         );
 
+        // 3b. TCP MSS clamping — automatically adjust MSS to match path MTU
+        //     Prevents packet-too-large drops with double encapsulation (e.g. Mirage + WireGuard)
+        self.add_rule(
+            "iptables",
+            &[
+                "-t",
+                "mangle",
+                "-A",
+                "FORWARD",
+                "-p",
+                "tcp",
+                "--tcp-flags",
+                "SYN,RST",
+                "SYN",
+                "-j",
+                "TCPMSS",
+                "--clamp-mss-to-pmtu",
+            ],
+        );
+
         // 4. Masquerade (NAT)
         self.add_rule(
             "iptables",
@@ -368,6 +388,25 @@ impl NatManager {
         self.add_rule(
             "ip6tables",
             &["-I", "FORWARD", "-o", &tun_iface, "-j", "ACCEPT"],
+        );
+
+        // 2b. TCP MSS clamping for IPv6
+        self.add_rule(
+            "ip6tables",
+            &[
+                "-t",
+                "mangle",
+                "-A",
+                "FORWARD",
+                "-p",
+                "tcp",
+                "--tcp-flags",
+                "SYN,RST",
+                "SYN",
+                "-j",
+                "TCPMSS",
+                "--clamp-mss-to-pmtu",
+            ],
         );
 
         // 3. Masquerade (NAT)
