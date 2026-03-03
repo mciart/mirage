@@ -194,20 +194,20 @@ impl NatManager {
                 "-j",
                 "MARK",
                 "--set-mark",
-                fwmark,
+                &fwmark,
             ],
         );
 
         // Add ip rule: marked packets use custom routing table
         // (check if it already exists first to avoid duplicates)
         if Command::new("ip")
-            .args(["rule", "show", "fwmark", fwmark, "table", table])
+            .args(["rule", "show", "fwmark", &fwmark, "table", &table])
             .output()
             .ok()
             .filter(|o| !o.stdout.is_empty())
             .is_none()
         {
-            match run_cmd("ip", &["rule", "add", "fwmark", fwmark, "table", table]) {
+            match run_cmd("ip", &["rule", "add", "fwmark", &fwmark, "table", &table]) {
                 Ok(_) => {
                     debug!("Added ip rule: fwmark {} -> table {}", fwmark, table);
                     self.active_rules
@@ -228,7 +228,7 @@ impl NatManager {
                 "dev",
                 outbound_iface,
                 "table",
-                table,
+                &table,
             ],
         );
         // Track for cleanup
@@ -304,13 +304,13 @@ impl NatManager {
                 "-j",
                 "MARK",
                 "--set-mark",
-                fwmark,
+                &fwmark,
             ],
         );
 
         // Add ip -6 rule
         if Command::new("ip")
-            .args(["-6", "rule", "show", "fwmark", fwmark, "table", table])
+            .args(["-6", "rule", "show", "fwmark", &fwmark, "table", &table])
             .output()
             .ok()
             .filter(|o| !o.stdout.is_empty())
@@ -318,7 +318,7 @@ impl NatManager {
         {
             match run_cmd(
                 "ip",
-                &["-6", "rule", "add", "fwmark", fwmark, "table", table],
+                &["-6", "rule", "add", "fwmark", &fwmark, "table", &table],
             ) {
                 Ok(_) => {
                     debug!("Added ip -6 rule: fwmark {} -> table {}", fwmark, table);
@@ -340,7 +340,7 @@ impl NatManager {
                 "dev",
                 outbound_iface,
                 "table",
-                table,
+                &table,
             ],
         );
         self.active_rules.push(format!(
