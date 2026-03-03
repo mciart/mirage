@@ -28,7 +28,12 @@ fn stable_rt_id(tun_interface: &str) -> u32 {
 
 /// Clean up stale rules from previous Mirage runs that used the same fwmark/table ID.
 /// This prevents rule accumulation when the process crashes without running Drop.
-fn cleanup_stale_rules(rt_id: &str, tunnel_net_v4: &str, tunnel_net_v6: Option<&str>) {
+fn cleanup_stale_rules(
+    rt_id: &str,
+    tun_interface: &str,
+    tunnel_net_v4: &str,
+    tunnel_net_v6: Option<&str>,
+) {
     info!("Cleaning up stale NAT rules for fwmark/table {}...", rt_id);
 
     // Remove stale IPv4 mangle mark rules for our tunnel network
@@ -89,10 +94,24 @@ fn cleanup_stale_rules(rt_id: &str, tunnel_net_v4: &str, tunnel_net_v6: Option<&
         debug!("Removed stale IPv4 NAT rule for {}", tunnel_net_v4);
     }
 
-    // Remove stale IPv4 FORWARD rules for all interfaces
-    // (loop to remove duplicates)
+    // Remove stale IPv4 FORWARD rules for our TUN interface
     loop {
-        if run_cmd("iptables", &["-D", "FORWARD", "-j", "ACCEPT"]).is_err() {
+        if run_cmd(
+            "iptables",
+            &["-D", "FORWARD", "-i", tun_interface, "-j", "ACCEPT"],
+        )
+        .is_err()
+        {
+            break;
+        }
+    }
+    loop {
+        if run_cmd(
+            "iptables",
+            &["-D", "FORWARD", "-o", tun_interface, "-j", "ACCEPT"],
+        )
+        .is_err()
+        {
             break;
         }
     }
@@ -177,6 +196,7 @@ impl NatManager {
         // Clean up stale rules from previous runs BEFORE adding new ones
         cleanup_stale_rules(
             &rt_id.to_string(),
+            &tun_interface,
             &tunnel_network_v4,
             tunnel_network_v6.as_deref(),
         );
