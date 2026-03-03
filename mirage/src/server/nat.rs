@@ -173,8 +173,8 @@ impl NatManager {
     ///   2. `ip rule` directs marked packets to a custom routing table
     ///   3. The custom table has a default route via the specified interface
     fn setup_policy_routing_v4(&mut self, outbound_iface: &str, tunnel_net: &str) {
-        let fwmark = &self.rt_id;
-        let table = &self.rt_id;
+        let fwmark = self.rt_id.clone();
+        let table = self.rt_id.clone();
 
         info!(
             "Setting up IPv4 policy routing: {} -> {} (fwmark/table={})",
@@ -283,8 +283,8 @@ impl NatManager {
 
     /// Set up fwmark-based policy routing for IPv6.
     fn setup_policy_routing_v6(&mut self, outbound_iface: &str, v6_net: &str) {
-        let fwmark = &self.rt_id;
-        let table = &self.rt_id;
+        let fwmark = self.rt_id.clone();
+        let table = self.rt_id.clone();
 
         info!(
             "Setting up IPv6 policy routing: {} -> {} (fwmark/table={})",
