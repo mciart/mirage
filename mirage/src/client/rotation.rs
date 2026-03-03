@@ -7,7 +7,7 @@ use crate::auth::client_auth::AuthClient;
 use crate::auth::users_file::UsersFileClientAuthenticator;
 use crate::config::ClientConfig;
 use crate::network::interface::{Interface, InterfaceIO};
-use crate::transport::quic::QuicStream;
+use crate::transport::udp::QuicStream;
 use crate::Result;
 use std::net::SocketAddr;
 use std::time::Duration;
