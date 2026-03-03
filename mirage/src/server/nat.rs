@@ -3,7 +3,12 @@ use tracing::{debug, info, warn};
 
 use crate::config::NatConfig;
 
-/// Manages NAT configuration (Masquerading, Forwarding)
+/// Fixed fwmark value for policy routing (decimal 100 = 0x64)
+const FWMARK: &str = "100";
+/// Custom routing table ID for policy routing
+const RT_TABLE: &str = "100";
+
+/// Manages NAT configuration (Masquerading, Forwarding, Policy Routing)
 pub struct NatManager {
     config: NatConfig,
     tun_interface: String,
@@ -85,6 +90,92 @@ impl NatManager {
                 "MASQUERADE",
             ],
         );
+
+        // 4. Policy routing: route VPN client traffic through the specified interface
+        //    This is essential when the outbound interface is not the default route
+        //    (e.g. wg0, tun1, or any other tunnel interface).
+        self.setup_policy_routing_v4(outbound_iface, &tunnel_net);
+    }
+
+    /// Set up fwmark-based policy routing for IPv4.
+    ///
+    /// Without this, even if MASQUERADE is set on the target interface,
+    /// the kernel routes traffic via the default route (usually eth0).
+    /// The policy routing chain:
+    ///   1. mangle/PREROUTING marks packets from the tunnel network with fwmark
+    ///   2. `ip rule` directs marked packets to a custom routing table
+    ///   3. The custom table has a default route via the specified interface
+    fn setup_policy_routing_v4(&mut self, outbound_iface: &str, tunnel_net: &str) {
+        info!(
+            "Setting up IPv4 policy routing: {} -> {}",
+            tunnel_net, outbound_iface
+        );
+
+        // Mark packets from tunnel network
+        self.add_rule(
+            "iptables",
+            &[
+                "-t",
+                "mangle",
+                "-A",
+                "PREROUTING",
+                "-s",
+                tunnel_net,
+                "-j",
+                "MARK",
+                "--set-mark",
+                FWMARK,
+            ],
+        );
+
+        // Add ip rule: marked packets use custom routing table
+        // (check if it already exists first to avoid duplicates)
+        if run_cmd("ip", &["rule", "show", "fwmark", FWMARK, "table", RT_TABLE])
+            .ok()
+            .and_then(|_| {
+                // Check output — if it's not empty, rule exists
+                Command::new("ip")
+                    .args(["rule", "show", "fwmark", FWMARK, "table", RT_TABLE])
+                    .output()
+                    .ok()
+                    .filter(|o| !o.stdout.is_empty())
+            })
+            .is_none()
+        {
+            match run_cmd("ip", &["rule", "add", "fwmark", FWMARK, "table", RT_TABLE]) {
+                Ok(_) => {
+                    debug!("Added ip rule: fwmark {} -> table {}", FWMARK, RT_TABLE);
+                    self.active_rules
+                        .push(format!("ip rule del fwmark {} table {}", FWMARK, RT_TABLE));
+                }
+                Err(e) => warn!("Failed to add ip rule: {}", e),
+            }
+        }
+
+        // Add default route in custom table via the specified interface
+        // (replace if exists to handle restarts cleanly)
+        let _ = run_cmd(
+            "ip",
+            &[
+                "route",
+                "replace",
+                "default",
+                "dev",
+                outbound_iface,
+                "table",
+                RT_TABLE,
+            ],
+        );
+        // Track for cleanup
+        self.active_rules.push(format!(
+            "ip route del default dev {} table {}",
+            outbound_iface, RT_TABLE
+        ));
+
+        info!(
+            "IPv4 policy routing configured: fwmark={} table={} dev={}",
+            FWMARK, RT_TABLE, outbound_iface
+        );
     }
 
     fn setup_ipv6(&mut self, outbound_iface: &str, v6_net: &str) {
@@ -119,6 +210,81 @@ impl NatManager {
                 "-j",
                 "MASQUERADE",
             ],
+        );
+
+        // 4. Policy routing for IPv6
+        self.setup_policy_routing_v6(outbound_iface, v6_net);
+    }
+
+    /// Set up fwmark-based policy routing for IPv6.
+    fn setup_policy_routing_v6(&mut self, outbound_iface: &str, v6_net: &str) {
+        info!(
+            "Setting up IPv6 policy routing: {} -> {}",
+            v6_net, outbound_iface
+        );
+
+        // Mark packets from tunnel v6 network
+        self.add_rule(
+            "ip6tables",
+            &[
+                "-t",
+                "mangle",
+                "-A",
+                "PREROUTING",
+                "-s",
+                v6_net,
+                "-j",
+                "MARK",
+                "--set-mark",
+                FWMARK,
+            ],
+        );
+
+        // Add ip -6 rule
+        if Command::new("ip")
+            .args(["-6", "rule", "show", "fwmark", FWMARK, "table", RT_TABLE])
+            .output()
+            .ok()
+            .filter(|o| !o.stdout.is_empty())
+            .is_none()
+        {
+            match run_cmd(
+                "ip",
+                &["-6", "rule", "add", "fwmark", FWMARK, "table", RT_TABLE],
+            ) {
+                Ok(_) => {
+                    debug!("Added ip -6 rule: fwmark {} -> table {}", FWMARK, RT_TABLE);
+                    self.active_rules.push(format!(
+                        "ip -6 rule del fwmark {} table {}",
+                        FWMARK, RT_TABLE
+                    ));
+                }
+                Err(e) => warn!("Failed to add ip -6 rule: {}", e),
+            }
+        }
+
+        // Add default route in custom table
+        let _ = run_cmd(
+            "ip",
+            &[
+                "-6",
+                "route",
+                "replace",
+                "default",
+                "dev",
+                outbound_iface,
+                "table",
+                RT_TABLE,
+            ],
+        );
+        self.active_rules.push(format!(
+            "ip -6 route del default dev {} table {}",
+            outbound_iface, RT_TABLE
+        ));
+
+        info!(
+            "IPv6 policy routing configured: fwmark={} table={} dev={}",
+            FWMARK, RT_TABLE, outbound_iface
         );
     }
 

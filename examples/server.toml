@@ -85,10 +85,12 @@ short_ids = [
 
 # ========== NAT ==========
 [nat]
-# IPv4 出站网口 (例如 eth0)，设置后自动启用 Masquerade 和转发
+# IPv4 出站网口 (例如 eth0, wg0)，设置后自动启用 Masquerade、转发和策略路由
+# 程序会自动配置 fwmark + ip rule + ip route，确保 VPN 流量从指定接口出站
+# 支持物理网卡 (eth0) 和隧道接口 (wg0 等)，退出时自动清理所有规则
 # 如果留空或注释，则不进行任何自动网络配置（需手动配置 iptables）
 # ipv4_interface = "eth0"
-# IPv6 出站网口 (例如 eth0)，设置后自动启用 Masquerade 和转发
+# IPv6 出站网口，行为与 IPv4 一致
 # 如果留空或注释，则不进行任何自动网络配置
 # ipv6_interface = "eth0"
 
