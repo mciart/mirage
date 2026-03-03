@@ -9,72 +9,156 @@ pub struct NatManager {
     tun_interface: String,
     tunnel_network_v4: String,         // CIDR, e.g. "10.0.0.1/24"
     tunnel_network_v6: Option<String>, // CIDR, e.g. "fd00::1/64"
-    active_rules: Vec<String>,         // Track added rules for cleanup (simplified description)
+    active_rules: Vec<String>,         // Track added rules for cleanup (LIFO)
     /// Dynamically chosen fwmark / routing table ID (same value for both)
     rt_id: String,
 }
 
-/// Pick a routing table ID and fwmark that won't collide with existing rules.
+/// Pick a stable routing table ID based on the TUN interface name.
 ///
-/// Strategy: derive from the TUN interface index (stable, unique per interface).
-/// If that collides or the interface index is unavailable, scan `ip rule` output
-/// and pick the first free ID in the 100..252 range.
-/// (0-2 are reserved by the kernel, 253=default, 254=main, 255=local.)
-fn pick_rt_id(tun_interface: &str) -> u32 {
-    // Try using the TUN interface index as the base
-    let c_name = std::ffi::CString::new(tun_interface).ok();
-    let if_index = c_name
-        .map(|n| unsafe { libc::if_nametoindex(n.as_ptr()) })
-        .unwrap_or(0);
+/// Uses a simple hash of the interface name to deterministically map to the
+/// 100..252 range. This ensures the same interface always gets the same ID,
+/// enabling reliable cleanup of stale rules from previous runs.
+fn stable_rt_id(tun_interface: &str) -> u32 {
+    let hash: u32 = tun_interface
+        .bytes()
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    100 + (hash % 153) // Maps to 100..252
+}
 
-    // Candidate based on interface index (offset into the 100..252 range)
-    let candidate = if if_index > 0 {
-        100 + (if_index % 153) // Maps to 100..252
-    } else {
-        100
-    };
+/// Clean up stale rules from previous Mirage runs that used the same fwmark/table ID.
+/// This prevents rule accumulation when the process crashes without running Drop.
+fn cleanup_stale_rules(rt_id: &str, tunnel_net_v4: &str, tunnel_net_v6: Option<&str>) {
+    info!("Cleaning up stale NAT rules for fwmark/table {}...", rt_id);
 
-    // Collect table IDs already in use by `ip rule`
-    let used = collect_used_table_ids();
-
-    if !used.contains(&candidate) {
-        return candidate;
+    // Remove stale IPv4 mangle mark rules for our tunnel network
+    loop {
+        if run_cmd(
+            "iptables",
+            &[
+                "-t",
+                "mangle",
+                "-D",
+                "PREROUTING",
+                "-s",
+                tunnel_net_v4,
+                "-j",
+                "MARK",
+                "--set-mark",
+                rt_id,
+            ],
+        )
+        .is_err()
+        {
+            break; // No more matching rules
+        }
+        debug!("Removed stale IPv4 mangle rule for {}", tunnel_net_v4);
     }
 
-    // Linear scan for a free slot
-    for id in 100..253u32 {
-        if !used.contains(&id) {
-            return id;
+    // Remove stale IPv4 ip rule
+    loop {
+        if run_cmd("ip", &["rule", "del", "fwmark", rt_id, "table", rt_id]).is_err() {
+            break;
+        }
+        debug!("Removed stale IPv4 ip rule for fwmark {}", rt_id);
+    }
+
+    // Remove stale IPv4 route in custom table (ignore errors)
+    let _ = run_cmd("ip", &["route", "flush", "table", rt_id]);
+
+    // Remove stale IPv4 NAT MASQUERADE rules for our tunnel network
+    // (We loop to remove all matching rules regardless of -o interface)
+    loop {
+        if run_cmd(
+            "iptables",
+            &[
+                "-t",
+                "nat",
+                "-D",
+                "POSTROUTING",
+                "-s",
+                tunnel_net_v4,
+                "-j",
+                "MASQUERADE",
+            ],
+        )
+        .is_err()
+        {
+            break;
+        }
+        debug!("Removed stale IPv4 NAT rule for {}", tunnel_net_v4);
+    }
+
+    // Remove stale IPv4 FORWARD rules for all interfaces
+    // (loop to remove duplicates)
+    loop {
+        if run_cmd("iptables", &["-D", "FORWARD", "-j", "ACCEPT"]).is_err() {
+            break;
         }
     }
 
-    // Extremely unlikely fallback
-    candidate
-}
+    // IPv6 cleanup
+    if let Some(v6_net) = tunnel_net_v6 {
+        loop {
+            if run_cmd(
+                "ip6tables",
+                &[
+                    "-t",
+                    "mangle",
+                    "-D",
+                    "PREROUTING",
+                    "-s",
+                    v6_net,
+                    "-j",
+                    "MARK",
+                    "--set-mark",
+                    rt_id,
+                ],
+            )
+            .is_err()
+            {
+                break;
+            }
+            debug!("Removed stale IPv6 mangle rule for {}", v6_net);
+        }
 
-/// Parse `ip rule show` output to find table IDs already in use.
-fn collect_used_table_ids() -> Vec<u32> {
-    let output = Command::new("ip")
-        .args(["rule", "show"])
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_default();
+        loop {
+            if run_cmd(
+                "ip",
+                &["-6", "rule", "del", "fwmark", rt_id, "table", rt_id],
+            )
+            .is_err()
+            {
+                break;
+            }
+            debug!("Removed stale IPv6 ip rule for fwmark {}", rt_id);
+        }
 
-    // Lines look like: "0:  from all lookup local"  or  "32766:  from all lookup main"
-    // or "100:  from all fwmark 0x64 lookup 100"
-    // We extract the table number after "lookup"
-    output
-        .lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            parts
-                .iter()
-                .position(|&w| w == "lookup")
-                .and_then(|i| parts.get(i + 1))
-                .and_then(|s| s.parse::<u32>().ok())
-        })
-        .collect()
+        let _ = run_cmd("ip", &["-6", "route", "flush", "table", rt_id]);
+
+        loop {
+            if run_cmd(
+                "ip6tables",
+                &[
+                    "-t",
+                    "nat",
+                    "-D",
+                    "POSTROUTING",
+                    "-s",
+                    v6_net,
+                    "-j",
+                    "MASQUERADE",
+                ],
+            )
+            .is_err()
+            {
+                break;
+            }
+            debug!("Removed stale IPv6 NAT rule for {}", v6_net);
+        }
+    }
+
+    info!("Stale rule cleanup complete.");
 }
 
 impl NatManager {
@@ -84,10 +168,17 @@ impl NatManager {
         tunnel_network_v4: String,
         tunnel_network_v6: Option<String>,
     ) -> Self {
-        let rt_id = pick_rt_id(&tun_interface);
+        let rt_id = stable_rt_id(&tun_interface);
         info!(
-            "NAT policy routing: selected table/fwmark ID {} for interface {}",
+            "NAT policy routing: using table/fwmark ID {} for interface {}",
             rt_id, tun_interface
+        );
+
+        // Clean up stale rules from previous runs BEFORE adding new ones
+        cleanup_stale_rules(
+            &rt_id.to_string(),
+            &tunnel_network_v4,
+            tunnel_network_v6.as_deref(),
         );
 
         Self {
@@ -131,7 +222,17 @@ impl NatManager {
             warn!("Failed to enable IPv4 forwarding: {}", e);
         }
 
-        // 2. Allow FORWARD chain (Core VPN traffic)
+        // 2. Disable reverse path filtering on the outbound interface
+        //    Required for policy routing to work with tunnel interfaces (e.g. wg0)
+        let rp_filter_key = format!("net.ipv4.conf.{}.rp_filter=0", outbound_iface);
+        if let Err(e) = run_cmd("sysctl", &["-w", &rp_filter_key]) {
+            warn!("Failed to disable rp_filter on {}: {}", outbound_iface, e);
+        }
+        if let Err(e) = run_cmd("sysctl", &["-w", "net.ipv4.conf.all.rp_filter=0"]) {
+            warn!("Failed to disable global rp_filter: {}", e);
+        }
+
+        // 3. Allow FORWARD chain (Core VPN traffic)
         self.add_rule(
             "iptables",
             &["-I", "FORWARD", "-i", &tun_iface, "-j", "ACCEPT"],
@@ -141,7 +242,7 @@ impl NatManager {
             &["-I", "FORWARD", "-o", &tun_iface, "-j", "ACCEPT"],
         );
 
-        // 3. Masquerade (NAT)
+        // 4. Masquerade (NAT)
         self.add_rule(
             "iptables",
             &[
@@ -158,9 +259,7 @@ impl NatManager {
             ],
         );
 
-        // 4. Policy routing: route VPN client traffic through the specified interface
-        //    This is essential when the outbound interface is not the default route
-        //    (e.g. wg0, tun1, or any other tunnel interface).
+        // 5. Policy routing: route VPN client traffic through the specified interface
         self.setup_policy_routing_v4(outbound_iface, &tunnel_net);
     }
 
@@ -199,26 +298,16 @@ impl NatManager {
         );
 
         // Add ip rule: marked packets use custom routing table
-        // (check if it already exists first to avoid duplicates)
-        if Command::new("ip")
-            .args(["rule", "show", "fwmark", &fwmark, "table", &table])
-            .output()
-            .ok()
-            .filter(|o| !o.stdout.is_empty())
-            .is_none()
-        {
-            match run_cmd("ip", &["rule", "add", "fwmark", &fwmark, "table", &table]) {
-                Ok(_) => {
-                    debug!("Added ip rule: fwmark {} -> table {}", fwmark, table);
-                    self.active_rules
-                        .push(format!("ip rule del fwmark {} table {}", fwmark, table));
-                }
-                Err(e) => warn!("Failed to add ip rule: {}", e),
+        match run_cmd("ip", &["rule", "add", "fwmark", &fwmark, "table", &table]) {
+            Ok(_) => {
+                debug!("Added ip rule: fwmark {} -> table {}", fwmark, table);
+                self.active_rules
+                    .push(format!("ip rule del fwmark {} table {}", fwmark, table));
             }
+            Err(e) => warn!("Failed to add ip rule: {}", e),
         }
 
         // Add default route in custom table via the specified interface
-        // (replace if exists to handle restarts cleanly)
         let _ = run_cmd(
             "ip",
             &[
@@ -245,6 +334,7 @@ impl NatManager {
 
     fn setup_ipv6(&mut self, outbound_iface: &str, v6_net: &str) {
         let tun_iface = self.tun_interface.clone();
+
         // 1. Enable forwarding
         if let Err(e) = run_cmd("sysctl", &["-w", "net.ipv6.conf.all.forwarding=1"]) {
             warn!("Failed to enable IPv6 forwarding: {}", e);
@@ -309,24 +399,16 @@ impl NatManager {
         );
 
         // Add ip -6 rule
-        if Command::new("ip")
-            .args(["-6", "rule", "show", "fwmark", &fwmark, "table", &table])
-            .output()
-            .ok()
-            .filter(|o| !o.stdout.is_empty())
-            .is_none()
-        {
-            match run_cmd(
-                "ip",
-                &["-6", "rule", "add", "fwmark", &fwmark, "table", &table],
-            ) {
-                Ok(_) => {
-                    debug!("Added ip -6 rule: fwmark {} -> table {}", fwmark, table);
-                    self.active_rules
-                        .push(format!("ip -6 rule del fwmark {} table {}", fwmark, table));
-                }
-                Err(e) => warn!("Failed to add ip -6 rule: {}", e),
+        match run_cmd(
+            "ip",
+            &["-6", "rule", "add", "fwmark", &fwmark, "table", &table],
+        ) {
+            Ok(_) => {
+                debug!("Added ip -6 rule: fwmark {} -> table {}", fwmark, table);
+                self.active_rules
+                    .push(format!("ip -6 rule del fwmark {} table {}", fwmark, table));
             }
+            Err(e) => warn!("Failed to add ip -6 rule: {}", e),
         }
 
         // Add default route in custom table
