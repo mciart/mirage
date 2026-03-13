@@ -16,11 +16,7 @@ pub struct LifecycleHooks {
 
 impl LifecycleHooks {
     /// Create hooks and immediately execute PostUp commands.
-    pub fn run_post_up(
-        interface_name: String,
-        post_up: &[String],
-        post_down: Vec<String>,
-    ) -> Self {
+    pub fn run_post_up(interface_name: String, post_up: &[String], post_down: Vec<String>) -> Self {
         if !post_up.is_empty() {
             info!(
                 "Running {} PostUp command(s) for interface {}",

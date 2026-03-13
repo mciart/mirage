@@ -43,7 +43,6 @@ pub struct LogConfig {
     pub level: String,
 }
 
-
 /// Camouflage mode selection
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase")]

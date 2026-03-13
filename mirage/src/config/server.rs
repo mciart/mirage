@@ -6,9 +6,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use super::defaults::*;
-use super::{
-    AuthType, CamouflageConfig, ConnectionConfig, LogConfig, ObfuscationConfig,
-};
+use super::{AuthType, CamouflageConfig, ConnectionConfig, LogConfig, ObfuscationConfig};
 
 /// Mirage server configuration
 #[derive(Clone, Debug, PartialEq, Deserialize)]
