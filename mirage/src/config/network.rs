@@ -43,14 +43,6 @@ pub struct LogConfig {
     pub level: String,
 }
 
-/// NAT configuration for server
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-pub struct NatConfig {
-    /// Outbound interface for IPv4 (e.g. "eth0")
-    pub ipv4_interface: Option<String>,
-    /// Outbound interface for IPv6 (e.g. "eth0")
-    pub ipv6_interface: Option<String>,
-}
 
 /// Camouflage mode selection
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]

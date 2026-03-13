@@ -13,7 +13,7 @@ mod transport;
 
 pub use client::{ClientAuthenticationConfig, ClientConfig, ServerEndpoint};
 pub use connection::{ConnectionConfig, ObfuscationConfig};
-pub use network::{CamouflageConfig, CamouflageMode, LogConfig, NatConfig, NetworkConfig};
+pub use network::{CamouflageConfig, CamouflageMode, LogConfig, NetworkConfig};
 pub use server::{ServerAuthenticationConfig, ServerConfig};
 pub use transport::{TransportConfig, TransportProtocol};
 

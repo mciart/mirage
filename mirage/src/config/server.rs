@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::defaults::*;
 use super::{
-    AuthType, CamouflageConfig, ConnectionConfig, LogConfig, NatConfig, ObfuscationConfig,
+    AuthType, CamouflageConfig, ConnectionConfig, LogConfig, ObfuscationConfig,
 };
 
 /// Mirage server configuration
@@ -51,9 +51,16 @@ pub struct ServerConfig {
     pub camouflage: CamouflageConfig,
     /// Logging configuration
     pub log: LogConfig,
-    /// NAT configuration
+    /// Shell commands to run after the tunnel interface is created (WireGuard-style).
+    /// Use `%i` as a placeholder for the interface name (e.g. "mirage0").
+    /// Example: ["sysctl -w net.ipv4.ip_forward=1", "iptables -A FORWARD -i %i -j ACCEPT"]
     #[serde(default)]
-    pub nat: NatConfig,
+    pub post_up: Vec<String>,
+    /// Shell commands to run before the tunnel interface is destroyed.
+    /// Use `%i` as a placeholder for the interface name.
+    /// Example: ["iptables -D FORWARD -i %i -j ACCEPT"]
+    #[serde(default)]
+    pub post_down: Vec<String>,
     /// Whether to enable QUIC listener (default = false)
     #[serde(default = "default_false_fn")]
     pub quic_enabled: bool,

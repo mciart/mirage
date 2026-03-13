@@ -83,16 +83,21 @@ short_ids = [
 # 客户端和服务端必须设置相同的密钥
 # inner_key = "your-inner-encryption-key"
 
-# ========== NAT ==========
-[nat]
-# IPv4 出站网口 (例如 eth0, wg0)，设置后自动启用 Masquerade、转发和策略路由
-# 程序会自动配置 fwmark + ip rule + ip route，确保 VPN 流量从指定接口出站
-# 支持物理网卡 (eth0) 和隧道接口 (wg0 等)，退出时自动清理所有规则
-# 如果留空或注释，则不进行任何自动网络配置（需手动配置 iptables）
-# ipv4_interface = "eth0"
-# IPv6 出站网口，行为与 IPv4 一致
-# 如果留空或注释，则不进行任何自动网络配置
-# ipv6_interface = "eth0"
+# ========== 生命周期脚本 ==========
+# 隧道接口创建后执行的命令，%i 自动替换为接口名（如 mirage0 或 interface_name 指定的名称）
+# 如果留空或不配置，则不进行任何自动网络配置（需手动配置 iptables）
+# post_up = [
+#     "sysctl -w net.ipv4.ip_forward=1",
+#     "iptables -A FORWARD -i %i -j ACCEPT",
+#     "iptables -A FORWARD -o %i -j ACCEPT",
+#     "iptables -t nat -A POSTROUTING -s 10.11.12.0/24 -o eth0 -j MASQUERADE",
+# ]
+# 隧道关闭前执行的命令
+# post_down = [
+#     "iptables -D FORWARD -i %i -j ACCEPT",
+#     "iptables -D FORWARD -o %i -j ACCEPT",
+#     "iptables -t nat -D POSTROUTING -s 10.11.12.0/24 -o eth0 -j MASQUERADE",
+# ]
 
 # ========== 日志 ==========
 [log]

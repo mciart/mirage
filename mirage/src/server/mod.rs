@@ -7,7 +7,7 @@ pub mod address_pool;
 mod connection;
 mod dispatcher;
 mod handler;
-mod nat;
+mod hooks;
 mod quic;
 mod session;
 
@@ -38,7 +38,7 @@ use tracing::{debug, info, warn};
 
 use self::address_pool::AddressPool;
 use self::dispatcher::{proxy_connection, DispatchResult, TlsDispatcher};
-use self::nat::NatManager;
+use self::hooks::LifecycleHooks;
 use self::session::SessionContext;
 
 type ConnectionQueues = Arc<DashMap<IpAddr, Sender<Bytes>>>;
@@ -80,17 +80,14 @@ impl MirageServer {
         )?;
         let interface = Arc::new(interface);
 
-        // Configure NAT if requested
-        // Variable is named _nat_manager to keep it alive until the end of the function (RAII cleanup)
-        // We mute unused warning because we only need it for Drop
+        // Run PostUp hooks (WireGuard-style lifecycle scripts)
+        // Variable is named _hooks to keep it alive until the end of the function (RAII cleanup)
         #[allow(unused_variables)]
-        let mut _nat_manager = NatManager::new(
-            self.config.nat.clone(),
+        let _hooks = LifecycleHooks::run_post_up(
             interface.name().unwrap_or_else(|| "unknown".to_string()),
-            self.config.tunnel_network.to_string(),
-            self.config.tunnel_network_v6.map(|n| n.to_string()),
+            &self.config.post_up,
+            self.config.post_down.clone(),
         );
-        _nat_manager.setup();
 
         let authenticator = Box::new(UsersFileServerAuthenticator::new(
             &self.config.authentication,
