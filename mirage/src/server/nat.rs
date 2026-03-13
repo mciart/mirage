@@ -26,91 +26,35 @@ fn stable_rt_id(tun_interface: &str) -> u32 {
     100 + (hash % 153) // Maps to 100..252
 }
 
-/// Get the default gateway for a given interface from the system routing table.
+/// Detect the default gateway for an interface from the system routing table.
 ///
-/// Parses `ip route show default dev <iface>` to extract the gateway IP.
-/// Returns `None` if the interface has no gateway (e.g. point-to-point links).
-fn get_default_gateway_v4(outbound_iface: &str) -> Option<String> {
-    let output = Command::new("ip")
-        .args(["route", "show", "default", "dev", outbound_iface])
-        .output()
-        .ok()?;
+/// Parses `ip [-6] route show default [dev <iface>]` to extract the `via` address.
+/// Falls back to querying without device filter if the first attempt yields nothing.
+/// Returns `None` for point-to-point links or when no gateway is configured.
+fn get_default_gateway(outbound_iface: &str, ipv6: bool) -> Option<String> {
+    let base: &[&str] = if ipv6 { &["-6"] } else { &[] };
 
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Parse: "default via 10.0.0.1 dev eth0 ..."
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if let Some(pos) = parts.iter().position(|&p| p == "via") {
-            if let Some(gw) = parts.get(pos + 1) {
-                return Some(gw.to_string());
-            }
+    // Try with device filter first, then without (fallback for single-route systems)
+    for with_dev in [true, false] {
+        let mut args: Vec<&str> = base.to_vec();
+        args.extend_from_slice(&["route", "show", "default"]);
+        if with_dev {
+            args.extend_from_slice(&["dev", outbound_iface]);
         }
-    }
 
-    // Fallback: try without device filter (some systems only have one default route)
-    let output = Command::new("ip")
-        .args(["route", "show", "default"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if let Some(pos) = parts.iter().position(|&p| p == "via") {
-            if let Some(gw) = parts.get(pos + 1) {
-                return Some(gw.to_string());
-            }
+        let output = Command::new("ip").args(&args).output().ok()?;
+        if !output.status.success() {
+            continue;
         }
-    }
 
-    None
-}
-
-/// Get the default IPv6 gateway for a given interface from the system routing table.
-fn get_default_gateway_v6(outbound_iface: &str) -> Option<String> {
-    let output = Command::new("ip")
-        .args(["-6", "route", "show", "default", "dev", outbound_iface])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if let Some(pos) = parts.iter().position(|&p| p == "via") {
-            if let Some(gw) = parts.get(pos + 1) {
-                return Some(gw.to_string());
-            }
-        }
-    }
-
-    // Fallback: try without device filter
-    let output = Command::new("ip")
-        .args(["-6", "route", "show", "default"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if let Some(pos) = parts.iter().position(|&p| p == "via") {
-            if let Some(gw) = parts.get(pos + 1) {
-                return Some(gw.to_string());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Parse: "default via 10.0.0.1 dev eth0 ..."
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if let Some(pos) = parts.iter().position(|&p| p == "via") {
+                if let Some(gw) = parts.get(pos + 1) {
+                    return Some(gw.to_string());
+                }
             }
         }
     }
@@ -443,7 +387,7 @@ impl NatManager {
         // Add default route in custom table via the specified interface.
         // We must include the gateway (via) for the kernel to resolve the next-hop
         // correctly — without it, packets are silently dropped on many systems.
-        let gateway = get_default_gateway_v4(outbound_iface);
+        let gateway = get_default_gateway(outbound_iface, false);
 
         let route_result = if let Some(ref gw) = gateway {
             info!(
@@ -599,7 +543,7 @@ impl NatManager {
         }
 
         // Add default route in custom table (with gateway if available)
-        let gateway = get_default_gateway_v6(outbound_iface);
+        let gateway = get_default_gateway(outbound_iface, true);
 
         let route_result = if let Some(ref gw) = gateway {
             info!(
