@@ -26,6 +26,98 @@ fn stable_rt_id(tun_interface: &str) -> u32 {
     100 + (hash % 153) // Maps to 100..252
 }
 
+/// Get the default gateway for a given interface from the system routing table.
+///
+/// Parses `ip route show default dev <iface>` to extract the gateway IP.
+/// Returns `None` if the interface has no gateway (e.g. point-to-point links).
+fn get_default_gateway_v4(outbound_iface: &str) -> Option<String> {
+    let output = Command::new("ip")
+        .args(["route", "show", "default", "dev", outbound_iface])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Parse: "default via 10.0.0.1 dev eth0 ..."
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if let Some(pos) = parts.iter().position(|&p| p == "via") {
+            if let Some(gw) = parts.get(pos + 1) {
+                return Some(gw.to_string());
+            }
+        }
+    }
+
+    // Fallback: try without device filter (some systems only have one default route)
+    let output = Command::new("ip")
+        .args(["route", "show", "default"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if let Some(pos) = parts.iter().position(|&p| p == "via") {
+            if let Some(gw) = parts.get(pos + 1) {
+                return Some(gw.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Get the default IPv6 gateway for a given interface from the system routing table.
+fn get_default_gateway_v6(outbound_iface: &str) -> Option<String> {
+    let output = Command::new("ip")
+        .args(["-6", "route", "show", "default", "dev", outbound_iface])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if let Some(pos) = parts.iter().position(|&p| p == "via") {
+            if let Some(gw) = parts.get(pos + 1) {
+                return Some(gw.to_string());
+            }
+        }
+    }
+
+    // Fallback: try without device filter
+    let output = Command::new("ip")
+        .args(["-6", "route", "show", "default"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if let Some(pos) = parts.iter().position(|&p| p == "via") {
+            if let Some(gw) = parts.get(pos + 1) {
+                return Some(gw.to_string());
+            }
+        }
+    }
+
+    None
+}
+
 /// Clean up stale rules from previous Mirage runs that used the same fwmark/table ID.
 /// This prevents rule accumulation when the process crashes without running Drop.
 fn cleanup_stale_rules(
@@ -311,6 +403,7 @@ impl NatManager {
     ///   1. mangle/PREROUTING marks packets from the tunnel network with fwmark
     ///   2. `ip rule` directs marked packets to a custom routing table
     ///   3. The custom table has a default route via the specified interface
+    ///      (including the gateway address for proper next-hop resolution)
     fn setup_policy_routing_v4(&mut self, outbound_iface: &str, tunnel_net: &str) {
         let fwmark = self.rt_id.clone();
         let table = self.rt_id.clone();
@@ -347,19 +440,54 @@ impl NatManager {
             Err(e) => warn!("Failed to add ip rule: {}", e),
         }
 
-        // Add default route in custom table via the specified interface
-        let _ = run_cmd(
-            "ip",
-            &[
-                "route",
-                "replace",
-                "default",
-                "dev",
-                outbound_iface,
-                "table",
-                &table,
-            ],
-        );
+        // Add default route in custom table via the specified interface.
+        // We must include the gateway (via) for the kernel to resolve the next-hop
+        // correctly — without it, packets are silently dropped on many systems.
+        let gateway = get_default_gateway_v4(outbound_iface);
+
+        let route_result = if let Some(ref gw) = gateway {
+            info!(
+                "Detected IPv4 gateway {} on interface {}",
+                gw, outbound_iface
+            );
+            run_cmd(
+                "ip",
+                &[
+                    "route",
+                    "replace",
+                    "default",
+                    "via",
+                    gw,
+                    "dev",
+                    outbound_iface,
+                    "table",
+                    &table,
+                ],
+            )
+        } else {
+            // Fallback: no gateway detected (point-to-point link, etc.)
+            warn!(
+                "No IPv4 gateway detected on {}, using device-only route (may not work on all systems)",
+                outbound_iface
+            );
+            run_cmd(
+                "ip",
+                &[
+                    "route",
+                    "replace",
+                    "default",
+                    "dev",
+                    outbound_iface,
+                    "table",
+                    &table,
+                ],
+            )
+        };
+
+        if let Err(e) = route_result {
+            warn!("Failed to add default route in table {}: {}", table, e);
+        }
+
         // Track for cleanup
         self.active_rules.push(format!(
             "ip route del default dev {} table {}",
@@ -367,8 +495,8 @@ impl NatManager {
         ));
 
         info!(
-            "IPv4 policy routing configured: fwmark={} table={} dev={}",
-            fwmark, table, outbound_iface
+            "IPv4 policy routing configured: fwmark={} table={} dev={} gateway={:?}",
+            fwmark, table, outbound_iface, gateway
         );
     }
 
@@ -470,28 +598,61 @@ impl NatManager {
             Err(e) => warn!("Failed to add ip -6 rule: {}", e),
         }
 
-        // Add default route in custom table
-        let _ = run_cmd(
-            "ip",
-            &[
-                "-6",
-                "route",
-                "replace",
-                "default",
-                "dev",
-                outbound_iface,
-                "table",
-                &table,
-            ],
-        );
+        // Add default route in custom table (with gateway if available)
+        let gateway = get_default_gateway_v6(outbound_iface);
+
+        let route_result = if let Some(ref gw) = gateway {
+            info!(
+                "Detected IPv6 gateway {} on interface {}",
+                gw, outbound_iface
+            );
+            run_cmd(
+                "ip",
+                &[
+                    "-6",
+                    "route",
+                    "replace",
+                    "default",
+                    "via",
+                    gw,
+                    "dev",
+                    outbound_iface,
+                    "table",
+                    &table,
+                ],
+            )
+        } else {
+            warn!(
+                "No IPv6 gateway detected on {}, using device-only route",
+                outbound_iface
+            );
+            run_cmd(
+                "ip",
+                &[
+                    "-6",
+                    "route",
+                    "replace",
+                    "default",
+                    "dev",
+                    outbound_iface,
+                    "table",
+                    &table,
+                ],
+            )
+        };
+
+        if let Err(e) = route_result {
+            warn!("Failed to add IPv6 default route in table {}: {}", table, e);
+        }
+
         self.active_rules.push(format!(
             "ip -6 route del default dev {} table {}",
             outbound_iface, table
         ));
 
         info!(
-            "IPv6 policy routing configured: fwmark={} table={} dev={}",
-            fwmark, table, outbound_iface
+            "IPv6 policy routing configured: fwmark={} table={} dev={} gateway={:?}",
+            fwmark, table, outbound_iface, gateway
         );
     }
 
