@@ -164,6 +164,8 @@ docker run --rm \
 使用 `post_up` / `post_down` 生命周期脚本配置网络，与 WireGuard 的 PostUp/PostDown 用法一致。
 `%i` 会自动替换为 TUN 接口名（如 `mirage0` 或 `interface_name` 指定的名称）。
 
+### iptables (Debian 12 及以前 / Ubuntu 20.04)
+
 ```toml
 # 指定 TUN 接口名（可选）
 interface_name = "mirage0"
@@ -188,8 +190,30 @@ post_down = [
 ]
 ```
 
+### nftables (Debian 13+ / Ubuntu 22.04+ / RHEL 9+)
+
+```toml
+interface_name = "mirage0"
+
+post_up = [
+    "sysctl -w net.ipv4.ip_forward=1",
+    "sysctl -w net.ipv6.conf.all.forwarding=1",
+    "nft add table inet mirage",
+    "nft add chain inet mirage forward { type filter hook forward priority 0 \\; policy accept \\; }",
+    "nft add rule inet mirage forward iifname %i accept",
+    "nft add rule inet mirage forward oifname %i accept",
+    "nft add chain inet mirage postrouting { type nat hook postrouting priority 100 \\; }",
+    "nft add rule inet mirage postrouting ip saddr 10.0.0.0/24 oifname eth0 masquerade",
+    "nft add rule inet mirage postrouting ip6 saddr fd00::/64 oifname eth0 masquerade",
+]
+post_down = [
+    "nft delete table inet mirage",
+]
+```
+
 > [!TIP]
 > 不配置 `post_up` / `post_down` 则不进行任何自动网络配置。
+> nftables 的 `post_down` 只需一条命令即可清理所有规则，比 iptables 更简洁。
 
 ---
 
