@@ -170,19 +170,25 @@ interface_name = "mirage0"
 
 post_up = [
     "sysctl -w net.ipv4.ip_forward=1",
+    "sysctl -w net.ipv6.conf.all.forwarding=1",
     "iptables -A FORWARD -i %i -j ACCEPT",
     "iptables -A FORWARD -o %i -j ACCEPT",
     "iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE",
+    "ip6tables -A FORWARD -i %i -j ACCEPT",
+    "ip6tables -A FORWARD -o %i -j ACCEPT",
+    "ip6tables -t nat -A POSTROUTING -s fd00::/64 -o eth0 -j MASQUERADE",
 ]
 post_down = [
     "iptables -D FORWARD -i %i -j ACCEPT",
     "iptables -D FORWARD -o %i -j ACCEPT",
     "iptables -t nat -D POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE",
+    "ip6tables -D FORWARD -i %i -j ACCEPT",
+    "ip6tables -D FORWARD -o %i -j ACCEPT",
+    "ip6tables -t nat -D POSTROUTING -s fd00::/64 -o eth0 -j MASQUERADE",
 ]
 ```
 
 > [!TIP]
-> 如需 IPv6，添加对应的 `ip6tables` 和 `sysctl -w net.ipv6.conf.all.forwarding=1` 命令即可。
 > 不配置 `post_up` / `post_down` 则不进行任何自动网络配置。
 
 ---
