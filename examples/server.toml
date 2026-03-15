@@ -21,6 +21,22 @@ tunnel_network_v6 = "fd00::1/64"
 # 是否隔离客户端（客户端之间无法互相访问）
 isolate_clients = true
 
+# ========== 生命周期脚本 ==========
+# 隧道接口创建后执行的命令，%i 自动替换为接口名（如 mirage0 或 interface_name 指定的名称）
+# 如果留空或不配置，则不进行任何自动网络配置（需手动配置 iptables/nftables）
+# 注意：post_up / post_down 必须放在所有 [section] 之前（TOML 顶层）
+# post_up = [
+#     "sysctl -w net.ipv4.ip_forward=1",
+#     "iptables -A FORWARD -i %i -j ACCEPT",
+#     "iptables -A FORWARD -o %i -j ACCEPT",
+#     "iptables -t nat -A POSTROUTING -s 10.11.12.0/24 -o eth0 -j MASQUERADE",
+# ]
+# post_down = [
+#     "iptables -D FORWARD -i %i -j ACCEPT",
+#     "iptables -D FORWARD -o %i -j ACCEPT",
+#     "iptables -t nat -D POSTROUTING -s 10.11.12.0/24 -o eth0 -j MASQUERADE",
+# ]
+
 # ========== 认证 ==========
 [authentication]
 # 包含用户凭据的文件路径
@@ -31,7 +47,6 @@ users_file = "examples/users"
 # 隧道和生成的 TUN 接口使用的 MTU
 # 默认 1280（IPv6 最小 MTU，减少 TCP-over-TCP 问题）
 mtu = 1280
-# 外层隧道 MTU (UDP 包大小限制)
 # 外层隧道 MTU (UDP 包大小限制，默认 1420)
 outer_mtu = 1420
 # 开启 NODELAY
@@ -44,60 +59,36 @@ timeout_s = 30
 # 是否启用流量混淆 (默认: true)
 enabled = true
 # 发送随机填充包的概率 (0.0-1.0, 默认: 0.15)
-# 配合加权拟态轮廓 (Weighted Traffic Mimicry)，触发 60% 小包 / 30% 中包 / 10% 大包的分布
-# 同时启用独立填充定时器 (2-8s 随机间隔)，打破填充包仅跟随数据包的可识别模式
 padding_probability = 0.15
 # 随机填充包的最小长度 (字节, 默认: 40)
 padding_min = 40
 # 随机填充包的最大长度 (字节, 默认: 1200)
 padding_max = 1200
 # Jitter (抖动) 延迟范围 (毫秒)
-# 自适应模式：空闲时自动放大抖动模拟浏览行为，高流量时自动缩小保障吞吐
-# 建议 0-20ms，过大会影响性能
 jitter_min_ms = 0
 jitter_max_ms = 0
-# 将写入缓冲区填充到 TLS Record 边界 (16KB)，使 TLS 记录大小更均匀 (默认: false)
-# 启用后带宽开销增加，但可有效对抗 TLS 记录大小指纹识别
+# 将写入缓冲区填充到 TLS Record 边界 (16KB)
 # tls_record_padding = false
-# 应用层加密 (ChaCha20-Poly1305)，即使外层 TLS 被 CDN 剥离，内层数据仍加密 (默认: false)
-# 启用时需在 [camouflage] 中设置 inner_key，客户端和服务端必须一致
+# 应用层加密 (ChaCha20-Poly1305)
 # inner_encryption = false
 
 # ========== 伪装层 ==========
 [camouflage]
 # 伪装模式: "none" (标准 TLS) 或 "mirage" (SNI 伪装 + 反主动探测)
 mode = "mirage"
-# 伪装的目标域名 (SNI) -> 建议选择大厂域名
-# JLS 模式下同时作为 upstream 转发地址 (自动拼接 :443)
+# 伪装的目标域名 (SNI)
 target_sni = "www.microsoft.com"
-# 客户端认证 ShortId 列表 (十六进制)，对应客户端配置
+# 客户端认证 ShortId 列表 (十六进制)
 short_ids = [
     "abcd1234deadbeef",
     "0011223344556677"
 ]
-# JLS 伪装密码 (启用 QUIC/UDP 传输时填写，客户端和服务端必须一致)
+# JLS 伪装密码 (启用 QUIC/UDP 传输时填写)
 # jls_password = "your-jls-password"
-# JLS 初始化向量 (启用 QUIC/UDP 传输时填写，客户端和服务端必须一致)
+# JLS 初始化向量
 # jls_iv = "your-jls-iv"
 # 应用层加密密钥 (与 inner_encryption 配合使用)
-# 客户端和服务端必须设置相同的密钥
 # inner_key = "your-inner-encryption-key"
-
-# ========== 生命周期脚本 ==========
-# 隧道接口创建后执行的命令，%i 自动替换为接口名（如 mirage0 或 interface_name 指定的名称）
-# 如果留空或不配置，则不进行任何自动网络配置（需手动配置 iptables）
-# post_up = [
-#     "sysctl -w net.ipv4.ip_forward=1",
-#     "iptables -A FORWARD -i %i -j ACCEPT",
-#     "iptables -A FORWARD -o %i -j ACCEPT",
-#     "iptables -t nat -A POSTROUTING -s 10.11.12.0/24 -o eth0 -j MASQUERADE",
-# ]
-# 隧道关闭前执行的命令
-# post_down = [
-#     "iptables -D FORWARD -i %i -j ACCEPT",
-#     "iptables -D FORWARD -o %i -j ACCEPT",
-#     "iptables -t nat -D POSTROUTING -s 10.11.12.0/24 -o eth0 -j MASQUERADE",
-# ]
 
 # ========== 日志 ==========
 [log]
