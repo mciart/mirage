@@ -64,7 +64,7 @@ impl MirageRuntime {
         // iOS: skip tracing entirely to save ~1-2 MB of formatter/writer memory.
         // On iOS we rely on NSLog from Swift for diagnostics.
         // macOS: write to file since stderr is invisible in sandboxed app extensions.
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
             let log_dir = std::env::var("MIRAGE_LOG_DIR").unwrap_or_else(|_| "/tmp".to_string());
             let log_path = format!("{}/mirage_tunnel.log", log_dir);
@@ -86,9 +86,13 @@ impl MirageRuntime {
             }
         }
 
+        // Android: no file logging; diagnostics are surfaced through the JNI callbacks/logcat.
+        #[cfg(target_os = "android")]
+        {}
+
         // iOS Network Extensions have 50MB hard memory limit (jetsam).
         // 1 worker thread with 512KB stack is sufficient for single-connection mode.
-        #[cfg(target_os = "ios")]
+        #[cfg(any(target_os = "ios", target_os = "android"))]
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_stack_size(512 * 1024)
@@ -96,7 +100,7 @@ impl MirageRuntime {
             .build()
             .map_err(|e| format!("Failed to create Tokio runtime: {e}"))?;
 
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
         let runtime = Runtime::new().map_err(|e| format!("Failed to create Tokio runtime: {e}"))?;
         Ok(Self {
             runtime,

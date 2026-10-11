@@ -1,13 +1,13 @@
 //! Connection and obfuscation configuration types.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::defaults::*;
 use crate::constants::TLS_MTU_OVERHEAD;
 
 /// Connection management configuration
 /// Shared between client and server (server uses a subset)
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionConfig {
     /// The MTU for the TUN interface (default = 1280, IPv6 minimum, reduces TCP-over-TCP issues)
     #[serde(default = "default_mtu")]
@@ -80,7 +80,7 @@ impl ConnectionConfig {
 }
 
 /// Traffic obfuscation configuration
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ObfuscationConfig {
     /// Whether to enable traffic padding (default = true)
     #[serde(default = "default_true_fn")]

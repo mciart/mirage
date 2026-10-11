@@ -4,7 +4,7 @@
 //! establishment, DNS resolution, and endpoint caching.
 
 use crate::config::TransportProtocol;
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::network::socket_protect;
 use crate::transport::udp::QuicStream;
 use crate::{MirageError, Result};
@@ -22,7 +22,7 @@ use super::{MirageClient, TransportStream};
 /// Standalone — no `&mut self` needed, safe to call concurrently.
 pub(super) async fn tcp_connect_raw(
     addr: SocketAddr,
-    #[cfg_attr(target_os = "ios", allow(unused))] physical_interface: Option<&str>,
+    #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(unused))] physical_interface: Option<&str>,
 ) -> Result<TcpStream> {
     let tcp_socket = if addr.is_ipv4() {
         tokio::net::TcpSocket::new_v4()
@@ -32,7 +32,7 @@ pub(super) async fn tcp_connect_raw(
     .map_err(|e| MirageError::connection_failed(format!("Failed to create TCP socket: {e}")))?;
 
     // Bind socket to physical interface (anti-loop protection)
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     if let Some(iface) = physical_interface {
         #[cfg(unix)]
         let raw_fd = {

@@ -132,7 +132,7 @@ pub fn create_endpoint_with_protect(
         config.connection.keep_alive_interval_s,
         config.connection.timeout_s,
         config.connection.outer_mtu,
-        cfg!(target_os = "ios"),
+        cfg!(any(target_os = "ios", target_os = "android")),
     );
     client_config.transport_config(std::sync::Arc::new(transport_config));
 

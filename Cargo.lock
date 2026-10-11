@@ -2703,6 +2703,7 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "async-trait",
+ "base64",
  "boring",
  "bytes",
  "chacha20poly1305",
@@ -2716,6 +2717,7 @@ dependencies = [
  "jemallocator",
  "libc",
  "nu-ansi-term",
+ "qrcode",
  "quinn-jls",
  "rand 0.8.5",
  "rand_core 0.6.4",
@@ -2732,6 +2734,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tokio-boring",
+ "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
  "tun-rs",
@@ -2750,9 +2753,11 @@ dependencies = [
  "cc",
  "figment",
  "ipnet",
+ "jni",
  "mirage",
  "serde_json",
  "tokio",
+ "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3875,6 +3880,12 @@ checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

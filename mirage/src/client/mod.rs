@@ -18,7 +18,7 @@ use crate::auth::users_file::UsersFileClientAuthenticator;
 
 use crate::config::ClientConfig;
 use crate::network::interface::{Interface, InterfaceIO};
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::network::socket_protect;
 use crate::Result;
 use tokio::sync::oneshot;
@@ -102,7 +102,7 @@ impl MirageClient {
 
         // 2. Detect physical interface BEFORE connecting (for socket binding anti-loop)
         //    This must happen before TUN is created, while default route is on physical NIC.
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
             // In macOS Network Extension sandbox, socket bind/protect is denied.
             // Skip detect_outbound_interface and rely on exclusion routes instead.

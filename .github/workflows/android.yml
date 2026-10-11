@@ -1,0 +1,281 @@
+name: Android
+
+# Turbo VPN (the Android client under android/) CI/CD.
+#
+#   host-checks     Rust checks for the config/link code the app depends on
+#   build-android   cross-compile mirage-ffi, build + verify release/debug/androidTest APKs
+#   emulator-tests  boot an emulator, smoke-test the release APK, run the instrumentation
+#                   tests including a real end-to-end VPN test against a local Mirage server
+#   release         turbo-v* tags only: publish the signed APK as a GitHub Release
+#
+# Branch pushes and pull requests build and test only. Pushing a tag turbo-v<semver>
+# (e.g. turbo-v1.0.0) additionally publishes a release. Logic lives in .github/scripts/.
+
+on:
+  push:
+    branches: ["android-app"]
+    tags: ["turbo-v*"]
+  pull_request:
+    paths:
+      - "android/**"
+      - "mirage-ffi/**"
+      - "mirage/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/android.yml"
+      - ".github/scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: "26.3.11579264"
+  # build-tools 34.0.0 is what the Android Gradle plugin uses; zipalign's -P
+  # (16 KB page size) option needs >= 35, so APK verification uses that one.
+  BUILD_TOOLS_VERSION: "34.0.0"
+  VERIFY_BUILD_TOOLS: "35.0.0"
+  APP_ID: com.mirage.vpn
+  # SHA-256 fingerprint of the release signing certificate (checked in CI, shown in the release notes).
+  SIGNING_CERT_SHA256: "4D:C3:B2:47:1B:20:AA:E1:1E:A6:E8:E8:FA:24:67:A0:5F:4B:8D:FA:35:9B:92:DA:96:82:D6:55:F9:44:DF:DB"
+
+jobs:
+  # Host-side checks for the Rust pieces the app depends on: the config
+  # serialize/parse round-trip and the server's access-link generator.
+  host-checks:
+    name: Rust checks (config + server CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BoringSSL build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake golang nasm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: host-checks
+
+      - name: Build server CLI
+        run: cargo build -p mirage --bins
+
+      - name: Test config round-trip and access links
+        run: cargo test -p mirage --lib -- config share_link
+
+  build-android:
+    name: Build and verify APKs
+    runs-on: ubuntu-latest
+    outputs:
+      version_name: ${{ steps.version.outputs.version_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # BoringSSL (the `boring` crate) is built from source via cmake; it needs
+      # a C/C++ toolchain, Go, and nasm — same deps as the desktop CI build.
+      - name: Install BoringSSL build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake golang nasm
+
+      - name: Install Rust toolchain with Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-ffi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # packages: '' avoids the action's default attempt to install the obsolete
+      # "tools" package, which no longer exists and fails the step.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ""
+
+      - name: Install NDK ${{ env.NDK_VERSION }} and build-tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager --install \
+            "ndk;${NDK_VERSION}" \
+            "build-tools;${BUILD_TOOLS_VERSION}" \
+            "build-tools;${VERIFY_BUILD_TOOLS}"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      # versionName: tag without the turbo-v prefix, else 1.0.0-dev; versionCode: run number.
+      - name: Compute version
+        id: version
+        run: bash .github/scripts/android-version.sh
+
+      # libmirage_ffi.so only, 16 KB ELF-aligned for arm64-v8a and x86_64.
+      - name: Cross-compile mirage-ffi for Android ABIs
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.NDK_VERSION }}
+        run: bash .github/scripts/build-native.sh
+
+      # The repo ships the wrapper scripts + gradle-wrapper.properties but not the
+      # binary gradle-wrapper.jar; regenerate it with the runner's preinstalled Gradle.
+      - name: Generate Gradle wrapper
+        working-directory: android
+        run: gradle wrapper --gradle-version 8.9 --distribution-type bin
+
+      # Release signing needs the secrets; without them (fork PRs) only the
+      # debug and androidTest APKs are built. On a turbo-v* tag missing secrets fail the job.
+      - name: Build APKs
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/turbo-v') }}
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: bash .github/scripts/build-android.sh
+
+      - name: Verify release APK
+        if: hashFiles('dist/app-release.apk') != ''
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.NDK_VERSION }}
+          EXPECTED_VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          EXPECTED_VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          EXPECTED_CERT_SHA256: ${{ env.SIGNING_CERT_SHA256 }}
+        run: bash .github/scripts/verify-apk.sh dist/app-release.apk --pin-cert
+
+      - name: Verify debug APK
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.NDK_VERSION }}
+          EXPECTED_VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          EXPECTED_VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        run: bash .github/scripts/verify-apk.sh dist/app-debug.apk
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: turbo-vpn-apks
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  emulator-tests:
+    name: Emulator tests (API 34, end-to-end VPN)
+    needs: build-android
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      E2E_DIR: ${{ github.workspace }}/e2e-work
+      APK_DIR: ${{ github.workspace }}/apks
+      OUT_DIR: ${{ github.workspace }}/e2e-out
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BoringSSL build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake golang nasm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: e2e-server
+
+      - name: Build Mirage server
+        run: cargo build -p mirage --bin mirage
+
+      - name: Download APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: turbo-vpn-apks
+          path: apks
+
+      # Hardware acceleration for the emulator
+      # (from the reactivecircus/android-emulator-runner README).
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Fresh certificate for 10.0.2.2 (the host as seen from the emulator), user and
+      # access link from the real CLI, server started in the background. Exports E2E_LINK.
+      - name: Start end-to-end Mirage server
+        run: bash .github/scripts/e2e-server-setup.sh
+
+      - name: Run emulator tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # `script` runs line by line, so everything lives in one script.
+          script: bash .github/scripts/emulator-tests.sh
+
+      - name: Show server log tail
+        if: failure()
+        run: tail -n 100 "$E2E_DIR/server.log" || true
+
+      - name: Stop server
+        if: always()
+        run: sudo pkill -f 'mirage server --config' || true
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-test-logs
+          path: |
+            ${{ env.E2E_DIR }}/server.log
+            ${{ env.OUT_DIR }}/logcat.txt
+            ${{ env.OUT_DIR }}/logcat-smoke.txt
+            ${{ env.OUT_DIR }}/instrumentation.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: [host-checks, build-android, emulator-tests]
+    if: startsWith(github.ref, 'refs/tags/turbo-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: turbo-vpn-apks
+          path: apks
+
+      - name: Prepare release files
+        env:
+          VERSION: ${{ needs.build-android.outputs.version_name }}
+          APK: apks/app-release.apk
+          OUT_DIR: release
+          CERT_SHA256: ${{ env.SIGNING_CERT_SHA256 }}
+        run: bash .github/scripts/prepare-release.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Turbo VPN ${{ needs.build-android.outputs.version_name }}
+          body_path: release/notes.md
+          prerelease: false
+          draft: false
+          files: |
+            release/TurboVPN-${{ needs.build-android.outputs.version_name }}.apk
+            release/TurboVPN-${{ needs.build-android.outputs.version_name }}.apk.sha256
+          fail_on_unmatched_files: true

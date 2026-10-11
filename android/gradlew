@@ -1,0 +1,37 @@
+#!/bin/sh
+# Minimal Gradle wrapper launcher. Requires gradle/wrapper/gradle-wrapper.jar
+# (generate it with `gradle wrapper --gradle-version 8.9`).
+
+app_path=$0
+while [ -h "$app_path" ]; do
+    ls=$(ls -ld "$app_path")
+    link=${ls#*' -> '}
+    case $link in
+        /*) app_path=$link ;;
+        *) app_path=$(dirname "$app_path")/$link ;;
+    esac
+done
+APP_HOME=$(cd "$(dirname "$app_path")" > /dev/null && pwd -P) || exit
+
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+    JAVACMD=$JAVA_HOME/bin/java
+else
+    JAVACMD=java
+    command -v java > /dev/null 2>&1 || {
+        echo "ERROR: JAVA_HOME is not set and no 'java' command could be found." >&2
+        exit 1
+    }
+fi
+
+if [ ! -f "$CLASSPATH" ]; then
+    echo "ERROR: $CLASSPATH not found. Run 'gradle wrapper' first." >&2
+    exit 1
+fi
+
+exec "$JAVACMD" -Xmx64m -Xms64m \
+    $JAVA_OPTS $GRADLE_OPTS \
+    "-Dorg.gradle.appname=gradlew" \
+    -classpath "$CLASSPATH" \
+    org.gradle.wrapper.GradleWrapperMain "$@"

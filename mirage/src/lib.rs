@@ -15,6 +15,7 @@ pub mod error;
 pub mod network;
 pub mod protocol;
 pub mod server;
+pub mod share_link;
 pub mod transport;
 pub mod users_file;
 pub mod utils;

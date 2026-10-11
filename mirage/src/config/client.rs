@@ -1,6 +1,6 @@
 //! Client-side configuration types.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ use super::{
 };
 
 /// Server endpoint configuration
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ServerEndpoint {
     /// Server hostname or IP address
     pub host: String,
@@ -28,8 +28,16 @@ impl ServerEndpoint {
 }
 
 /// Mirage client configuration
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ClientConfig {
+    // Scalar fields are declared before the table fields so the TOML serializer
+    // can emit them at the top level (values must precede tables).
+    /// Static IPv4 address to request (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_client_ip: Option<IpAddr>,
+    /// Static IPv6 address to request (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_client_ip_v6: Option<IpAddr>,
     /// Server endpoint (host + port)
     pub server: ServerEndpoint,
     /// Authentication configuration
@@ -51,14 +59,10 @@ pub struct ClientConfig {
     pub camouflage: CamouflageConfig,
     /// Logging configuration
     pub log: LogConfig,
-    /// Static IPv4 address to request (optional)
-    pub static_client_ip: Option<IpAddr>,
-    /// Static IPv6 address to request (optional)
-    pub static_client_ip_v6: Option<IpAddr>,
 }
 
 /// Mirage client-side authentication configuration
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ClientAuthenticationConfig {
     /// The type of authenticator to use (default = users_file)
     #[serde(default = "default_auth_type")]

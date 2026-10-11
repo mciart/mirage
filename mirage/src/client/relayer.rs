@@ -121,7 +121,7 @@ impl ClientRelayer {
             )));
         } else {
             // Use Jitter Actor
-            let jitter_channel_size = if cfg!(target_os = "ios") { 64 } else { 1024 };
+            let jitter_channel_size = if cfg!(any(target_os = "ios", target_os = "android")) { 64 } else { 1024 };
             let (jitter_tx, jitter_rx) = tokio::sync::mpsc::channel(jitter_channel_size);
 
             use crate::transport::jitter::spawn_jitter_sender;

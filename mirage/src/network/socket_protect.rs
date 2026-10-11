@@ -6,10 +6,10 @@
 
 use std::net::IpAddr;
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 use tracing::{debug, info, warn};
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::error::RouteError;
 use crate::Result;
 
@@ -19,7 +19,7 @@ use crate::Result;
 /// Must be called BEFORE TUN is created (while default route still
 /// points to the physical NIC).
 /// If `tun_name` is provided, any match is rejected (stale route from previous session).
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn detect_outbound_interface(target: IpAddr, tun_name: Option<&str>) -> Result<String> {
     use crate::network::route::{get_gateway_for, RouteTarget};
 
@@ -55,7 +55,7 @@ pub fn detect_outbound_interface(target: IpAddr, tun_name: Option<&str>) -> Resu
 }
 
 /// Fallback: detect the default outbound interface.
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn detect_default_interface() -> Result<String> {
     // Try to detect via 8.8.8.8 route (common approach)
     use crate::network::route::{get_gateway_for, RouteTarget};
@@ -159,13 +159,13 @@ pub fn protect_socket(fd: std::os::fd::RawFd, interface: &str, _is_ipv6: bool) -
 }
 
 /// iOS: NEPacketTunnelProvider automatically protects sockets.
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "android"))]
 pub fn protect_socket(_fd: std::os::fd::RawFd, _interface: &str, _is_ipv6: bool) -> Result<()> {
     Ok(())
 }
 
 /// iOS: Not needed.
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "android"))]
 pub fn detect_outbound_interface(_target: IpAddr) -> Result<String> {
     Ok(String::new())
 }

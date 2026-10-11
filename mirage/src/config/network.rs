@@ -1,14 +1,14 @@
 //! Network, logging, and NAT configuration types.
 
 use ipnet::IpNet;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::defaults::*;
 
 /// Network configuration
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NetworkConfig {
     /// Routes/networks to be routed through the tunnel
     #[serde(default = "default_routes")]
@@ -21,6 +21,7 @@ pub struct NetworkConfig {
     #[serde(default = "default_dns_servers")]
     pub dns_servers: Vec<IpAddr>,
     /// Optional interface name to request for the tunnel device
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface_name: Option<String>,
 }
 
@@ -36,7 +37,7 @@ impl Default for NetworkConfig {
 }
 
 /// Logging configuration
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LogConfig {
     /// The log level to use (default = info)
     #[serde(default = "default_log_level")]
@@ -44,7 +45,7 @@ pub struct LogConfig {
 }
 
 /// Camouflage mode selection
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CamouflageMode {
     /// No camouflage, standard TLS
@@ -55,7 +56,7 @@ pub enum CamouflageMode {
 }
 
 /// Camouflage configuration for SNI impersonation
-#[derive(Clone, Debug, PartialEq, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct CamouflageConfig {
     /// Camouflage mode: "none", "mirage", or "jls"
     #[zeroize(skip)]
@@ -71,15 +72,15 @@ pub struct CamouflageConfig {
     #[serde(default)]
     pub short_ids: Vec<String>,
     /// JLS password for QUIC camouflage (must match on client and server)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jls_password: Option<String>,
     /// JLS initialization vector (must match on client and server)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jls_iv: Option<String>,
     /// Pre-shared key for application-layer encryption (ChaCha20-Poly1305).
     /// When set with inner_encryption = true, DATA payloads are encrypted
     /// independently of the outer TLS layer. (must match on client and server)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inner_key: Option<String>,
 }
 

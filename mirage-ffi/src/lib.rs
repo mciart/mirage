@@ -18,6 +18,8 @@
 //!   └─ mirage_destroy(handle)         → frees all resources
 //! ```
 
+#[cfg(target_os = "android")]
+pub mod android;
 pub mod interface;
 pub mod runtime;
 pub mod types;
@@ -270,7 +272,7 @@ pub unsafe extern "C" fn mirage_free_string(s: *mut c_char) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Parses a TOML string into a `ClientConfig`.
-fn parse_config_from_toml(toml_str: &str) -> Result<mirage::config::ClientConfig, String> {
+pub(crate) fn parse_config_from_toml(toml_str: &str) -> Result<mirage::config::ClientConfig, String> {
     use figment::providers::{Format, Toml};
     use figment::Figment;
 

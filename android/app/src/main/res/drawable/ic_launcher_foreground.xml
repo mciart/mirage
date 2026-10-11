@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- White bolt, centred in the adaptive-icon safe zone (the visible area is the central 72dp). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="2.2"
+        android:scaleY="2.2"
+        android:translateX="27.6"
+        android:translateY="27.6">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M13.6,2 L5,13.4 H11.1 L10.2,22 L19,10.4 H12.8 Z" />
+    </group>
+</vector>

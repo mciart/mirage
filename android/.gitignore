@@ -1,0 +1,12 @@
+/build
+/app/build
+/.gradle
+/.idea
+/.kotlin
+*.iml
+.DS_Store
+local.properties
+captures/
+.externalNativeBuild
+.cxx
+app/src/main/jniLibs/

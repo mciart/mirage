@@ -1,11 +1,11 @@
 //! Transport layer configuration types.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::defaults::*;
 
 /// Transport protocol selection
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TransportProtocol {
     /// TCP + TLS transport
@@ -25,7 +25,7 @@ impl std::fmt::Display for TransportProtocol {
 }
 
 /// Transport layer configuration (client-only)
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransportConfig {
     /// Transport protocols in priority order: ["tcp", "udp"] or ["udp", "tcp"]
     /// First protocol is attempted first; falls back to next on failure
@@ -39,6 +39,7 @@ pub struct TransportConfig {
     pub dual_stack: bool,
     /// Custom SNI to use for TLS/QUIC connections
     /// Overrides host from server config when connecting to an IP directly
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sni: Option<String>,
     /// Whether to disable TLS certificate verification (default = false)
     /// WARNING: Only use this for testing!

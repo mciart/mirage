@@ -23,10 +23,10 @@ use figment::{
     Figment,
 };
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum AuthType {
     /// File-based user authentication with username/password
     #[serde(alias = "users_file")]
@@ -171,5 +171,42 @@ mod tests {
         assert!(config.transport.dual_stack);
         assert_eq!(config.static_client_ip, None);
         assert_eq!(config.static_client_ip_v6, None);
+    }
+
+    const EXAMPLE_CLIENT_TOML: &str = include_str!("../../../examples/client.toml");
+
+    fn parse_client(s: &str) -> ClientConfig {
+        Figment::new()
+            .merge(Toml::string(s))
+            .extract::<ClientConfig>()
+            .expect("Failed to parse client config")
+    }
+
+    #[test]
+    fn client_config_toml_roundtrip() {
+        let original = parse_client(EXAMPLE_CLIENT_TOML);
+        let serialized = toml::to_string(&original).expect("serialize to toml");
+        let reparsed = parse_client(&serialized);
+        assert_eq!(original, reparsed);
+
+        let pretty = toml::to_string_pretty(&original).expect("serialize to pretty toml");
+        assert_eq!(original, parse_client(&pretty));
+    }
+
+    #[test]
+    fn client_config_json_roundtrip() {
+        let original = parse_client(EXAMPLE_CLIENT_TOML);
+        let json = serde_json::to_string(&original).expect("serialize to json");
+        let reparsed: ClientConfig = serde_json::from_str(&json).expect("parse json");
+        assert_eq!(original, reparsed);
+    }
+
+    #[test]
+    fn client_config_json_toml_cross_roundtrip() {
+        let original = parse_client(EXAMPLE_CLIENT_TOML);
+        let json = serde_json::to_string(&original).unwrap();
+        let from_json: ClientConfig = serde_json::from_str(&json).unwrap();
+        let toml_str = toml::to_string_pretty(&from_json).unwrap();
+        assert_eq!(original, parse_client(&toml_str));
     }
 }
